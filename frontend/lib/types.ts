@@ -89,10 +89,23 @@ export interface DrawdownData {
   current_drawdown: number;
 }
 
+export interface SentimentAggregate {
+  compound: number;
+  label: string;
+  count: number;
+  positive_count: number;
+  negative_count: number;
+  neutral_count: number;
+  bullish_pct: number;
+  bearish_pct: number;
+}
+
 export interface TickerAnalytics {
   volatility: VolatilityMetrics;
   drawdown: DrawdownData;
   sparkline: { date: string; close: number }[];
+  options?: Record<string, unknown> | null;
+  sentiment?: SentimentAggregate | null;
   error?: string;
 }
 

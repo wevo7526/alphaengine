@@ -139,6 +139,19 @@ export function TickerAnalyticsPanel({
           value={`${dd.max_drawdown}%`}
           color="text-signal-red"
         />
+        {analytics.sentiment && (
+          <>
+            <StatRow
+              label="Sentiment"
+              value={`${analytics.sentiment.compound > 0 ? "+" : ""}${analytics.sentiment.compound.toFixed(2)}`}
+              color={analytics.sentiment.label === "positive" ? "text-signal-green" : analytics.sentiment.label === "negative" ? "text-signal-red" : "text-text-tertiary"}
+            />
+            <StatRow
+              label="News Split"
+              value={`${analytics.sentiment.bullish_pct}% bull / ${analytics.sentiment.bearish_pct}% bear`}
+            />
+          </>
+        )}
       </div>
 
       {/* Drawdown chart */}

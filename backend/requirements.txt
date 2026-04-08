@@ -1,25 +1,31 @@
+# Core API
 fastapi
 uvicorn[standard]
+pydantic
+pydantic-settings
+python-dotenv
+httpx
+websockets
+
+# AI / Agent framework
 langchain
 langchain-anthropic
 langgraph
+
+# Data clients
 sec-api
 fredapi
 yfinance
 newsapi-python
-pydantic
-pydantic-settings
+
+# Database
 sqlalchemy[asyncio]
 asyncpg
-redis
-apscheduler
-spacy
-transformers
-torch
+aiosqlite
+
+# Quantitative
 scipy
 numpy
-pandas
-scikit-learn
-python-dotenv
-httpx
-websockets
+
+# NLP (Phase 1: VADER, Phase 2: FinBERT via transformers)
+vaderSentiment

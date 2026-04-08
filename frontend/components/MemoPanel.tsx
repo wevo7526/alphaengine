@@ -6,6 +6,7 @@ import { DIRECTION_STYLE, RISK_LEVEL_STYLE } from "@/lib/types";
 import { ConvictionBar } from "./ConvictionBar";
 import { TickerAnalyticsPanel } from "./TickerAnalytics";
 import { CorrelationHeatmap } from "./CorrelationHeatmap";
+import { OptionsPanel } from "./OptionsPanel";
 import { api } from "@/lib/api";
 
 const ACTION_MAP: Record<string, { label: string; color: string }> = {
@@ -311,6 +312,32 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
             ))}
           </div>
         </div>
+      )}
+
+      {/* Options Flow Analytics */}
+      {enrichment && Object.keys(enrichment.analytics).length > 0 && (
+        (() => {
+          const tickersWithOptions = Object.entries(enrichment.analytics)
+            .filter(([, data]) => data.options && !("error" in (data.options as Record<string, unknown>)))
+            .slice(0, 4);
+          if (tickersWithOptions.length === 0) return null;
+          return (
+            <div>
+              <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3 px-1">
+                Options Flow
+              </h3>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {tickersWithOptions.map(([ticker, data]) => (
+                  <OptionsPanel
+                    key={ticker}
+                    ticker={ticker}
+                    data={data.options as never}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })()
       )}
 
       {enrichment?.correlation && enrichment.correlation.matrix.length > 1 && (

@@ -112,6 +112,30 @@ def search_filings_fulltext(query_text: str) -> dict:
     return _sec.search_filings_fulltext(query_text, form_types=["10-K", "10-Q", "8-K"])
 
 
+# === Sentiment Scoring ===
+
+@tool
+def score_news_sentiment(ticker: str) -> dict:
+    """Score sentiment on recent news for a ticker using financial NLP.
+    Returns per-article scores (positive/negative/neutral with confidence)
+    and aggregate metrics (bullish %, bearish %, compound score).
+    More precise than reading headlines — quantitative sentiment scoring."""
+    articles = _news.get_ticker_news(ticker, page_size=10)
+    from agents.nlp.sentiment import score_articles
+    return score_articles(articles)
+
+
+# === Options Analytics ===
+
+@tool
+def get_options_analysis(ticker: str) -> dict:
+    """Get computed options analytics for a ticker: put/call ratio, implied move,
+    ATM IV, Greeks, IV skew, max pain, unusual activity detection. This is
+    computed math from live options chains — not raw chain data."""
+    from quant.options_analytics import analyze_options
+    return analyze_options(ticker)
+
+
 # === Technical Tools ===
 
 @tool
@@ -205,6 +229,8 @@ class ResearchAnalyst(BaseAgent):
             get_recent_filings,
             get_insider_trades,
             search_filings_fulltext,
+            score_news_sentiment,
+            get_options_analysis,
             get_rsi,
             get_macd,
         ]
