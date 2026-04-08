@@ -1,0 +1,347 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import type { IntelligenceMemo, TradeIdea, RiskFactor, EnrichmentData } from "@/lib/types";
+import { DIRECTION_STYLE, RISK_LEVEL_STYLE } from "@/lib/types";
+import { ConvictionBar } from "./ConvictionBar";
+import { TickerAnalyticsPanel } from "./TickerAnalytics";
+import { CorrelationHeatmap } from "./CorrelationHeatmap";
+import { api } from "@/lib/api";
+
+const ACTION_MAP: Record<string, { label: string; color: string }> = {
+  strong_bullish: { label: "LONG", color: "bg-signal-green/10 text-signal-green border-signal-green/20" },
+  bullish: { label: "LONG", color: "bg-signal-green/10 text-signal-green border-signal-green/20" },
+  bearish: { label: "SHORT", color: "bg-signal-red/10 text-signal-red border-signal-red/20" },
+  strong_bearish: { label: "SHORT", color: "bg-signal-red/10 text-signal-red border-signal-red/20" },
+  neutral: { label: "NEUTRAL", color: "bg-bg-elevated text-text-tertiary border-border-primary" },
+};
+
+function TradeIdeaCard({ idea, rank }: { idea: TradeIdea; rank: number }) {
+  const [open, setOpen] = useState(false);
+  const action = ACTION_MAP[idea.direction] ?? ACTION_MAP.neutral;
+
+  return (
+    <div
+      className="rounded-xl border border-border-primary bg-bg-primary p-4 cursor-pointer hover:border-zinc-600 transition-all"
+      style={{ animation: `fade-in 0.3s ease-out ${rank * 0.1}s both` }}
+      onClick={() => setOpen(!open)}
+    >
+      <div className="flex items-start justify-between mb-2">
+        <div className="flex items-center gap-3">
+          <span className="text-[11px] font-mono text-text-quaternary w-4">
+            #{rank}
+          </span>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-[15px] font-mono font-bold text-text-primary">
+                {idea.ticker}
+              </span>
+              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${action.color}`}>
+                {action.label}
+              </span>
+            </div>
+            <p className="text-xs text-text-tertiary mt-0.5 max-w-md">
+              {idea.thesis}
+            </p>
+          </div>
+        </div>
+        <div className="text-right shrink-0 ml-4">
+          <ConvictionBar value={idea.conviction} size="sm" />
+          <span className="text-[10px] text-text-quaternary">
+            {idea.position_size_pct}% size · {idea.time_horizon}
+          </span>
+        </div>
+      </div>
+
+      {/* Price levels row */}
+      <div className="flex items-center gap-4 text-xs mt-2">
+        {idea.entry_zone && (
+          <div>
+            <span className="text-text-quaternary">Entry </span>
+            <span className="font-mono text-text-primary">{idea.entry_zone}</span>
+          </div>
+        )}
+        {idea.stop_loss && (
+          <div>
+            <span className="text-text-quaternary">Stop </span>
+            <span className="font-mono text-signal-red">${idea.stop_loss}</span>
+          </div>
+        )}
+        {idea.take_profit && (
+          <div>
+            <span className="text-text-quaternary">Target </span>
+            <span className="font-mono text-signal-green">${idea.take_profit}</span>
+          </div>
+        )}
+        {idea.risk_reward_ratio && (
+          <div>
+            <span className="text-text-quaternary">R/R </span>
+            <span className="font-mono text-accent">{idea.risk_reward_ratio}:1</span>
+          </div>
+        )}
+      </div>
+
+      {open && (
+        <div className="mt-3 pt-3 border-t border-border-primary space-y-2 text-xs" style={{ animation: "fade-in 0.2s ease-out" }}>
+          {idea.catalysts.length > 0 && (
+            <div>
+              <span className="text-text-quaternary font-medium">Catalysts: </span>
+              <span className="text-text-secondary">{idea.catalysts.join(" · ")}</span>
+            </div>
+          )}
+          {idea.risks.length > 0 && (
+            <div>
+              <span className="text-text-quaternary font-medium">Risks: </span>
+              <span className="text-text-secondary">{idea.risks.join(" · ")}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RiskMatrix({ factors }: { factors: RiskFactor[] }) {
+  const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+  const sorted = [...factors].sort(
+    (a, b) => (sevOrder[a.severity as keyof typeof sevOrder] ?? 4) - (sevOrder[b.severity as keyof typeof sevOrder] ?? 4)
+  );
+
+  return (
+    <div className="space-y-2">
+      {sorted.map((f, i) => {
+        const sevColor =
+          f.severity === "critical"
+            ? "bg-signal-red text-white"
+            : f.severity === "high"
+              ? "bg-signal-red/20 text-signal-red"
+              : f.severity === "medium"
+                ? "bg-signal-yellow/20 text-signal-yellow"
+                : "bg-bg-elevated text-text-tertiary";
+
+        return (
+          <div
+            key={i}
+            className="rounded-lg border border-border-primary bg-bg-primary p-3"
+            style={{ animation: `fade-in 0.3s ease-out ${i * 0.05}s both` }}
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${sevColor}`}>
+                {f.severity}
+              </span>
+              <span className="text-[10px] text-text-quaternary uppercase tracking-wider">
+                {f.category}
+              </span>
+            </div>
+            <p className="text-xs text-text-secondary">{f.description}</p>
+            <p className="text-[11px] text-text-quaternary mt-1">
+              Mitigation: {f.mitigation}
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
+  const [showFull, setShowFull] = useState(false);
+  const [enrichment, setEnrichment] = useState<EnrichmentData | null>(null);
+  const [enrichLoading, setEnrichLoading] = useState(false);
+  const riskColor = RISK_LEVEL_STYLE[memo.overall_risk_level] ?? "text-text-tertiary";
+
+  // Fetch computed enrichment data for all tickers in the memo
+  useEffect(() => {
+    const tickers = memo.tickers_analyzed?.length
+      ? memo.tickers_analyzed
+      : memo.trade_ideas?.map((t) => t.ticker) ?? [];
+    const unique = [...new Set(tickers)].filter(Boolean);
+    if (unique.length === 0) return;
+
+    setEnrichLoading(true);
+    api.enrich(unique).then((data: unknown) => {
+      setEnrichment(data as EnrichmentData);
+      setEnrichLoading(false);
+    }).catch(() => setEnrichLoading(false));
+  }, [memo]);
+
+  return (
+    <div className="space-y-4" style={{ animation: "fade-in 0.5s ease-out" }}>
+      {/* Title + Executive Summary */}
+      <div className="rounded-xl border border-border-primary bg-bg-surface p-6">
+        <h2 className="text-lg font-semibold text-text-primary leading-snug mb-3">
+          {memo.title}
+        </h2>
+        <p className="text-[13px] text-text-secondary leading-relaxed">
+          {memo.executive_summary}
+        </p>
+
+        {/* Status strip */}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-4 pt-4 border-t border-border-primary text-[11px]">
+          {memo.macro_regime && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-accent" />
+              <span className="text-text-quaternary">Regime</span>
+              <span className="text-text-primary font-medium">{memo.macro_regime}</span>
+            </div>
+          )}
+          {memo.overall_risk_level && (
+            <div className="flex items-center gap-1.5">
+              <div className={`w-1.5 h-1.5 rounded-full ${memo.overall_risk_level === "low" || memo.overall_risk_level === "moderate" ? "bg-signal-green" : "bg-signal-red"}`} />
+              <span className="text-text-quaternary">Risk</span>
+              <span className={`font-medium ${riskColor}`}>{memo.overall_risk_level}</span>
+            </div>
+          )}
+          {memo.portfolio_positioning && (
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-signal-yellow" />
+              <span className="text-text-quaternary">Positioning</span>
+              <span className="text-text-primary font-medium">{memo.portfolio_positioning}</span>
+            </div>
+          )}
+          {memo.tickers_analyzed.length > 0 && (
+            <div className="flex items-center gap-1.5">
+              <span className="text-text-quaternary">Tickers</span>
+              <span className="font-mono text-text-primary">{memo.tickers_analyzed.join(", ")}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Key Findings */}
+      {memo.key_findings.length > 0 && (
+        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+            Key Findings
+          </h3>
+          <div className="space-y-2">
+            {memo.key_findings.map((f, i) => (
+              <div
+                key={i}
+                className="flex items-start gap-2.5 text-[13px] text-text-secondary"
+                style={{ animation: `fade-in 0.3s ease-out ${i * 0.08}s both` }}
+              >
+                <span className="text-accent font-bold mt-0.5 shrink-0">{i + 1}</span>
+                <span className="leading-relaxed">{f}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Trade Ideas */}
+      {memo.trade_ideas.length > 0 && (
+        <div className="mb-4">
+          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3 px-1">
+            Trade Ideas — ranked by conviction
+          </h3>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {memo.trade_ideas.map((idea, i) => (
+              <TradeIdeaCard key={i} idea={idea} rank={i + 1} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Risk + Hedging side by side */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {memo.risk_factors.length > 0 && (
+          <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+            <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+              Risk Factors
+            </h3>
+            <RiskMatrix factors={memo.risk_factors} />
+          </div>
+        )}
+
+        {memo.hedging_recommendations.length > 0 && (
+          <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+            <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+              Hedging Recommendations
+            </h3>
+            <div className="space-y-2">
+              {memo.hedging_recommendations.map((h, i) => {
+                // Try to split on " — " for instrument vs rationale
+                const parts = h.split(" — ");
+                const instrument = parts[0];
+                const rationale = parts.length > 1 ? parts.slice(1).join(" — ") : null;
+                return (
+                  <div
+                    key={i}
+                    className="rounded-lg border border-border-primary bg-bg-primary p-3.5 flex items-start gap-3"
+                    style={{ animation: `fade-in 0.3s ease-out ${i * 0.05}s both` }}
+                  >
+                    <span className="text-[10px] font-mono font-bold text-signal-yellow bg-signal-yellow/10 px-1.5 py-0.5 rounded shrink-0 mt-0.5">
+                      H{i + 1}
+                    </span>
+                    <div>
+                      <p className="text-[13px] text-text-primary font-medium leading-snug">
+                        {instrument}
+                      </p>
+                      {rationale && (
+                        <p className="text-xs text-text-tertiary mt-0.5">
+                          {rationale}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Computed Analytics — this is what ChatGPT can't do */}
+      {enrichLoading && (
+        <div className="rounded-xl border border-border-primary bg-bg-surface p-4 flex items-center gap-2">
+          <div className="w-3 h-3 rounded-full border-[1.5px] border-accent border-t-transparent" style={{ animation: "spin-slow 0.8s linear infinite" }} />
+          <span className="text-xs text-text-tertiary">Computing analytics...</span>
+        </div>
+      )}
+
+      {enrichment && Object.keys(enrichment.analytics).length > 0 && (
+        <div className="mb-4">
+          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3 px-1">
+            Computed Analytics
+          </h3>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {Object.entries(enrichment.analytics).map(([ticker, data]) => (
+              <TickerAnalyticsPanel key={ticker} ticker={ticker} analytics={data} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {enrichment?.correlation && enrichment.correlation.matrix.length > 1 && (
+        <div className="mb-4">
+          <CorrelationHeatmap
+            tickers={enrichment.correlation.tickers}
+            matrix={enrichment.correlation.matrix}
+          />
+        </div>
+      )}
+
+      {/* Full Analysis (collapsible) */}
+      {memo.analysis && (
+        <div className="rounded-xl border border-border-primary bg-bg-surface overflow-hidden">
+          <button
+            onClick={() => setShowFull(!showFull)}
+            className="w-full px-5 py-3 text-left text-[11px] font-medium text-text-quaternary uppercase tracking-wider hover:text-text-tertiary transition-colors flex items-center justify-between"
+          >
+            Full Analysis
+            <span className="text-text-quaternary">{showFull ? "−" : "+"}</span>
+          </button>
+          {showFull && (
+            <div
+              className="px-5 pb-5 text-[13px] text-text-secondary leading-relaxed whitespace-pre-wrap"
+              style={{ animation: "fade-in 0.3s ease-out" }}
+            >
+              {memo.analysis}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

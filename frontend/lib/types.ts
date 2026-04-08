@@ -1,0 +1,148 @@
+export type SignalDirection =
+  | "strong_bullish"
+  | "bullish"
+  | "neutral"
+  | "bearish"
+  | "strong_bearish";
+
+export type QueryIntent =
+  | "ticker_analysis"
+  | "thematic_research"
+  | "risk_assessment"
+  | "portfolio_ideas"
+  | "market_regime";
+
+export interface RiskFactor {
+  category: string;
+  description: string;
+  severity: string;
+  probability: string;
+  mitigation: string;
+}
+
+export interface TradeIdea {
+  ticker: string;
+  direction: SignalDirection;
+  conviction: number;
+  thesis: string;
+  entry_zone: string | null;
+  stop_loss: number | null;
+  take_profit: number | null;
+  risk_reward_ratio: number | null;
+  position_size_pct: number;
+  time_horizon: string;
+  catalysts: string[];
+  risks: string[];
+}
+
+export interface IntelligenceMemo {
+  query: string;
+  timestamp: string;
+  title: string;
+  executive_summary: string;
+  analysis: string;
+  key_findings: string[];
+  macro_regime: string;
+  overall_risk_level: string;
+  risk_factors: RiskFactor[];
+  trade_ideas: TradeIdea[];
+  portfolio_positioning: string;
+  hedging_recommendations: string[];
+  tickers_analyzed: string[];
+  themes: string[];
+  intent: QueryIntent;
+}
+
+export interface MacroIndicator {
+  value: number;
+  previous: number;
+  change: number;
+  date: string;
+  series_id: string;
+}
+
+export interface NewsArticle {
+  title: string;
+  description: string;
+  source: string;
+  published_at: string;
+  url: string;
+}
+
+// Computed enrichment data
+export interface VolatilityMetrics {
+  ticker: string;
+  realized_vol_annualized: number;
+  annualized_return: number;
+  sharpe_ratio: number;
+  skewness: number;
+  var_95_daily: number;
+  max_daily_loss: number;
+  max_daily_gain: number;
+  observations: number;
+}
+
+export interface DrawdownData {
+  ticker: string;
+  series: { date: string; drawdown: number }[];
+  max_drawdown: number;
+  current_drawdown: number;
+}
+
+export interface TickerAnalytics {
+  volatility: VolatilityMetrics;
+  drawdown: DrawdownData;
+  sparkline: { date: string; close: number }[];
+  error?: string;
+}
+
+export interface EnrichmentData {
+  tickers: string[];
+  analytics: Record<string, TickerAnalytics>;
+  correlation: { tickers: string[]; matrix: number[][] } | null;
+}
+
+export const AGENT_META: Record<
+  string,
+  { label: string; role: string }
+> = {
+  query_interpreter: {
+    label: "Query Interpreter",
+    role: "Parsing query and creating research plan",
+  },
+  research_analyst: {
+    label: "Research Analyst",
+    role: "Gathering data from macro, market, news, filings, and technicals",
+  },
+  risk_manager: {
+    label: "Risk Manager",
+    role: "Evaluating macro regime, position risks, and tail risks",
+  },
+  portfolio_strategist: {
+    label: "Portfolio Strategist",
+    role: "Building actionable trade ideas with entry/exit levels",
+  },
+  cio_synthesizer: {
+    label: "CIO Synthesizer",
+    role: "Writing the final intelligence memo",
+  },
+};
+
+export const DIRECTION_STYLE: Record<
+  SignalDirection,
+  { label: string; color: string }
+> = {
+  strong_bullish: { label: "Strong Bullish", color: "text-signal-green" },
+  bullish: { label: "Bullish", color: "text-signal-green" },
+  neutral: { label: "Neutral", color: "text-text-tertiary" },
+  bearish: { label: "Bearish", color: "text-signal-red" },
+  strong_bearish: { label: "Strong Bearish", color: "text-signal-red" },
+};
+
+export const RISK_LEVEL_STYLE: Record<string, string> = {
+  low: "text-signal-green",
+  moderate: "text-signal-yellow",
+  elevated: "text-signal-yellow",
+  high: "text-signal-red",
+  extreme: "text-signal-red",
+};
