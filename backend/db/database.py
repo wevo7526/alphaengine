@@ -22,9 +22,13 @@ def _get_url() -> str:
     """Resolve the database URL, falling back to SQLite for local dev."""
     url = settings.DATABASE_URL
     if not url or url.startswith("postgresql+asyncpg://postgres:postgres@localhost"):
-        # No real Postgres — use SQLite for local dev
         logger.info("No Postgres configured, using SQLite for local development")
         return "sqlite+aiosqlite:///./alphaengine.db"
+    # Railway provides postgresql:// — convert to postgresql+asyncpg:// for async driver
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    elif url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+asyncpg://", 1)
     return url
 
 
