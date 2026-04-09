@@ -49,17 +49,17 @@ class ResearchData(BaseModel):
 # === Risk Assessment ===
 
 class RiskFactor(BaseModel):
-    category: str
-    description: str
-    severity: str
-    probability: str
-    mitigation: str
+    category: str = ""
+    description: str = ""
+    severity: str = "medium"
+    probability: str = "medium"
+    mitigation: str = ""
 
 
 class RiskAssessment(BaseModel):
     """Output from the Risk Manager."""
-    macro_regime: str
-    regime_confidence: int = Field(ge=0, le=100)
+    macro_regime: str = "unknown"
+    regime_confidence: int = Field(default=50, ge=0, le=100)
     risk_factors: list[RiskFactor] = Field(default_factory=list)
     overall_risk_level: str
     risk_narrative: str = ""
@@ -76,10 +76,10 @@ class SignalDirection(str, Enum):
 
 
 class TradeIdea(BaseModel):
-    ticker: str
-    direction: SignalDirection
-    conviction: int = Field(ge=0, le=100)
-    thesis: str
+    ticker: str = ""
+    direction: SignalDirection = SignalDirection.NEUTRAL
+    conviction: int = Field(default=50, ge=0, le=100)
+    thesis: str = ""
     entry_zone: Optional[str] = None
     stop_loss: Optional[float] = None
     take_profit: Optional[float] = None
@@ -102,11 +102,11 @@ class PortfolioStrategy(BaseModel):
 
 class IntelligenceMemo(BaseModel):
     """The final CIO-level intelligence memo with trade ideas."""
-    query: str
+    query: str = ""
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    title: str
-    executive_summary: str
-    analysis: str
+    title: str = ""
+    executive_summary: str = ""
+    analysis: str = ""
     key_findings: list[str] = Field(default_factory=list)
     macro_regime: str = ""
     overall_risk_level: str = ""
