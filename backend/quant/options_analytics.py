@@ -6,12 +6,31 @@ implied move computation. All computed from live options chain data.
 """
 
 import numpy as np
+import math
 from scipy.stats import norm
 import logging
 
 from data.market_client import MarketDataClient
 
 logger = logging.getLogger(__name__)
+
+
+def _clean(val):
+    """Replace NaN/Inf with None for JSON safety."""
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    return val
+
+
+def _clean_dict(d):
+    """Recursively clean NaN/Inf from nested structures."""
+    if isinstance(d, dict):
+        return {k: _clean_dict(v) for k, v in d.items()}
+    if isinstance(d, list):
+        return [_clean_dict(v) for v in d]
+    if isinstance(d, float):
+        return _clean(d)
+    return d
 
 _market = MarketDataClient()
 
@@ -50,12 +69,12 @@ def calculate_greeks(S: float, K: float, T: float, r: float, sigma: float, optio
     theta = theta_call if option_type == "call" else theta_put
     vega = float(S * norm.pdf(d1) * np.sqrt(T)) / 100
 
-    return {
+    return _clean_dict({
         "delta": round(delta, 4),
         "gamma": round(gamma, 6),
         "theta": round(theta, 4),
         "vega": round(vega, 4),
-    }
+    })
 
 
 # === Options Chain Analysis ===
@@ -145,7 +164,7 @@ def analyze_options(ticker: str) -> dict:
     put_iv = atm_put.get("impliedVolatility", 0) if atm_put else 0
     iv_skew = round((put_iv - call_iv) * 100, 2) if call_iv > 0 else 0
 
-    return {
+    return _clean_dict({
         "ticker": ticker,
         "current_price": current_price,
         "expiration": expiration,
@@ -161,4 +180,4 @@ def analyze_options(ticker: str) -> dict:
         "total_call_volume": total_call_vol,
         "total_put_volume": total_put_vol,
         "pc_ratio_signal": "bearish" if pc_ratio > 1.5 else "bullish" if pc_ratio < 0.5 else "neutral",
-    }
+    })

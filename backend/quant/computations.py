@@ -7,11 +7,30 @@ All computed from live market data via the data clients.
 """
 
 import numpy as np
+import math
 from datetime import datetime, timedelta
 import logging
 
 from data.market_client import MarketDataClient
 from data.fred_client import FREDDataClient
+
+
+def _clean(val):
+    """Replace NaN/Inf with None for JSON serialization."""
+    if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+        return None
+    return val
+
+
+def _clean_dict(d):
+    """Recursively clean NaN/Inf from a dict."""
+    if isinstance(d, dict):
+        return {k: _clean_dict(v) for k, v in d.items()}
+    if isinstance(d, list):
+        return [_clean_dict(v) for v in d]
+    if isinstance(d, float):
+        return _clean(d)
+    return d
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +73,7 @@ def compute_correlation_matrix(tickers: list[str], period: str = "3mo") -> dict:
             corr = float(np.corrcoef(ri, rj)[0, 1])
             matrix[i][j] = round(corr, 3)
 
-    return {"tickers": valid_tickers, "matrix": matrix}
+    return _clean_dict({"tickers": valid_tickers, "matrix": matrix})
 
 
 def compute_drawdown(ticker: str, period: str = "6mo") -> dict:
@@ -110,7 +129,7 @@ def compute_volatility_metrics(ticker: str, period: str = "6mo") -> dict:
     # Historical VaR (95%)
     var_95 = float(np.percentile(arr, 5) * 100)
 
-    return {
+    return _clean_dict({
         "ticker": ticker,
         "realized_vol_annualized": round(realized_vol, 2),
         "annualized_return": round(mean_return, 2),
@@ -120,7 +139,7 @@ def compute_volatility_metrics(ticker: str, period: str = "6mo") -> dict:
         "max_daily_loss": round(max_daily_loss, 2),
         "max_daily_gain": round(max_daily_gain, 2),
         "observations": len(daily_returns),
-    }
+    })
 
 
 def get_macro_time_series() -> dict:
