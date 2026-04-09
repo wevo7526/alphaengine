@@ -9,6 +9,7 @@ Sequential execution for debuggability and rate-limit friendliness.
 
 from typing import TypedDict
 from langgraph.graph import StateGraph, END
+import asyncio
 import logging
 
 from agents.schemas import (
@@ -46,12 +47,27 @@ class ResearchDeskState(TypedDict):
     current_phase: str
 
 
+async def _with_timeout(coro, seconds: int, label: str):
+    """Wrap an async call with a timeout. Returns None on timeout."""
+    try:
+        return await asyncio.wait_for(coro, timeout=seconds)
+    except asyncio.TimeoutError:
+        logger.error(f"[orchestrator] {label} timed out after {seconds}s")
+        return None
+
+
 async def run_interpreter(state: ResearchDeskState) -> ResearchDeskState:
     state["current_phase"] = "interpreting"
     logger.info(f"[orchestrator] Query Interpreter: {state['query']}")
     try:
-        plan = await _query_interpreter.interpret(state["query"])
-        state["plan_data"] = plan.model_dump(mode="json")
+        plan = await _with_timeout(
+            _query_interpreter.interpret(state["query"]),
+            seconds=30, label="Query Interpreter"
+        )
+        if plan:
+            state["plan_data"] = plan.model_dump(mode="json")
+        else:
+            state["error"] = "Query interpretation timed out"
     except Exception as e:
         logger.error(f"[orchestrator] Query Interpreter failed: {e}")
         state["error"] = f"Failed to interpret query: {e}"
@@ -63,8 +79,13 @@ async def run_research(state: ResearchDeskState) -> ResearchDeskState:
         return state
     state["current_phase"] = "researching"
     logger.info("[orchestrator] Research Analyst gathering data")
-    output = await _research_analyst.analyze({"plan": state["plan_data"]})
-    if output.error:
+    output = await _with_timeout(
+        _research_analyst.analyze({"plan": state["plan_data"]}),
+        seconds=120, label="Research Analyst"
+    )
+    if output is None:
+        state["research_data"] = {"data_summary": "Research timed out — using limited data."}
+    elif output.error:
         logger.warning(f"[orchestrator] Research Analyst error: {output.error}")
         state["research_data"] = {"data_summary": f"Research failed: {output.error}"}
     else:
@@ -77,18 +98,22 @@ async def run_risk(state: ResearchDeskState) -> ResearchDeskState:
         return state
     state["current_phase"] = "risk_assessment"
     logger.info("[orchestrator] Risk Manager evaluating")
-    output = await _risk_manager.analyze({
-        "plan": state["plan_data"],
-        "research": state["research_data"],
-    })
-    if output.error:
-        logger.warning(f"[orchestrator] Risk Manager error: {output.error}")
+    output = await _with_timeout(
+        _risk_manager.analyze({
+            "plan": state["plan_data"],
+            "research": state["research_data"],
+        }),
+        seconds=60, label="Risk Manager"
+    )
+    if output is None or (output and output.error):
+        err = output.error if output else "timed out"
+        logger.warning(f"[orchestrator] Risk Manager error: {err}")
         state["risk_data"] = {
             "macro_regime": "unknown",
             "regime_confidence": 0,
             "risk_factors": [],
             "overall_risk_level": "elevated",
-            "risk_narrative": f"Risk assessment failed: {output.error}",
+            "risk_narrative": f"Risk assessment failed: {err}",
         }
     else:
         state["risk_data"] = output.output
@@ -100,18 +125,22 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
         return state
     state["current_phase"] = "strategizing"
     logger.info("[orchestrator] Portfolio Strategist building trade ideas")
-    output = await _portfolio_strategist.analyze({
-        "plan": state["plan_data"],
-        "research": state["research_data"],
-        "risk": state["risk_data"],
-    })
-    if output.error:
-        logger.warning(f"[orchestrator] Portfolio Strategist error: {output.error}")
+    output = await _with_timeout(
+        _portfolio_strategist.analyze({
+            "plan": state["plan_data"],
+            "research": state["research_data"],
+            "risk": state["risk_data"],
+        }),
+        seconds=60, label="Portfolio Strategist"
+    )
+    if output is None or (output and output.error):
+        err = output.error if output else "timed out"
+        logger.warning(f"[orchestrator] Portfolio Strategist error: {err}")
         state["strategy_data"] = {
             "trade_ideas": [],
             "portfolio_positioning": "neutral",
             "hedging_recommendations": [],
-            "strategy_narrative": f"Strategy generation failed: {output.error}",
+            "strategy_narrative": f"Strategy generation failed: {err}",
         }
     else:
         state["strategy_data"] = output.output
@@ -123,13 +152,18 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
         return state
     state["current_phase"] = "synthesizing"
     logger.info("[orchestrator] CIO Synthesizer writing memo")
-    output = await _cio_synthesizer.synthesize({
-        "plan": state["plan_data"],
-        "research": state["research_data"],
-        "risk": state["risk_data"],
-        "strategy": state["strategy_data"],
-    })
-    if output.error:
+    output = await _with_timeout(
+        _cio_synthesizer.synthesize({
+            "plan": state["plan_data"],
+            "research": state["research_data"],
+            "risk": state["risk_data"],
+            "strategy": state["strategy_data"],
+        }),
+        seconds=60, label="CIO Synthesizer"
+    )
+    if output is None:
+        state["error"] = "Memo synthesis timed out"
+    elif output.error:
         state["error"] = f"Memo synthesis failed: {output.error}"
     else:
         state["memo_data"] = output.output
