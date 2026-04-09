@@ -61,6 +61,7 @@ class AnalyzeRequest(BaseModel):
 @app.post("/api/analyze")
 async def analyze(request: AnalyzeRequest):
     """Run the full research desk pipeline on a freeform query."""
+    import traceback
     from agents.orchestrator import run_research_desk
 
     query = request.query.strip()
@@ -71,35 +72,39 @@ async def analyze(request: AnalyzeRequest):
         memo = await run_research_desk(query)
         result = memo.model_dump(mode="json")
 
-        # Persist to database
-        async with async_session() as session:
-            record = IntelligenceMemoRecord(
-                query=memo.query,
-                intent=memo.intent.value if hasattr(memo.intent, "value") else str(memo.intent),
-                title=memo.title,
-                executive_summary=memo.executive_summary,
-                analysis=memo.analysis,
-                key_findings=memo.key_findings,
-                macro_regime=memo.macro_regime,
-                overall_risk_level=memo.overall_risk_level,
-                risk_factors=[rf.model_dump() if hasattr(rf, "model_dump") else rf for rf in memo.risk_factors],
-                trade_ideas=[ti.model_dump() if hasattr(ti, "model_dump") else ti for ti in memo.trade_ideas],
-                portfolio_positioning=memo.portfolio_positioning,
-                hedging_recommendations=memo.hedging_recommendations,
-                tickers_analyzed=memo.tickers_analyzed,
-                themes=memo.themes,
-            )
-            session.add(record)
-            await session.commit()
-            result["id"] = record.id
-            logger.info(f"Memo persisted: {record.id}")
+        # Persist to database — wrap in try/except so DB errors don't kill the response
+        try:
+            async with async_session() as session:
+                record = IntelligenceMemoRecord(
+                    query=memo.query,
+                    intent=memo.intent.value if hasattr(memo.intent, "value") else str(memo.intent),
+                    title=memo.title,
+                    executive_summary=memo.executive_summary,
+                    analysis=memo.analysis,
+                    key_findings=memo.key_findings,
+                    macro_regime=memo.macro_regime,
+                    overall_risk_level=memo.overall_risk_level,
+                    risk_factors=[rf.model_dump() if hasattr(rf, "model_dump") else rf for rf in memo.risk_factors],
+                    trade_ideas=[ti.model_dump() if hasattr(ti, "model_dump") else ti for ti in memo.trade_ideas],
+                    portfolio_positioning=memo.portfolio_positioning,
+                    hedging_recommendations=memo.hedging_recommendations,
+                    tickers_analyzed=memo.tickers_analyzed,
+                    themes=memo.themes,
+                )
+                session.add(record)
+                await session.commit()
+                result["id"] = record.id
+                logger.info(f"Memo persisted: {record.id}")
+        except Exception as db_err:
+            logger.error(f"DB persist failed (non-fatal): {db_err}")
 
         _analysis_status[query_id] = {"status": "complete", "phase": "done"}
         return result
     except Exception as e:
-        logger.error(f"Analysis failed: {e}")
+        tb = traceback.format_exc()
+        logger.error(f"Analysis failed: {e}\n{tb}")
         _analysis_status[query_id] = {"status": "error", "error": str(e)}
-        raise HTTPException(status_code=500, detail=f"Analysis failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/analyze/{ticker}")
