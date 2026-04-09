@@ -5,7 +5,13 @@ import { api } from "@/lib/api";
 import { MacroChart } from "@/components/MacroChart";
 import type { MacroIndicator } from "@/lib/types";
 
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+function getApiBase(): string {
+  if (process.env.NEXT_PUBLIC_BACKEND_URL) return process.env.NEXT_PUBLIC_BACKEND_URL;
+  if (typeof window !== "undefined" && window.location.hostname.includes("railway.app"))
+    return "https://alpha-backend-production-51df.up.railway.app";
+  return "http://localhost:8000";
+}
+const API_BASE = getApiBase();
 
 const LABELS: Record<string, string> = {
   fed_funds_rate: "Fed Funds Rate",

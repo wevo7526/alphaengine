@@ -1,4 +1,17 @@
-const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:8000";
+function getApiBase(): string {
+  // Check env var first (set at build time for Next.js)
+  if (process.env.NEXT_PUBLIC_BACKEND_URL) {
+    return process.env.NEXT_PUBLIC_BACKEND_URL;
+  }
+  // In browser: if we're on Railway, use the production backend
+  if (typeof window !== "undefined" && window.location.hostname.includes("railway.app")) {
+    return "https://alpha-backend-production-51df.up.railway.app";
+  }
+  // Local dev
+  return "http://localhost:8000";
+}
+
+const API_BASE = getApiBase();
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
