@@ -52,6 +52,31 @@ async def health_check():
     return {"status": "healthy", "env": settings.ENV}
 
 
+# === DEBUG ===
+
+@app.get("/api/debug/test-pipeline")
+async def debug_pipeline():
+    """Debug endpoint — test if the pipeline can be imported and LLM reached."""
+    errors = []
+    try:
+        from agents.orchestrator import run_research_desk
+    except Exception as e:
+        errors.append(f"import orchestrator: {e}")
+    try:
+        from agents.base_agent import get_llm
+        llm = get_llm()
+        errors.append(f"llm model: {llm.model}")
+    except Exception as e:
+        errors.append(f"get_llm: {e}")
+    try:
+        from config import settings
+        errors.append(f"anthropic_key set: {bool(settings.ANTHROPIC_API_KEY)}")
+        errors.append(f"anthropic_key prefix: {settings.ANTHROPIC_API_KEY[:10] if settings.ANTHROPIC_API_KEY else 'EMPTY'}")
+    except Exception as e:
+        errors.append(f"config: {e}")
+    return {"checks": errors}
+
+
 # === ANALYSIS ENDPOINTS ===
 
 class AnalyzeRequest(BaseModel):
