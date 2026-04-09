@@ -19,8 +19,8 @@ function Sparkline({ data }: { data: { date: string; close: number }[] }) {
   const color = last >= first ? "#10b981" : "#ef4444";
 
   return (
-    <div className="h-10 w-28">
-      <ResponsiveContainer width="100%" height="100%">
+    <div style={{ width: 112, height: 40 }}>
+      <ResponsiveContainer width={112} height={40}>
         <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
           <defs>
             <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
@@ -47,8 +47,8 @@ function DrawdownChart({ data }: { data: { date: string; drawdown: number }[] })
   if (!data || data.length < 2) return null;
 
   return (
-    <div className="h-20">
-      <ResponsiveContainer width="100%" height="100%">
+    <div style={{ width: "100%", height: 80, minWidth: 100 }}>
+      <ResponsiveContainer width="100%" height={80}>
         <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 2 }}>
           <defs>
             <linearGradient id="ddGrad" x1="0" y1="0" x2="0" y2="1">

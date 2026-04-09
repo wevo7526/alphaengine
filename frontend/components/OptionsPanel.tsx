@@ -76,30 +76,30 @@ export function OptionsPanel({
 
       {/* Key metrics grid */}
       <div className="grid grid-cols-4 gap-3 mb-3">
-        <Stat label="P/C Ratio" value={data.put_call_ratio.toFixed(2)} color={pcColor} />
-        <Stat label="Implied Move" value={`${data.implied_move_pct}%`} />
-        <Stat label="ATM IV" value={`${data.atm_iv}%`} />
-        <Stat label="IV Skew" value={`${data.iv_skew > 0 ? "+" : ""}${data.iv_skew}%`} color={data.iv_skew > 5 ? "text-signal-red" : "text-text-primary"} />
+        <Stat label="P/C Ratio" value={data.put_call_ratio != null ? data.put_call_ratio.toFixed(2) : "—"} color={pcColor} />
+        <Stat label="Implied Move" value={data.implied_move_pct != null ? `${data.implied_move_pct}%` : "—"} />
+        <Stat label="ATM IV" value={data.atm_iv != null ? `${data.atm_iv}%` : "—"} />
+        <Stat label="IV Skew" value={data.iv_skew != null ? `${data.iv_skew > 0 ? "+" : ""}${data.iv_skew}%` : "—"} color={data.iv_skew != null && data.iv_skew > 5 ? "text-signal-red" : "text-text-primary"} />
       </div>
 
       <div className="grid grid-cols-4 gap-3 mb-3">
-        <Stat label="Max Pain" value={`$${data.max_pain}`} />
-        <Stat label="Straddle" value={`$${data.straddle_price}`} />
-        <Stat label="Call Vol" value={data.total_call_volume.toLocaleString()} />
-        <Stat label="Put Vol" value={data.total_put_volume.toLocaleString()} />
+        <Stat label="Max Pain" value={data.max_pain != null ? `$${data.max_pain}` : "—"} />
+        <Stat label="Straddle" value={data.straddle_price != null ? `$${data.straddle_price}` : "—"} />
+        <Stat label="Call Vol" value={data.total_call_volume != null ? data.total_call_volume.toLocaleString() : "—"} />
+        <Stat label="Put Vol" value={data.total_put_volume != null ? data.total_put_volume.toLocaleString() : "—"} />
       </div>
 
       {/* ATM Greeks */}
       {data.greeks && Object.keys(data.greeks).length > 0 && (
         <div className="mb-3">
           <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1.5">
-            ATM Greeks (${data.atm_strike} strike)
+            ATM Greeks {data.atm_strike != null ? `($${data.atm_strike} strike)` : ""}
           </p>
           <div className="grid grid-cols-4 gap-3">
-            <Stat label="Delta" value={data.greeks.delta.toFixed(3)} />
-            <Stat label="Gamma" value={data.greeks.gamma.toFixed(5)} />
-            <Stat label="Theta" value={data.greeks.theta.toFixed(3)} color="text-signal-red" />
-            <Stat label="Vega" value={data.greeks.vega.toFixed(3)} />
+            <Stat label="Delta" value={data.greeks.delta != null ? data.greeks.delta.toFixed(3) : "—"} />
+            <Stat label="Gamma" value={data.greeks.gamma != null ? data.greeks.gamma.toFixed(5) : "—"} />
+            <Stat label="Theta" value={data.greeks.theta != null ? data.greeks.theta.toFixed(3) : "—"} color="text-signal-red" />
+            <Stat label="Vega" value={data.greeks.vega != null ? data.greeks.vega.toFixed(3) : "—"} />
           </div>
         </div>
       )}
