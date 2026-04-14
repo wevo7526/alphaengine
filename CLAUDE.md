@@ -294,9 +294,43 @@ Replaced all placeholder route stubs in `backend/main.py` with real data client 
 
 ---
 
+## Phase 2-4: Quantitative Infrastructure (COMPLETED)
+
+**7 quant modules built (all pure math, zero LLM coupling):**
+
+| Module | File | Status | Key Functions |
+|--------|------|--------|--------------|
+| Risk Management | `quant/risk.py` | **Complete** | EWMA cov, VaR, CVaR, sector limits, circuit breaker, correlation sizing |
+| Performance | `quant/performance.py` | **Complete** | Sharpe, Sortino, Calmar, drawdown, alpha, beta, VaR, CVaR, rolling Sharpe |
+| Regime Detection | `quant/regime.py` | **Complete** | HMM (hmmlearn) + rule-based fallback, regime history |
+| Backtesting | `quant/backtester.py` | **Partial** | Rules-based walk-forward with slippage/SPY benchmark. Signal replay TBD. |
+| Factor Analysis | `quant/factors.py` | **Partial** | Single/multi-factor OLS, attribution. Rolling exposures + FF library TBD. |
+| Signal Validation | `quant/signal_validation.py` | **Complete** | IC, ICIR, hit rate by conviction, alpha decay, IC-weighted optimization |
+| Portfolio Optimization | `quant/optimizer.py` | **Complete** | Black-Litterman, mean-variance, rebalance trade generation |
+| Options Analytics | `quant/options_analytics.py` | **Complete** | BSM, Greeks, P/C ratio, IV skew, unusual activity |
+
+**Database:** 10 ORM models, async repository layer, Postgres on Railway, SQLite fallback locally.
+
+**Agents:** 5-agent hedge fund desk pipeline (Query Interpreter → Research Analyst → Risk Manager → Portfolio Strategist → CIO Synthesizer). SSE streaming. Firecrawl web validation tool.
+
+**Frontend:** 6 pages (Home dashboard, Analysis, Portfolio with 4 tabs, Risk, Settings), 10 components, Recharts charts, dark theme.
+
+**API:** 20+ endpoints covering analysis, data, quant, backtesting, portfolio, risk, regime, factors, optimization.
+
+### Remaining gaps in quant layer:
+- `risk.py`: pre_trade_risk_check() and marginal_var() not yet implemented
+- `backtester.py`: signal replay mode (needs accumulated signal history)
+- `factors.py`: rolling_factor_exposure() and direct Kenneth French data library
+- `regime.py`: regime_conditional_returns()
+
+---
+
 ## Phase 5 Roadmap
 
-- **Firecrawl integration** — web scraping API as a Research Analyst tool to cross-validate agent outputs against live web sources (earnings reports, news articles, company filings). Adds a ground-truth verification layer so the platform doesn't rely solely on structured API data. Priority: after core quant infrastructure is stable.
+- **Firecrawl integration** — DONE. `data/firecrawl_client.py` with `search_web()` tool for Research Analyst.
+- Signal replay backtesting (requires signal history accumulation)
+- Pre-trade risk gate (marginal VaR check before every trade)
+- Kenneth French data library integration for proper factor analysis
 - Multi-tenant architecture for licensing
 - Custom agent configuration per user
 - API access for institutional clients
