@@ -2,8 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { UserButton } from "@clerk/nextjs";
 import { IconHome, IconGlobe, IconBriefcase, IconSettings } from "./icons";
+
+// Dynamic import to avoid SSG crash when ClerkProvider isn't available
+import dynamic from "next/dynamic";
+const ClerkUserButton = dynamic(
+  () => import("@clerk/nextjs").then((mod) => ({ default: mod.UserButton })),
+  { ssr: false }
+);
 
 // Reuse IconGlobe for Analysis, add simple SVG for new pages
 function IconChart(props: React.SVGProps<SVGSVGElement>) {
@@ -98,7 +104,7 @@ export function Sidebar() {
           );
         })}
         <div className="px-3 py-2">
-          <UserButton
+          <ClerkUserButton
             appearance={{
               elements: {
                 avatarBox: "w-7 h-7",
