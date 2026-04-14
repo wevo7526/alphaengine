@@ -78,6 +78,10 @@ export const api = {
   regime: () => request("/api/quant/regime"),
   factors: (tickers: string[]) =>
     request(`/api/quant/factors?tickers=${tickers.join(",")}`),
+  preTradeCheck: (ticker: string, sizePct = 3, action = "BUY") =>
+    request(`/api/quant/risk-check/${ticker}?size_pct=${sizePct}&action=${action}`),
+  regimeConditionalReturns: (ticker = "SPY") =>
+    request(`/api/quant/regime/conditional-returns?ticker=${ticker}`),
 
   // Backtesting
   runBacktest: (config: { tickers: string[]; period?: string; initial_capital?: number }) =>

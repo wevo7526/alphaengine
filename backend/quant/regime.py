@@ -171,3 +171,38 @@ def get_regime_history(macro_history: list[dict]) -> list[dict]:
     except Exception as e:
         logger.error(f"Regime history failed: {e}")
         return []
+
+
+def regime_conditional_returns(
+    regime_history: list[dict],
+    asset_returns: list[float],
+) -> dict:
+    """
+    Historical average return of an asset in each regime.
+    Tells you: "in risk_off, stocks return -X% on average."
+    Critical for regime-aware position sizing.
+    """
+    if not regime_history or not asset_returns:
+        return {}
+
+    min_len = min(len(regime_history), len(asset_returns))
+    regime_returns: dict[str, list[float]] = {}
+
+    for i in range(min_len):
+        regime = regime_history[i].get("regime", "unknown")
+        if regime not in regime_returns:
+            regime_returns[regime] = []
+        regime_returns[regime].append(asset_returns[i])
+
+    result = {}
+    for regime, returns in regime_returns.items():
+        arr = np.array(returns)
+        result[regime] = {
+            "avg_daily_return_pct": round(float(np.mean(arr) * 100), 4),
+            "annualized_return_pct": round(float(np.mean(arr) * 252 * 100), 2),
+            "volatility_pct": round(float(np.std(arr) * np.sqrt(252) * 100), 2),
+            "observations": len(returns),
+            "positive_pct": round(sum(1 for r in returns if r > 0) / len(returns) * 100, 1),
+        }
+
+    return result

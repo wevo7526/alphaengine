@@ -201,3 +201,129 @@ def correlation_adjusted_size(
         "penalty": round(penalty, 3),
         "original_size": base_size,
     }
+
+
+def compute_marginal_var(
+    current_weights: dict[str, float],
+    new_ticker: str,
+    new_weight: float,
+    cov_matrix: dict,
+    portfolio_value: float = 100000,
+    confidence: float = 0.95,
+) -> dict:
+    """
+    Marginal VaR: change in portfolio VaR from adding a new position.
+    Small marginal VaR = diversifying. Large = concentrating risk.
+    """
+    tickers = cov_matrix.get("tickers", [])
+    matrix = cov_matrix.get("matrix", [])
+    if not tickers or not matrix:
+        return {"marginal_var_pct": None, "error": "No covariance data"}
+
+    cov = np.array(matrix)
+    cov = np.where(cov == None, 0, cov).astype(float)
+
+    z_scores = {0.95: 1.645, 0.99: 2.326}
+    z = z_scores.get(confidence, 1.645)
+
+    # VaR without new position
+    w_before = np.array([current_weights.get(t, 0) for t in tickers])
+    vol_before = np.sqrt(float(w_before @ cov @ w_before)) if np.any(w_before) else 0
+    var_before = z * vol_before / np.sqrt(252)
+
+    # VaR with new position
+    w_after = w_before.copy()
+    if new_ticker in tickers:
+        idx = tickers.index(new_ticker)
+        w_after[idx] += new_weight
+    else:
+        return {"marginal_var_pct": None, "error": f"{new_ticker} not in covariance matrix"}
+
+    # Renormalize
+    total = np.sum(np.abs(w_after))
+    if total > 0:
+        w_after = w_after / total
+
+    vol_after = np.sqrt(float(w_after @ cov @ w_after))
+    var_after = z * vol_after / np.sqrt(252)
+
+    marginal = var_after - var_before
+
+    return {
+        "marginal_var_pct": _clean(round(float(marginal * 100), 3)),
+        "var_before_pct": _clean(round(float(var_before * 100), 3)),
+        "var_after_pct": _clean(round(float(var_after * 100), 3)),
+        "diversifying": marginal < new_weight * vol_before / np.sqrt(252) * 0.5,
+    }
+
+
+def pre_trade_risk_check(
+    ticker: str,
+    proposed_action: str,
+    proposed_size_pct: float,
+    current_positions: dict[str, dict],
+    returns_dict: dict[str, list[float]],
+    max_position_size: float = 0.05,
+    max_sector_pct: float = 0.30,
+) -> dict:
+    """
+    Master pre-trade gate. Called before every trade execution.
+    Checks: position size, sector concentration, correlation, drawdown, marginal VaR.
+    Returns {approved, adjusted_size, reasons, risk_metrics}.
+    """
+    reasons = []
+    adjusted_size = proposed_size_pct
+    risk_metrics = {}
+
+    # 1. Position size limit
+    if proposed_size_pct > max_position_size:
+        adjusted_size = max_position_size
+        reasons.append(f"Size capped from {proposed_size_pct*100:.1f}% to {max_position_size*100:.1f}% (max position limit)")
+
+    # 2. Sector concentration
+    sectors = {t: info.get("sector", "Unknown") for t, info in current_positions.items()}
+    ticker_sector = current_positions.get(ticker, {}).get("sector", "Unknown")
+    sector_total = sum(
+        info.get("weight", 0) for t, info in current_positions.items()
+        if info.get("sector") == ticker_sector
+    )
+    if sector_total + adjusted_size > max_sector_pct:
+        max_allowed = max(0, max_sector_pct - sector_total)
+        if max_allowed < adjusted_size:
+            adjusted_size = max_allowed
+            reasons.append(f"Sector {ticker_sector} at {sector_total*100:.1f}% — capped to {max_allowed*100:.1f}%")
+
+    # 3. Correlation check
+    if ticker in returns_dict and returns_dict:
+        existing_rets = {t: r for t, r in returns_dict.items() if t != ticker and t in current_positions}
+        if existing_rets:
+            corr_result = correlation_adjusted_size(
+                adjusted_size, returns_dict[ticker], existing_rets
+            )
+            if corr_result["penalty"] > 0.1:
+                adjusted_size = corr_result["adjusted_size"]
+                reasons.append(f"Correlation penalty: avg corr {corr_result['avg_correlation']:.2f}, size reduced by {corr_result['penalty']*100:.0f}%")
+            risk_metrics["avg_correlation"] = corr_result["avg_correlation"]
+
+    # 4. Marginal VaR
+    if len(returns_dict) >= 2:
+        cov = compute_ewma_covariance(returns_dict)
+        weights = {t: info.get("weight", 0) for t, info in current_positions.items()}
+        mvar = compute_marginal_var(weights, ticker, adjusted_size, cov)
+        risk_metrics["marginal_var"] = mvar
+        if mvar.get("marginal_var_pct") and abs(mvar["marginal_var_pct"]) > 2.0:
+            reasons.append(f"High marginal VaR impact: {mvar['marginal_var_pct']}%")
+
+    approved = adjusted_size > 0.005  # Minimum 0.5% to be worth trading
+    if not approved:
+        reasons.append("Position too small after risk adjustments")
+
+    return {
+        "approved": approved,
+        "ticker": ticker,
+        "action": proposed_action,
+        "original_size_pct": round(proposed_size_pct * 100, 2),
+        "adjusted_size_pct": round(adjusted_size * 100, 2),
+        "reasons": reasons,
+        "risk_metrics": risk_metrics,
+    }

@@ -169,3 +169,41 @@ def performance_attribution(
         "alpha_contribution": _clean(round(alpha_contribution, 2)),
         "pct_explained_by_factors": _clean(round(explained / total_return * 100, 1)) if total_return != 0 else 0,
     }
+
+
+def compute_rolling_factor_exposure(
+    portfolio_returns: list[float],
+    market_returns: list[float],
+    window: int = 60,
+    risk_free_rate: float = 0.04,
+) -> list[dict]:
+    """
+    Rolling factor betas over a sliding window.
+    Shows how factor exposures evolve over time.
+    Returns list of {index, alpha, beta, r_squared}.
+    """
+    min_len = min(len(portfolio_returns), len(market_returns))
+    if min_len < window + 10:
+        return []
+
+    y = np.array(portfolio_returns[-min_len:])
+    x = np.array(market_returns[-min_len:])
+    rf_daily = risk_free_rate / 252
+
+    results = []
+    for i in range(window, min_len):
+        y_chunk = y[i - window:i] - rf_daily
+        x_chunk = x[i - window:i] - rf_daily
+
+        ols = _numpy_ols(y_chunk, x_chunk.reshape(-1, 1))
+        alpha_ann = float(ols["betas"][0] * 252 * 100)
+        beta = float(ols["betas"][1])
+
+        results.append({
+            "index": i,
+            "alpha": _clean(round(alpha_ann, 2)),
+            "beta": _clean(round(beta, 3)),
+            "r_squared": _clean(round(float(ols["r_squared"]), 3)),
+        })
+
+    return results

@@ -535,7 +535,84 @@ async def factor_analysis(tickers: str = "SPY"):
         return {"error": "Insufficient data for factor analysis"}
 
     loadings = compute_factor_loadings(port_returns, benchmark)
-    return {"tickers": ticker_list, **loadings}
+
+    # Rolling exposures
+    from quant.factors import compute_rolling_factor_exposure
+    rolling = compute_rolling_factor_exposure(port_returns, benchmark, window=30)
+
+    return {"tickers": ticker_list, **loadings, "rolling_exposures": rolling}
+
+
+@app.get("/api/quant/risk-check/{ticker}")
+async def pre_trade_check(ticker: str, size_pct: float = 0.03, action: str = "BUY"):
+    """Pre-trade risk gate: checks position size, sector, correlation, marginal VaR."""
+    from quant.risk import pre_trade_risk_check
+
+    ticker = ticker.upper()
+    trades = await list_trades_internal("open")
+    positions = {}
+    returns_dict = {}
+
+    for t in trades:
+        tk = t["ticker"]
+        positions[tk] = {"sector": "Unknown", "weight": (t.get("position_size_pct") or 5) / 100}
+        try:
+            history = _market_client_for_enrich.get_price_history(tk, period="3mo")
+            if history and len(history) > 20:
+                closes = [b["close"] for b in history]
+                returns_dict[tk] = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+            fundamentals = _market_client_for_enrich.get_fundamentals(tk)
+            positions[tk]["sector"] = fundamentals.get("sector", "Unknown")
+        except Exception:
+            pass
+
+    # Also fetch new ticker returns
+    try:
+        history = _market_client_for_enrich.get_price_history(ticker, period="3mo")
+        if history and len(history) > 20:
+            closes = [b["close"] for b in history]
+            returns_dict[ticker] = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+        fundamentals = _market_client_for_enrich.get_fundamentals(ticker)
+        positions.setdefault(ticker, {})["sector"] = fundamentals.get("sector", "Unknown")
+    except Exception:
+        pass
+
+    return pre_trade_risk_check(ticker, action, size_pct / 100, positions, returns_dict)
+
+
+@app.get("/api/quant/regime/conditional-returns")
+async def regime_conditional(ticker: str = "SPY"):
+    """Historical average returns of an asset in each regime."""
+    from quant.regime import classify_regime, fit_regime_model, get_regime_history, regime_conditional_returns
+
+    # Get macro history for regime classification
+    try:
+        vix_hist = fred_client.get_series_history("VIXCLS", 500)
+        credit_hist = fred_client.get_series_history("BAMLH0A0HYM2", 500)
+        yc_hist = fred_client.get_series_history("T10Y2Y", 500)
+
+        min_len = min(len(vix_hist), len(credit_hist), len(yc_hist))
+        macro_hist = [
+            {"date": vix_hist[i]["date"], "vix": vix_hist[i]["value"],
+             "credit_spread": credit_hist[i]["value"], "yield_curve": yc_hist[i]["value"]}
+            for i in range(min_len)
+        ]
+        fit_regime_model(macro_hist)
+        regime_hist = get_regime_history(macro_hist)
+    except Exception:
+        return {"error": "Could not compute regime history"}
+
+    # Get asset returns
+    try:
+        history = _market_client_for_enrich.get_price_history(ticker.upper(), period="2y")
+        if not history or len(history) < 60:
+            return {"error": "Insufficient price data"}
+        closes = [b["close"] for b in history]
+        returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+    except Exception:
+        return {"error": "Could not fetch price data"}
+
+    return regime_conditional_returns(regime_hist, returns)
 
 
 # === PORTFOLIO OPTIMIZATION ===

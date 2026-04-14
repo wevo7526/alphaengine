@@ -78,14 +78,21 @@ export default function HomePage() {
       if (!cancelled) setRecentMemos((d as { memos: IntelligenceMemo[] }).memos || []);
     }).catch(() => {});
 
-    // Auto-load morning report
-    setReportLoading(true);
-    api.morningReport().then((d: unknown) => {
-      if (!cancelled) {
-        setMorningReport(d as MorningReport);
-        setReportLoading(false);
-      }
-    }).catch(() => { if (!cancelled) setReportLoading(false); });
+    // Auto-load morning report only between 4:00-8:30 AM EST
+    const now = new Date();
+    const estHour = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" })).getHours();
+    const estMin = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" })).getMinutes();
+    const isPreMarket = estHour >= 4 && (estHour < 8 || (estHour === 8 && estMin <= 30));
+
+    if (isPreMarket) {
+      setReportLoading(true);
+      api.morningReport().then((d: unknown) => {
+        if (!cancelled) {
+          setMorningReport(d as MorningReport);
+          setReportLoading(false);
+        }
+      }).catch(() => { if (!cancelled) setReportLoading(false); });
+    }
 
     return () => { cancelled = true; };
   }, []);
