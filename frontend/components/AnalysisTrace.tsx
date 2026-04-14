@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import type { AnalysisRun, AnalysisPhase } from "@/hooks/useAnalysis";
 import { AGENT_META } from "@/lib/types";
 import { MemoPanel } from "./MemoPanel";
@@ -38,11 +39,19 @@ PHASES.forEach((p, i) => {
 });
 
 function ElapsedTimer({ startedAt }: { startedAt: number }) {
-  // Simple elapsed display — updates aren't needed per-second in this static version
-  const elapsed = Math.round((Date.now() - startedAt) / 1000);
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setElapsed(Math.round((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [startedAt]);
+
+  const mins = Math.floor(elapsed / 60);
+  const secs = elapsed % 60;
   return (
     <span className="text-[10px] font-mono text-text-quaternary tabular-nums">
-      {elapsed}s
+      {mins > 0 ? `${mins}m ${secs}s` : `${secs}s`}
     </span>
   );
 }
@@ -179,7 +188,13 @@ export function AnalysisTrace({ run }: { run: AnalysisRun }) {
           style={{ animation: "fade-in 0.3s ease-out" }}
         >
           <p className="text-[13px] text-signal-red font-medium mb-1">Analysis failed</p>
-          <p className="text-xs text-text-tertiary">{run.error}</p>
+          <p className="text-xs text-text-tertiary mb-2">
+            {run.error?.includes("timed out") ? "The analysis took too long. Try a simpler query or fewer tickers." :
+             run.error?.includes("NetworkError") ? "Could not reach the backend. Check your connection." :
+             run.error?.includes("500") ? "The server encountered an error. Try again in a moment." :
+             run.error || "An unexpected error occurred."}
+          </p>
+          <p className="text-[10px] text-text-quaternary font-mono">{run.error}</p>
         </div>
       )}
     </div>

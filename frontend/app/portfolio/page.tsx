@@ -145,8 +145,10 @@ export default function PortfolioPage() {
             <p className="text-sm text-text-quaternary">Loading trades...</p>
           ) : trades.length === 0 ? (
             <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
-              <p className="text-sm text-text-tertiary">
-                No trades yet. Run an analysis and click "Take Trade" on a trade idea.
+              <p className="text-[13px] text-text-secondary mb-2">No trades in your journal yet</p>
+              <p className="text-xs text-text-tertiary max-w-sm mx-auto">
+                Go to the Analysis page, run a query, and click "Take Trade" on any trade idea
+                to start tracking positions and P&L here.
               </p>
             </div>
           ) : (

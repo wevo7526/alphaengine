@@ -40,7 +40,7 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
       });
       setTaken(true);
     } catch {
-      // Silently fail — non-critical
+      setTaken(false);
     }
   };
 

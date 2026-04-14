@@ -81,7 +81,10 @@ export default function RiskPage() {
       ) : data?.error ? (
         <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
           <p className="text-sm text-text-tertiary">{data.error}</p>
-          <p className="text-xs text-text-quaternary mt-1">Take some trades from the Analysis page first.</p>
+          <p className="text-xs text-text-quaternary mt-2">
+            Risk metrics require open positions. Run an analysis, then click "Take Trade"
+            on a trade idea to start building your portfolio.
+          </p>
         </div>
       ) : data ? (
         <>
