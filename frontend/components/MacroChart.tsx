@@ -50,10 +50,10 @@ export function MacroChart({
           </p>
           <div className="flex items-baseline gap-2">
             <span className="text-lg font-mono font-medium text-text-primary">
-              {latest.value.toFixed(2)}{unit}
+              {latest.value != null ? latest.value.toFixed(2) : "—"}{unit}
             </span>
             <span className={`text-xs font-mono ${changeColor}`}>
-              {isUp ? "+" : ""}{change.toFixed(2)}
+              {isUp ? "+" : ""}{change != null ? change.toFixed(2) : ""}
             </span>
           </div>
         </div>

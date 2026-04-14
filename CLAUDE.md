@@ -291,3 +291,18 @@ Replaced all placeholder route stubs in `backend/main.py` with real data client 
 - Top AAPL headline: "Why Apple stock is down today: Foldable iPhone delay, China patent battle"
 
 **Finance note on the macro data:** Fed funds at 3.64% (down from 5.5% cycle peak) suggests we're in a cutting cycle. Yield curve at +0.52 (positive, not inverted) with unemployment at 4.3% and VIX at 25.78 — this looks like a late-cycle/early-recovery transition. Credit spreads at 3.12% are modestly elevated. The Macro Agent will use exactly this kind of multi-indicator read to classify the regime.
+
+---
+
+## Phase 5 Roadmap
+
+- **Firecrawl integration** — web scraping API as a Research Analyst tool to cross-validate agent outputs against live web sources (earnings reports, news articles, company filings). Adds a ground-truth verification layer so the platform doesn't rely solely on structured API data. Priority: after core quant infrastructure is stable.
+- Multi-tenant architecture for licensing
+- Custom agent configuration per user
+- API access for institutional clients
+- Historical signal database for backtesting as a service
+- Mobile alerts (Telegram/SMS for high-conviction signals)
+- Redis caching layer (replace in-memory TTL caches)
+- Background job queue (Celery/ARQ) for backtests
+- API authentication (JWT/API key)
+- Error monitoring (Sentry)

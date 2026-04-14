@@ -105,13 +105,13 @@ export function OptionsPanel({
       )}
 
       {/* Unusual activity */}
-      {data.unusual_activity.length > 0 && (
+      {data.unusual_activity?.length > 0 && (
         <div>
           <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1.5">
             Unusual Activity
           </p>
           <div className="space-y-1">
-            {data.unusual_activity.map((u, i) => (
+            {(data.unusual_activity || []).map((u, i) => (
               <div
                 key={i}
                 className="flex items-center justify-between rounded-lg bg-bg-primary px-2.5 py-1.5 text-[11px]"
@@ -125,8 +125,8 @@ export function OptionsPanel({
                   <span className="font-mono text-text-primary">${u.strike}</span>
                 </div>
                 <div className="flex items-center gap-3 text-text-tertiary">
-                  <span>vol {u.volume.toLocaleString()}</span>
-                  <span>OI {u.open_interest.toLocaleString()}</span>
+                  <span>vol {u.volume?.toLocaleString() ?? "—"}</span>
+                  <span>OI {u.open_interest?.toLocaleString() ?? "—"}</span>
                   <span className="font-mono font-bold text-signal-yellow">
                     {u.vol_oi_ratio}x
                   </span>

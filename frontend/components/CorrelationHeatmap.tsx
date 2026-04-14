@@ -56,7 +56,7 @@ export function CorrelationHeatmap({
                           : `${cellColor(val)} text-text-primary`
                       }`}
                     >
-                      {val.toFixed(2)}
+                      {val != null ? val.toFixed(2) : "—"}
                     </div>
                   </td>
                 ))}

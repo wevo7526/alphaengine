@@ -63,7 +63,11 @@ export default function PortfolioPage() {
   const [loading, setLoading] = useState(true);
   const [backtesting, setBacktesting] = useState(false);
   const [expandedMemo, setExpandedMemo] = useState<number | null>(null);
-  const [tab, setTab] = useState<"journal" | "analyses" | "backtest">("journal");
+  const [factors, setFactors] = useState<{
+    alpha?: number | null; beta?: number | null; r_squared?: number | null;
+    residual_vol?: number | null; factor_betas?: Record<string, number>;
+  } | null>(null);
+  const [tab, setTab] = useState<"journal" | "analyses" | "backtest" | "factors">("journal");
 
   useEffect(() => {
     Promise.all([
@@ -118,6 +122,7 @@ export default function PortfolioPage() {
           { key: "journal" as const, label: "Trade Journal" },
           { key: "analyses" as const, label: "Analyses" },
           { key: "backtest" as const, label: "Backtest" },
+          { key: "factors" as const, label: "Factors" },
         ].map((t) => (
           <button
             key={t.key}
@@ -278,6 +283,87 @@ export default function PortfolioPage() {
                   <p className="text-xs text-text-tertiary mt-1">{t.thesis}</p>
                 </div>
               ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Factors Tab */}
+      {tab === "factors" && (
+        <>
+          {!factors ? (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-[13px] font-medium text-text-primary mb-0.5">Factor Exposure Analysis</p>
+                  <p className="text-xs text-text-tertiary">Decompose portfolio returns into market, size, value, and momentum factors.</p>
+                </div>
+                <button
+                  onClick={() => {
+                    const tickers = [...new Set(trades.map(t => t.ticker))].slice(0, 5);
+                    if (tickers.length === 0) return;
+                    api.factors(tickers).then((d: unknown) => setFactors(d as typeof factors)).catch(() => {});
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors"
+                >
+                  Compute Factors
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Alpha & Beta */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">Alpha (ann.)</p>
+                  <p className={`text-lg font-mono font-medium ${
+                    Number(factors.alpha || 0) >= 0 ? "text-signal-green" : "text-signal-red"
+                  }`}>
+                    {factors.alpha != null ? `${Number(factors.alpha) > 0 ? "+" : ""}${factors.alpha}%` : "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">Beta</p>
+                  <p className="text-lg font-mono font-medium text-text-primary">
+                    {factors.beta != null ? String(factors.beta) : "—"}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">R-Squared</p>
+                  <p className="text-lg font-mono font-medium text-text-primary">
+                    {factors.r_squared != null ? String(factors.r_squared) : "—"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Factor betas if multi-factor */}
+              {factors.factor_betas ? (
+                <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+                  <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">Factor Exposures</h3>
+                  <div className="space-y-2">
+                    {Object.entries(factors.factor_betas).map(([factor, beta]) => (
+                      <div key={factor} className="flex items-center gap-3">
+                        <span className="text-xs text-text-secondary w-24 capitalize">{factor.replace("_", " ")}</span>
+                        <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${Number(beta) >= 0 ? "bg-accent" : "bg-signal-red"}`}
+                            style={{ width: `${Math.min(Math.abs(Number(beta)) * 50, 100)}%`, marginLeft: Number(beta) < 0 ? "auto" : 0 }}
+                          />
+                        </div>
+                        <span className="text-xs font-mono text-text-primary w-12 text-right">
+                          {beta != null ? Number(beta).toFixed(3) : "—"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {factors.residual_vol != null && (
+                <p className="text-xs text-text-quaternary">
+                  Residual volatility (idiosyncratic risk): <span className="font-mono text-text-primary">{factors.residual_vol}%</span>
+                </p>
+              )}
             </div>
           )}
         </>

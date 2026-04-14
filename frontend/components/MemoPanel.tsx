@@ -107,16 +107,16 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
 
       {open && (
         <div className="mt-3 pt-3 border-t border-border-primary space-y-2 text-xs" style={{ animation: "fade-in 0.2s ease-out" }}>
-          {idea.catalysts.length > 0 && (
+          {idea.catalysts?.length > 0 && (
             <div>
               <span className="text-text-quaternary font-medium">Catalysts: </span>
-              <span className="text-text-secondary">{idea.catalysts.join(" · ")}</span>
+              <span className="text-text-secondary">{idea.catalysts?.join(" · ")}</span>
             </div>
           )}
-          {idea.risks.length > 0 && (
+          {idea.risks?.length > 0 && (
             <div>
               <span className="text-text-quaternary font-medium">Risks: </span>
-              <span className="text-text-secondary">{idea.risks.join(" · ")}</span>
+              <span className="text-text-secondary">{idea.risks?.join(" · ")}</span>
             </div>
           )}
           <button
@@ -249,7 +249,7 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
             Key Findings
           </h3>
           <div className="space-y-2">
-            {memo.key_findings.map((f, i) => (
+            {(memo.key_findings || []).map((f, i) => (
               <div
                 key={i}
                 className="flex items-start gap-2.5 text-[13px] text-text-secondary"
@@ -270,7 +270,7 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
             Trade Ideas — ranked by conviction
           </h3>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {memo.trade_ideas.map((idea, i) => (
+            {(memo.trade_ideas || []).map((idea, i) => (
               <TradeIdeaCard key={i} idea={idea} rank={i + 1} memoId={(memo as unknown as Record<string, unknown>).id as string} />
             ))}
           </div>
@@ -294,7 +294,7 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
               Hedging Recommendations
             </h3>
             <div className="space-y-2">
-              {memo.hedging_recommendations.map((h, i) => {
+              {(memo.hedging_recommendations || []).map((h, i) => {
                 // Try to split on " — " for instrument vs rationale
                 const parts = h.split(" — ");
                 const instrument = parts[0];

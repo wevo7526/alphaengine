@@ -52,6 +52,7 @@ export default function HomePage() {
   const [morningReport, setMorningReport] = useState<MorningReport | null>(null);
   const [recentMemos, setRecentMemos] = useState<IntelligenceMemo[]>([]);
   const [expandedMemo, setExpandedMemo] = useState<number | null>(null);
+  const [regime, setRegime] = useState<Record<string, unknown> | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
 
   useEffect(() => {
@@ -68,6 +69,10 @@ export default function HomePage() {
         setMacroLoading(false);
       }
     });
+
+    api.regime().then((d: unknown) => {
+      if (!cancelled) setRegime(d as Record<string, unknown>);
+    }).catch(() => {});
 
     api.latestMemos(5).then((d: unknown) => {
       if (!cancelled) setRecentMemos((d as { memos: IntelligenceMemo[] }).memos || []);
@@ -158,6 +163,45 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {/* Regime Detection */}
+      {regime && (
+        <div className="rounded-xl border border-border-primary bg-bg-surface p-4 mb-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className={`w-2.5 h-2.5 rounded-full ${
+                String(regime.current_regime) === "risk_on" ? "bg-signal-green" :
+                String(regime.current_regime) === "risk_off" ? "bg-signal-red" : "bg-signal-yellow"
+              }`} />
+              <div>
+                <p className="text-[11px] text-text-quaternary uppercase tracking-wider">Market Regime</p>
+                <p className="text-[15px] font-semibold text-text-primary capitalize">
+                  {String(regime.current_regime || "unknown").replace("_", " ")}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-text-quaternary">Confidence:</span>
+              <span className="text-sm font-mono text-text-primary">
+                {regime.confidence ? `${(Number(regime.confidence) * 100).toFixed(0)}%` : "—"}
+              </span>
+              <span className="text-[10px] text-text-quaternary ml-2">
+                {String(regime.method || "")}
+              </span>
+            </div>
+          </div>
+          {regime.probabilities ? (
+            <div className="flex gap-2 mt-3">
+              {Object.entries(regime.probabilities as Record<string, number>).map(([state, prob]) => (
+                <div key={state} className="flex-1 rounded-lg bg-bg-primary px-2 py-1.5 text-center">
+                  <p className="text-[9px] text-text-quaternary capitalize">{state.replace("_", " ")}</p>
+                  <p className="text-xs font-mono text-text-primary">{(Number(prob) * 100).toFixed(0)}%</p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
 
       {/* Macro Charts */}
       {macroError && (
