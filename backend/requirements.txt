@@ -27,6 +27,10 @@ aiosqlite
 # Quantitative
 scipy
 numpy
+pandas
+scikit-learn
+statsmodels
+hmmlearn
 
 # NLP (Phase 1: VADER, Phase 2: FinBERT via transformers)
 vaderSentiment

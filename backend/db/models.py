@@ -5,7 +5,7 @@ Adapted from the spec's Section 9 schema for the restructured
 hedge fund research desk architecture.
 """
 
-from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, JSON
+from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, Date, JSON
 from sqlalchemy.sql import func
 import uuid
 
@@ -14,6 +14,110 @@ from db.database import Base
 
 def gen_uuid():
     return str(uuid.uuid4())
+
+
+# ============================================================
+# NEW QUANT INFRASTRUCTURE MODELS (Phase 2-4)
+# ============================================================
+
+
+class BacktestRunRecord(Base):
+    """Configuration and metadata for a backtest run."""
+    __tablename__ = "backtest_runs"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    name = Column(String(200))
+    tickers = Column(JSON, default=list)
+    start_date = Column(Date)
+    end_date = Column(Date)
+    initial_capital = Column(Float, default=100000)
+    strategy_config = Column(JSON, default=dict)
+    mode = Column(String(30), default="rules_based")  # rules_based / signal_replay
+    status = Column(String(20), default="pending")  # pending / running / completed / failed
+    error_message = Column(Text)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class BacktestResultRecord(Base):
+    """Results from a completed backtest run."""
+    __tablename__ = "backtest_results"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    backtest_run_id = Column(String, nullable=False)
+    equity_curve = Column(JSON, default=list)
+    drawdown_series = Column(JSON, default=list)
+    sharpe_ratio = Column(Float)
+    sortino_ratio = Column(Float)
+    calmar_ratio = Column(Float)
+    max_drawdown_pct = Column(Float)
+    max_drawdown_duration_days = Column(Integer)
+    total_return_pct = Column(Float)
+    annualized_return_pct = Column(Float)
+    win_rate = Column(Float)
+    profit_factor = Column(Float)
+    total_trades = Column(Integer)
+    avg_trade_pnl_pct = Column(Float)
+    avg_holding_days = Column(Float)
+    trades = Column(JSON, default=list)
+    benchmark_return_pct = Column(Float)
+    benchmark_sharpe = Column(Float)
+    factor_exposures = Column(JSON)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class PortfolioSnapshotRecord(Base):
+    """Point-in-time portfolio state for equity curve tracking."""
+    __tablename__ = "portfolio_snapshots"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    snapshot_date = Column(Date, nullable=False, unique=True)
+    total_value = Column(Float)
+    cash = Column(Float)
+    positions_value = Column(Float)
+    daily_pnl = Column(Float)
+    daily_pnl_pct = Column(Float)
+    cumulative_pnl = Column(Float)
+    cumulative_pnl_pct = Column(Float)
+    positions_json = Column(JSON, default=list)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class FactorExposureRecord(Base):
+    """Rolling factor loadings computed from portfolio returns."""
+    __tablename__ = "factor_exposures"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    computation_date = Column(Date, nullable=False)
+    market_beta = Column(Float)
+    smb_beta = Column(Float)  # Size
+    hml_beta = Column(Float)  # Value
+    rmw_beta = Column(Float)  # Profitability
+    cma_beta = Column(Float)  # Investment
+    mom_beta = Column(Float)  # Momentum
+    alpha = Column(Float)
+    alpha_tstat = Column(Float)
+    r_squared = Column(Float)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class RegimeRecord(Base):
+    """HMM-detected macro regime states."""
+    __tablename__ = "regime_states"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    detection_date = Column(Date, nullable=False)
+    current_regime = Column(String(30))
+    expansion_prob = Column(Float)
+    late_cycle_prob = Column(Float)
+    contraction_prob = Column(Float)
+    recovery_prob = Column(Float)
+    confidence = Column(Float)
+    created_at = Column(DateTime, server_default=func.now())
+
+
+# ============================================================
+# EXISTING MODELS (unchanged)
+# ============================================================
 
 
 class IntelligenceMemoRecord(Base):

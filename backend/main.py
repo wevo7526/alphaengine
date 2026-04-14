@@ -317,9 +317,264 @@ _market_client_for_enrich = _MC()
 
 @app.get("/api/quant/macro-series")
 async def macro_time_series():
-    """Get macro time series for chart rendering (yield curve, VIX, credit spreads, fed funds)."""
+    """Get macro time series for chart rendering."""
     from quant.computations import get_macro_time_series
     return get_macro_time_series()
+
+
+# === RISK MANAGEMENT ===
+
+@app.get("/api/quant/portfolio-risk")
+async def portfolio_risk_analysis():
+    """Full portfolio risk dashboard: VaR, CVaR, sector exposure, circuit breaker."""
+    from quant.risk import compute_ewma_covariance, compute_portfolio_var, compute_portfolio_cvar, check_sector_limits, drawdown_circuit_breaker
+    from quant.computations import compute_drawdown
+
+    # Get open trades as positions
+    trades = await list_trades_internal("open")
+    if not trades:
+        return {"error": "No open positions", "var_95": None, "cvar_95": None}
+
+    tickers = [t["ticker"] for t in trades]
+    weights = {t["ticker"]: t.get("position_size_pct", 5) / 100 for t in trades}
+
+    # Fetch returns
+    returns_dict = {}
+    sectors = {}
+    for ticker in tickers:
+        try:
+            history = _market_client_for_enrich.get_price_history(ticker, period="3mo")
+            if history and len(history) > 20:
+                closes = [b["close"] for b in history]
+                rets = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+                returns_dict[ticker] = rets
+            fundamentals = _market_client_for_enrich.get_fundamentals(ticker)
+            sectors[ticker] = {"sector": fundamentals.get("sector", "Unknown"), "weight": weights.get(ticker, 0)}
+        except Exception:
+            pass
+
+    if len(returns_dict) < 1:
+        return {"error": "Could not fetch price data"}
+
+    # Compute
+    cov = compute_ewma_covariance(returns_dict)
+    var_result = compute_portfolio_var(weights, cov, portfolio_value=100000)
+
+    # Portfolio returns for CVaR
+    port_returns = []
+    min_len = min(len(r) for r in returns_dict.values()) if returns_dict else 0
+    for i in range(min_len):
+        daily = sum(weights.get(t, 0) * returns_dict[t][i] for t in returns_dict)
+        port_returns.append(daily)
+    cvar_result = compute_portfolio_cvar(port_returns)
+
+    # Sector check
+    sector_result = check_sector_limits(sectors)
+
+    # Drawdown
+    dd = compute_drawdown("SPY", "3mo")  # Use SPY as portfolio proxy for now
+    circuit = drawdown_circuit_breaker(abs(dd.get("current_drawdown", 0)))
+
+    return {
+        **var_result,
+        **cvar_result,
+        "sector_exposure": sector_result,
+        "circuit_breaker": circuit,
+        "correlation_matrix": cov,
+        "positions_count": len(tickers),
+    }
+
+
+# Helper for internal use
+async def list_trades_internal(status: str = "open") -> list[dict]:
+    from db.models import TradeRecord
+    async with async_session() as session:
+        query = select(TradeRecord).order_by(desc(TradeRecord.opened_at))
+        if status != "all":
+            query = query.where(TradeRecord.status == status)
+        result = await session.execute(query.limit(50))
+        return [
+            {c.name: getattr(r, c.name) for c in r.__table__.columns}
+            for r in result.scalars().all()
+        ]
+
+
+# === REGIME DETECTION ===
+
+@app.get("/api/quant/regime")
+async def regime_detection():
+    """Current macro regime from HMM + rule-based fallback."""
+    from quant.regime import classify_regime, fit_regime_model
+    snapshot = fred_client.get_macro_snapshot()
+
+    vix = snapshot.get("vix", {}).get("value", 20)
+    credit = snapshot.get("credit_spreads", {}).get("value", 3)
+    yc = snapshot.get("yield_curve_spread", {}).get("value", 0.5)
+
+    # Try to fit model from FRED history
+    try:
+        vix_hist = fred_client.get_series_history("VIXCLS", 500)
+        credit_hist = fred_client.get_series_history("BAMLH0A0HYM2", 500)
+        yc_hist = fred_client.get_series_history("T10Y2Y", 500)
+
+        if vix_hist and credit_hist and yc_hist:
+            min_len = min(len(vix_hist), len(credit_hist), len(yc_hist))
+            macro_hist = [
+                {"date": vix_hist[i]["date"], "vix": vix_hist[i]["value"],
+                 "credit_spread": credit_hist[i]["value"], "yield_curve": yc_hist[i]["value"]}
+                for i in range(min_len)
+            ]
+            fit_regime_model(macro_hist)
+    except Exception:
+        pass
+
+    return classify_regime(vix, credit, yc)
+
+
+# === BACKTESTING ===
+
+@app.post("/api/backtest/run")
+async def run_backtest(request: dict):
+    """Run a rules-based backtest."""
+    from quant.backtester import run_rules_based_backtest, BacktestConfig
+    from db.repositories import BacktestRepository
+
+    tickers = request.get("tickers", ["AAPL", "MSFT", "GOOGL"])
+    period = request.get("period", "1y")
+    initial_capital = request.get("initial_capital", 100000)
+
+    # Save run
+    run_id = await BacktestRepository.save_run({
+        "name": f"Backtest: {', '.join(tickers[:3])}",
+        "tickers": tickers,
+        "initial_capital": initial_capital,
+        "mode": "rules_based",
+        "status": "running",
+    })
+
+    try:
+        config = BacktestConfig(initial_capital=initial_capital)
+        results = run_rules_based_backtest(tickers, period=period, config=config)
+
+        if "error" in results:
+            await BacktestRepository.update_run_status(run_id, "failed", results["error"])
+            return {"run_id": run_id, "error": results["error"]}
+
+        # Save results
+        await BacktestRepository.save_results({
+            "backtest_run_id": run_id,
+            "equity_curve": results.get("equity_curve", []),
+            "drawdown_series": results.get("drawdown_series", []),
+            "sharpe_ratio": results.get("sharpe_ratio"),
+            "sortino_ratio": results.get("sortino_ratio"),
+            "max_drawdown_pct": results.get("max_drawdown_pct"),
+            "total_return_pct": results.get("total_return_pct"),
+            "annualized_return_pct": results.get("annualized_return_pct"),
+            "win_rate": results.get("win_rate"),
+            "profit_factor": results.get("profit_factor"),
+            "total_trades": results.get("total_trades"),
+            "trades": results.get("trades", []),
+            "benchmark_return_pct": results.get("benchmark_return_pct"),
+            "benchmark_sharpe": results.get("benchmark_sharpe"),
+        })
+
+        await BacktestRepository.update_run_status(run_id, "completed")
+        return {"run_id": run_id, "status": "completed", "results": results}
+    except Exception as e:
+        await BacktestRepository.update_run_status(run_id, "failed", str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/backtest/runs")
+async def list_backtest_runs():
+    """List all backtest runs."""
+    from db.repositories import BacktestRepository
+    runs = await BacktestRepository.get_runs()
+    return {"runs": runs}
+
+
+@app.get("/api/backtest/results/{run_id}")
+async def get_backtest_results(run_id: str):
+    """Get results for a specific backtest run."""
+    from db.repositories import BacktestRepository
+    results = await BacktestRepository.get_results(run_id)
+    if not results:
+        raise HTTPException(status_code=404, detail="Backtest not found")
+    return results
+
+
+# === FACTOR ANALYSIS ===
+
+@app.get("/api/quant/factors")
+async def factor_analysis(tickers: str = "SPY"):
+    """Factor loadings and attribution for given tickers."""
+    from quant.factors import compute_factor_loadings
+    ticker_list = [t.strip().upper() for t in tickers.split(",")]
+
+    # Get portfolio and benchmark returns
+    port_returns = []
+    for t in ticker_list[:5]:
+        try:
+            history = _market_client_for_enrich.get_price_history(t, period="6mo")
+            if history:
+                closes = [b["close"] for b in history]
+                rets = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+                port_returns.extend(rets[-60:])  # Last 60 days
+        except Exception:
+            pass
+
+    # Benchmark
+    try:
+        spy = _market_client_for_enrich.get_price_history("SPY", period="6mo")
+        spy_closes = [b["close"] for b in spy]
+        benchmark = [(spy_closes[i] - spy_closes[i-1]) / spy_closes[i-1] for i in range(1, len(spy_closes))]
+    except Exception:
+        benchmark = []
+
+    if not port_returns or not benchmark:
+        return {"error": "Insufficient data for factor analysis"}
+
+    loadings = compute_factor_loadings(port_returns, benchmark)
+    return {"tickers": ticker_list, **loadings}
+
+
+# === PORTFOLIO OPTIMIZATION ===
+
+@app.post("/api/portfolio/optimize")
+async def optimize_portfolio(request: dict):
+    """Run Black-Litterman or mean-variance optimization."""
+    from quant.optimizer import black_litterman, mean_variance_optimize, signals_to_views
+    from quant.risk import compute_ewma_covariance
+
+    tickers = request.get("tickers", [])
+    method = request.get("method", "black_litterman")
+    trade_ideas = request.get("trade_ideas", [])
+
+    if not tickers:
+        return {"error": "No tickers provided"}
+
+    # Get returns for covariance
+    returns_dict = {}
+    for t in tickers[:10]:
+        try:
+            history = _market_client_for_enrich.get_price_history(t, period="3mo")
+            if history and len(history) > 20:
+                closes = [b["close"] for b in history]
+                rets = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+                returns_dict[t] = rets
+        except Exception:
+            pass
+
+    cov = compute_ewma_covariance(returns_dict)
+
+    if method == "black_litterman" and trade_ideas:
+        views, confidences = signals_to_views(trade_ideas)
+        result = black_litterman(tickers, cov, views, confidences)
+    else:
+        expected_returns = {t: 0.10 for t in tickers}  # Default 10% expected
+        result = mean_variance_optimize(expected_returns, cov)
+
+    return result
 
 
 # === MORNING REPORT ===

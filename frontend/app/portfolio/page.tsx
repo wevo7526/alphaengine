@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { DIRECTION_STYLE } from "@/lib/types";
+import type { IntelligenceMemo } from "@/lib/types";
 import { ConvictionBar } from "@/components/ConvictionBar";
+import { MemoPanel } from "@/components/MemoPanel";
 
 const API_BASE = (() => {
   if (process.env.NEXT_PUBLIC_BACKEND_URL) return process.env.NEXT_PUBLIC_BACKEND_URL;
@@ -55,17 +57,23 @@ interface BacktestSummary {
 
 export default function PortfolioPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [memos, setMemos] = useState<IntelligenceMemo[]>([]);
   const [backtestResults, setBacktestResults] = useState<BacktestResult[]>([]);
   const [backtestSummary, setBacktestSummary] = useState<BacktestSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [backtesting, setBacktesting] = useState(false);
-  const [tab, setTab] = useState<"journal" | "backtest">("journal");
+  const [expandedMemo, setExpandedMemo] = useState<number | null>(null);
+  const [tab, setTab] = useState<"journal" | "analyses" | "backtest">("journal");
 
   useEffect(() => {
-    api.listTrades("all").then((d: unknown) => {
-      setTrades((d as { trades: Trade[] }).trades);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    Promise.all([
+      api.listTrades("all").then((d: unknown) => {
+        setTrades((d as { trades: Trade[] }).trades);
+      }).catch(() => {}),
+      api.latestMemos(20).then((d: unknown) => {
+        setMemos((d as { memos: IntelligenceMemo[] }).memos || []);
+      }).catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, []);
 
   const runBacktest = () => {
@@ -108,6 +116,7 @@ export default function PortfolioPage() {
       <div className="flex gap-2 mb-6">
         {[
           { key: "journal" as const, label: "Trade Journal" },
+          { key: "analyses" as const, label: "Analyses" },
           { key: "backtest" as const, label: "Backtest" },
         ].map((t) => (
           <button
@@ -157,6 +166,59 @@ export default function PortfolioPage() {
                   </div>
                 </div>
               )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Analyses Tab */}
+      {tab === "analyses" && (
+        <>
+          {memos.length === 0 ? (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
+              <p className="text-sm text-text-tertiary">No analyses yet. Go to Analysis to run your first query.</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {memos.map((memo, i) => (
+                <div key={i}>
+                  <div
+                    onClick={() => setExpandedMemo(expandedMemo === i ? null : i)}
+                    className="rounded-xl border border-border-primary bg-bg-surface p-4 hover:border-zinc-600 transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[13px] font-medium text-text-primary">{memo.title || memo.query}</span>
+                      <div className="flex items-center gap-2">
+                        {memo.trade_ideas && memo.trade_ideas.length > 0 && (
+                          <div className="flex gap-1">
+                            {memo.trade_ideas.slice(0, 5).map((ti, j) => (
+                              <span key={j} className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                                ti.direction?.includes("bullish") ? "text-signal-green bg-signal-green/10" :
+                                ti.direction?.includes("bearish") ? "text-signal-red bg-signal-red/10" :
+                                "text-text-quaternary bg-bg-elevated"
+                              }`}>
+                                {ti.ticker}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <span className="text-[10px] text-text-quaternary">
+                          {memo.created_at ? new Date(memo.created_at).toLocaleDateString() : ""}
+                        </span>
+                        <span className="text-text-quaternary text-xs">{expandedMemo === i ? "−" : "+"}</span>
+                      </div>
+                    </div>
+                    {expandedMemo !== i && (
+                      <p className="text-xs text-text-tertiary line-clamp-2">{memo.executive_summary}</p>
+                    )}
+                  </div>
+                  {expandedMemo === i && (
+                    <div className="mt-2">
+                      <MemoPanel memo={memo} />
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </>

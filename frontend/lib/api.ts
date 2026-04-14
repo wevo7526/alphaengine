@@ -67,6 +67,22 @@ export const api = {
   listTrades: (status = "all") =>
     request(`/api/portfolio/trades?status=${status}`),
 
+  // Quant infrastructure
+  portfolioRisk: () => request("/api/quant/portfolio-risk"),
+  regime: () => request("/api/quant/regime"),
+  factors: (tickers: string[]) =>
+    request(`/api/quant/factors?tickers=${tickers.join(",")}`),
+
+  // Backtesting
+  runBacktest: (config: { tickers: string[]; period?: string; initial_capital?: number }) =>
+    request("/api/backtest/run", { method: "POST", body: JSON.stringify(config) }),
+  backtestRuns: () => request("/api/backtest/runs"),
+  backtestResults: (runId: string) => request(`/api/backtest/results/${runId}`),
+
+  // Portfolio optimization
+  optimize: (config: { tickers: string[]; method?: string; trade_ideas?: unknown[] }) =>
+    request("/api/portfolio/optimize", { method: "POST", body: JSON.stringify(config) }),
+
   agentStatus: () => request("/api/agents/status"),
   latestMemos: (limit = 20) => request(`/api/signals/latest?limit=${limit}`),
 };

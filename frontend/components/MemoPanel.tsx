@@ -233,17 +233,17 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
               <span className="text-text-primary font-medium">{memo.portfolio_positioning}</span>
             </div>
           )}
-          {memo.tickers_analyzed.length > 0 && (
+          {memo.tickers_analyzed?.length > 0 && (
             <div className="flex items-center gap-1.5">
               <span className="text-text-quaternary">Tickers</span>
-              <span className="font-mono text-text-primary">{memo.tickers_analyzed.join(", ")}</span>
+              <span className="font-mono text-text-primary">{memo.tickers_analyzed?.join(", ")}</span>
             </div>
           )}
         </div>
       </div>
 
       {/* Key Findings */}
-      {memo.key_findings.length > 0 && (
+      {memo.key_findings?.length > 0 && (
         <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
           <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
             Key Findings
@@ -264,7 +264,7 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
       )}
 
       {/* Trade Ideas */}
-      {memo.trade_ideas.length > 0 && (
+      {memo.trade_ideas?.length > 0 && (
         <div className="mb-4">
           <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3 px-1">
             Trade Ideas — ranked by conviction
@@ -279,7 +279,7 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
 
       {/* Risk + Hedging side by side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {memo.risk_factors.length > 0 && (
+        {memo.risk_factors?.length > 0 && (
           <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
             <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
               Risk Factors
@@ -288,7 +288,7 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
           </div>
         )}
 
-        {memo.hedging_recommendations.length > 0 && (
+        {memo.hedging_recommendations?.length > 0 && (
           <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
             <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
               Hedging Recommendations

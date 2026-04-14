@@ -119,43 +119,43 @@ export function TickerAnalyticsPanel({
       <div className="grid grid-cols-2 gap-x-6 mb-3">
         <StatRow
           label="Ann. Volatility"
-          value={`${vol.realized_vol_annualized}%`}
-          color={vol.realized_vol_annualized > 40 ? "text-signal-red" : "text-text-primary"}
+          value={vol.realized_vol_annualized != null ? `${vol.realized_vol_annualized}%` : "—"}
+          color={vol.realized_vol_annualized != null && vol.realized_vol_annualized > 40 ? "text-signal-red" : "text-text-primary"}
         />
         <StatRow
           label="Ann. Return"
-          value={`${vol.annualized_return > 0 ? "+" : ""}${vol.annualized_return}%`}
-          color={vol.annualized_return >= 0 ? "text-signal-green" : "text-signal-red"}
+          value={vol.annualized_return != null ? `${vol.annualized_return > 0 ? "+" : ""}${vol.annualized_return}%` : "—"}
+          color={vol.annualized_return != null && vol.annualized_return >= 0 ? "text-signal-green" : "text-signal-red"}
         />
-        <StatRow label="Sharpe" value={vol.sharpe_ratio.toFixed(2)} />
+        <StatRow label="Sharpe" value={vol.sharpe_ratio != null ? vol.sharpe_ratio.toFixed(2) : "—"} />
         <StatRow
           label="VaR (95%)"
-          value={`${vol.var_95_daily}%`}
+          value={vol.var_95_daily != null ? `${vol.var_95_daily}%` : "—"}
           color="text-signal-red"
         />
-        <StatRow label="Skew" value={vol.skewness.toFixed(2)} />
+        <StatRow label="Skew" value={vol.skewness != null ? vol.skewness.toFixed(2) : "—"} />
         <StatRow
           label="Max Drawdown"
-          value={`${dd.max_drawdown}%`}
+          value={dd.max_drawdown != null ? `${dd.max_drawdown}%` : "—"}
           color="text-signal-red"
         />
         {analytics.sentiment && (
           <>
             <StatRow
               label="Sentiment"
-              value={`${analytics.sentiment.compound > 0 ? "+" : ""}${analytics.sentiment.compound.toFixed(2)}`}
+              value={analytics.sentiment.compound != null ? `${analytics.sentiment.compound > 0 ? "+" : ""}${analytics.sentiment.compound.toFixed(2)}` : "—"}
               color={analytics.sentiment.label === "positive" ? "text-signal-green" : analytics.sentiment.label === "negative" ? "text-signal-red" : "text-text-tertiary"}
             />
             <StatRow
               label="News Split"
-              value={`${analytics.sentiment.bullish_pct}% bull / ${analytics.sentiment.bearish_pct}% bear`}
+              value={analytics.sentiment.bullish_pct != null ? `${analytics.sentiment.bullish_pct}% bull / ${analytics.sentiment.bearish_pct}% bear` : "—"}
             />
           </>
         )}
       </div>
 
       {/* Drawdown chart */}
-      {dd.series.length > 0 && (
+      {dd.series?.length > 0 && (
         <div>
           <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">
             Drawdown from Peak

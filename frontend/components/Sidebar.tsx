@@ -4,10 +4,38 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { IconHome, IconGlobe, IconBriefcase, IconSettings } from "./icons";
 
+// Reuse IconGlobe for Analysis, add simple SVG for new pages
+function IconChart(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M2 12L6 8L9 10L14 4" />
+      <path d="M14 4V7M14 4H11" />
+    </svg>
+  );
+}
+
+function IconShield(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M8 2L3 4.5V8C3 11 5 13.5 8 14.5C11 13.5 13 11 13 8V4.5L8 2Z" />
+    </svg>
+  );
+}
+
+function IconRewind(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M8 3L3 8L8 13" />
+      <path d="M13 3L8 8L13 13" />
+    </svg>
+  );
+}
+
 const NAV = [
   { href: "/", label: "Home", icon: IconHome },
-  { href: "/analysis", label: "Analysis", icon: IconGlobe },
+  { href: "/analysis", label: "Analysis", icon: IconChart },
   { href: "/portfolio", label: "Portfolio", icon: IconBriefcase },
+  { href: "/risk", label: "Risk", icon: IconShield },
 ];
 
 const BOTTOM = [{ href: "/settings", label: "Settings", icon: IconSettings }];

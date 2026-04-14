@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { MacroChart } from "@/components/MacroChart";
+import { MemoPanel } from "@/components/MemoPanel";
 import type { MacroIndicator, IntelligenceMemo } from "@/lib/types";
 
 interface MacroSeries {
@@ -50,6 +51,7 @@ export default function HomePage() {
   const [macroError, setMacroError] = useState<string | null>(null);
   const [morningReport, setMorningReport] = useState<MorningReport | null>(null);
   const [recentMemos, setRecentMemos] = useState<IntelligenceMemo[]>([]);
+  const [expandedMemo, setExpandedMemo] = useState<number | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
 
   useEffect(() => {
@@ -220,30 +222,48 @@ export default function HomePage() {
       {/* Recent Analyses */}
       {recentMemos.length > 0 && (
         <div>
-          <h2 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-            Recent Analyses
-          </h2>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider">
+              Recent Analyses
+            </h2>
+            <Link href="/portfolio" className="text-[11px] text-accent hover:underline">
+              View all in Portfolio
+            </Link>
+          </div>
           <div className="space-y-2">
             {recentMemos.map((memo, i) => (
-              <div key={i} className="rounded-xl border border-border-primary bg-bg-surface p-4">
-                <div className="flex items-center justify-between mb-1">
-                  <span className="text-[13px] font-medium text-text-primary">
-                    {memo.title || memo.query}
-                  </span>
-                  <span className="text-[10px] text-text-quaternary">
-                    {memo.created_at ? new Date(memo.created_at).toLocaleDateString() : ""}
-                  </span>
-                </div>
-                <p className="text-xs text-text-tertiary line-clamp-2">
-                  {memo.executive_summary}
-                </p>
-                {memo.trade_ideas && memo.trade_ideas.length > 0 && (
-                  <div className="flex gap-2 mt-2">
-                    {memo.trade_ideas.slice(0, 4).map((ti, j) => (
-                      <span key={j} className="text-[10px] font-mono text-text-quaternary bg-bg-elevated px-1.5 py-0.5 rounded">
-                        {ti.ticker}
+              <div key={i}>
+                <div
+                  onClick={() => setExpandedMemo(expandedMemo === i ? null : i)}
+                  className="rounded-xl border border-border-primary bg-bg-surface p-4 hover:border-zinc-600 transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-[13px] font-medium text-text-primary">
+                      {memo.title || memo.query}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {memo.trade_ideas && memo.trade_ideas.length > 0 && (
+                        <div className="flex gap-1">
+                          {memo.trade_ideas.slice(0, 4).map((ti, j) => (
+                            <span key={j} className="text-[10px] font-mono text-text-quaternary bg-bg-elevated px-1.5 py-0.5 rounded">
+                              {ti.ticker}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <span className="text-[10px] text-text-quaternary">
+                        {memo.created_at ? new Date(memo.created_at).toLocaleDateString() : ""}
                       </span>
-                    ))}
+                      <span className="text-text-quaternary text-xs">{expandedMemo === i ? "−" : "+"}</span>
+                    </div>
+                  </div>
+                  {expandedMemo !== i && (
+                    <p className="text-xs text-text-tertiary line-clamp-2">{memo.executive_summary}</p>
+                  )}
+                </div>
+                {expandedMemo === i && (
+                  <div className="mt-2">
+                    <MemoPanel memo={memo} />
                   </div>
                 )}
               </div>
