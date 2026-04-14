@@ -21,26 +21,38 @@ export const metadata: Metadata = {
   description: "AI-Powered Quantitative Trading Intelligence",
 };
 
+const clerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
+function AppShell({ children }: { children: React.ReactNode }) {
+  return (
+    <html
+      lang="en"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+    >
+      <body className="h-full flex">
+        <Providers>
+          <Sidebar />
+          <main className="flex-1 ml-52 flex flex-col min-h-screen">
+            {children}
+          </main>
+        </Providers>
+      </body>
+    </html>
+  );
+}
+
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  return (
-    <ClerkProvider appearance={{ baseTheme: dark }}>
-      <html
-        lang="en"
-        className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-      >
-        <body className="h-full flex">
-          <Providers>
-            <Sidebar />
-            <main className="flex-1 ml-52 flex flex-col min-h-screen">
-              {children}
-            </main>
-          </Providers>
-        </body>
-      </html>
-    </ClerkProvider>
-  );
+  if (clerkConfigured) {
+    return (
+      <ClerkProvider appearance={{ baseTheme: dark }}>
+        <AppShell>{children}</AppShell>
+      </ClerkProvider>
+    );
+  }
+
+  return <AppShell>{children}</AppShell>;
 }
