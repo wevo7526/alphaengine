@@ -30,10 +30,28 @@ export default function RootLayout({
       appearance={{
         variables: {
           colorPrimary: "#3b82f6",
-          colorBackground: "#09090b",
+          colorBackground: "#18181b",
           colorText: "#fafafa",
-          colorInputBackground: "#18181b",
+          colorTextSecondary: "#a1a1aa",
+          colorInputBackground: "#09090b",
           colorInputText: "#fafafa",
+          colorNeutral: "#fafafa",
+          borderRadius: "0.75rem",
+        },
+        elements: {
+          card: "bg-[#18181b] border border-[#27272a] shadow-2xl",
+          headerTitle: "text-[#fafafa]",
+          headerSubtitle: "text-[#a1a1aa]",
+          formButtonPrimary: "bg-[#3b82f6] hover:bg-[#2563eb] text-white",
+          footerActionLink: "text-[#3b82f6] hover:text-[#60a5fa]",
+          identityPreview: "bg-[#09090b] border-[#27272a]",
+          formFieldInput: "bg-[#09090b] border-[#27272a] text-[#fafafa]",
+          formFieldLabel: "text-[#a1a1aa]",
+          dividerLine: "bg-[#27272a]",
+          dividerText: "text-[#71717a]",
+          socialButtonsBlockButton: "bg-[#09090b] border-[#27272a] text-[#fafafa] hover:bg-[#27272a]",
+          socialButtonsBlockButtonText: "text-[#fafafa]",
+          otpCodeFieldInput: "bg-[#09090b] border-[#27272a] text-[#fafafa]",
         },
       }}
     >
