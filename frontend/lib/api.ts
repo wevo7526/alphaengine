@@ -67,6 +67,12 @@ export const api = {
   listTrades: (status = "all") =>
     request(`/api/portfolio/trades?status=${status}`),
 
+  closeTrade: (tradeId: string, exitPrice: number, notes = "") =>
+    request(`/api/portfolio/trade/${tradeId}/close`, {
+      method: "POST",
+      body: JSON.stringify({ exit_price: exitPrice, notes }),
+    }),
+
   // Quant infrastructure
   portfolioRisk: () => request("/api/quant/portfolio-risk"),
   regime: () => request("/api/quant/regime"),

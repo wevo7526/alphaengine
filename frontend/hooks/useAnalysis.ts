@@ -53,7 +53,6 @@ export function useAnalysis() {
       setActiveRun(id);
 
       try {
-        // Use SSE streaming endpoint
         const streamUrl = api.analyzeStreamUrl();
         const response = await fetch(streamUrl, {
           method: "POST",
@@ -82,39 +81,28 @@ export function useAnalysis() {
             try {
               const event = JSON.parse(line.slice(6));
 
-              // Map SSE phase events to UI phases
+              // Phase starts — show agent as active
               if (event.phase === "interpreting") {
-                updateRun(id, { phase: "interpreting" });
+                updateRun(id, { phase: "interpreting", phaseDetail: undefined });
               } else if (event.phase === "interpreting_done") {
-                updateRun(id, {
-                  phase: "interpreting",
-                  phaseDetail: `${event.tickers?.length || 0} tickers identified`,
-                });
+                // Advance to next phase — researching will start
+                updateRun(id, { phase: "researching", phaseDetail: `${event.tickers?.length || 0} tickers → researching` });
               } else if (event.phase === "researching") {
-                updateRun(id, { phase: "researching" });
+                updateRun(id, { phase: "researching", phaseDetail: undefined });
               } else if (event.phase === "researching_done") {
-                updateRun(id, { phase: "researching", phaseDetail: "data gathered" });
+                updateRun(id, { phase: "risk_assessment", phaseDetail: "data gathered → assessing risk" });
               } else if (event.phase === "risk_assessment") {
-                updateRun(id, { phase: "risk_assessment" });
+                updateRun(id, { phase: "risk_assessment", phaseDetail: undefined });
               } else if (event.phase === "risk_assessment_done") {
-                updateRun(id, {
-                  phase: "risk_assessment",
-                  phaseDetail: event.macro_regime || "",
-                });
+                updateRun(id, { phase: "strategizing", phaseDetail: `${event.macro_regime || "regime classified"} → building trades` });
               } else if (event.phase === "strategizing") {
-                updateRun(id, { phase: "strategizing" });
+                updateRun(id, { phase: "strategizing", phaseDetail: undefined });
               } else if (event.phase === "strategizing_done") {
-                updateRun(id, {
-                  phase: "strategizing",
-                  phaseDetail: `${event.trade_count || 0} trade ideas`,
-                });
+                updateRun(id, { phase: "synthesizing", phaseDetail: `${event.trade_count || 0} ideas → writing memo` });
               } else if (event.phase === "synthesizing") {
-                updateRun(id, { phase: "synthesizing" });
+                updateRun(id, { phase: "synthesizing", phaseDetail: undefined });
               } else if (event.phase === "complete" && event.memo) {
-                updateRun(id, {
-                  phase: "complete",
-                  result: event.memo as IntelligenceMemo,
-                });
+                updateRun(id, { phase: "complete", result: event.memo as IntelligenceMemo, phaseDetail: undefined });
               } else if (event.phase === "error") {
                 updateRun(id, { phase: "error", error: event.error });
               }
@@ -123,9 +111,21 @@ export function useAnalysis() {
             }
           }
         }
-      } catch (err) {
-        // Fallback to non-streaming if SSE fails
+
+        // If stream ended without a "complete" event, check if we have a result
+        setRuns((prev) => {
+          const current = prev.find((r) => r.id === id);
+          if (current && current.phase !== "complete" && current.phase !== "error") {
+            return prev.map((r) =>
+              r.id === id ? { ...r, phase: "error" as AnalysisPhase, error: "Stream ended unexpectedly" } : r
+            );
+          }
+          return prev;
+        });
+      } catch {
+        // Fallback to non-streaming
         try {
+          updateRun(id, { phase: "researching", phaseDetail: "using fallback..." });
           const result = (await api.analyze(query)) as IntelligenceMemo;
           updateRun(id, { phase: "complete", result });
         } catch (fallbackErr) {

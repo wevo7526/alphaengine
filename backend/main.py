@@ -682,6 +682,50 @@ async def take_trade(req: TakeTradeRequest):
         return {"id": record.id, "status": "open", "ticker": req.ticker}
 
 
+class CloseTradeRequest(BaseModel):
+    exit_price: float
+    notes: str = ""
+
+
+@app.post("/api/portfolio/trade/{trade_id}/close")
+async def close_trade(trade_id: str, req: CloseTradeRequest):
+    """Close an open trade with exit price. Computes realized P&L."""
+    from db.models import TradeRecord
+    from sqlalchemy import update as sql_update
+    async with async_session() as session:
+        result = await session.execute(
+            select(TradeRecord).where(TradeRecord.id == trade_id)
+        )
+        trade = result.scalar_one_or_none()
+        if not trade:
+            raise HTTPException(status_code=404, detail="Trade not found")
+        if trade.status != "open":
+            raise HTTPException(status_code=400, detail="Trade already closed")
+
+        # Compute P&L
+        entry = trade.entry_price or 0
+        is_long = "bullish" in (trade.direction or "")
+        if is_long:
+            pnl_pct = ((req.exit_price - entry) / entry * 100) if entry > 0 else 0
+        else:
+            pnl_pct = ((entry - req.exit_price) / entry * 100) if entry > 0 else 0
+
+        from datetime import datetime
+        await session.execute(
+            sql_update(TradeRecord)
+            .where(TradeRecord.id == trade_id)
+            .values(
+                status="closed",
+                exit_price=req.exit_price,
+                realized_pnl=round(pnl_pct, 2),
+                closed_at=datetime.utcnow(),
+                md_notes=(trade.md_notes or "") + f"\nClosed: {req.notes}" if req.notes else trade.md_notes,
+            )
+        )
+        await session.commit()
+        return {"id": trade_id, "status": "closed", "realized_pnl_pct": round(pnl_pct, 2)}
+
+
 @app.get("/api/portfolio/trades")
 async def list_trades(status: str = "all"):
     """Get trade journal — open, closed, or all."""

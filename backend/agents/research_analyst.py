@@ -167,6 +167,17 @@ def get_options_analysis(ticker: str) -> dict:
     }
 
 
+# === Web Research (Firecrawl) ===
+
+@tool
+def search_web(query: str) -> list:
+    """Search the web for real-time information to validate or supplement data.
+    Use for: earnings results, breaking news, analyst reports, company announcements.
+    Returns top 3 results with title, URL, and content excerpt. CONSERVE: use sparingly."""
+    from data.firecrawl_client import search_web as _search
+    return _search(query, limit=3)
+
+
 # === Technical Tools ===
 
 @tool
@@ -263,6 +274,7 @@ class ResearchAnalyst(BaseAgent):
             search_filings_fulltext,
             score_news_sentiment,
             get_options_analysis,
+            search_web,
             get_rsi,
             get_macd,
         ]

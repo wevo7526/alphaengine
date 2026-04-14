@@ -78,6 +78,15 @@ export default function HomePage() {
       if (!cancelled) setRecentMemos((d as { memos: IntelligenceMemo[] }).memos || []);
     }).catch(() => {});
 
+    // Auto-load morning report
+    setReportLoading(true);
+    api.morningReport().then((d: unknown) => {
+      if (!cancelled) {
+        setMorningReport(d as MorningReport);
+        setReportLoading(false);
+      }
+    }).catch(() => { if (!cancelled) setReportLoading(false); });
+
     return () => { cancelled = true; };
   }, []);
 
@@ -147,6 +156,14 @@ export default function HomePage() {
               </ul>
             )}
           </div>
+        ) : reportLoading ? (
+          <div className="flex items-center gap-3">
+            <div className="w-3 h-3 rounded-full border-[1.5px] border-accent border-t-transparent" style={{ animation: "spin-slow 0.8s linear infinite" }} />
+            <div>
+              <h2 className="text-[13px] font-medium text-text-primary mb-0.5">Morning Briefing</h2>
+              <p className="text-xs text-text-tertiary">Generating pre-market intelligence...</p>
+            </div>
+          </div>
         ) : (
           <div className="flex items-center justify-between">
             <div>
@@ -155,10 +172,9 @@ export default function HomePage() {
             </div>
             <button
               onClick={loadMorningReport}
-              disabled={reportLoading}
-              className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
+              className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors"
             >
-              {reportLoading ? "Generating..." : "Generate Report"}
+              Generate Report
             </button>
           </div>
         )}

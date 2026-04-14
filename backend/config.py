@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     NEWS_API_KEY: str = ""
     FINNHUB_API_KEY: str = ""
     ALPHA_VANTAGE_KEY: str = ""
+    FIRECRAWL_API_KEY: str = ""
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/alphaengine"

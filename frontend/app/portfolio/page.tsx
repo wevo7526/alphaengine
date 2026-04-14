@@ -157,7 +157,10 @@ export default function PortfolioPage() {
                     Open Positions ({openTrades.length})
                   </h2>
                   <div className="space-y-2">
-                    {openTrades.map((t) => <TradeRow key={t.id} trade={t} />)}
+                    {openTrades.map((t) => <TradeRow key={t.id} trade={t} onClose={() => {
+                      // Refresh trades after closing
+                      api.listTrades("all").then((d: unknown) => setTrades((d as { trades: Trade[] }).trades)).catch(() => {});
+                    }} />)}
                   </div>
                 </div>
               )}
@@ -372,8 +375,22 @@ export default function PortfolioPage() {
   );
 }
 
-function TradeRow({ trade }: { trade: Trade }) {
+function TradeRow({ trade, onClose }: { trade: Trade; onClose?: (id: string) => void }) {
+  const [closing, setClosing] = useState(false);
+  const [exitPrice, setExitPrice] = useState("");
+  const [showClose, setShowClose] = useState(false);
   const dir = DIRECTION_STYLE[trade.direction as keyof typeof DIRECTION_STYLE] ?? DIRECTION_STYLE.neutral;
+
+  const handleClose = async () => {
+    if (!exitPrice) return;
+    setClosing(true);
+    try {
+      await api.closeTrade(trade.id, parseFloat(exitPrice));
+      onClose?.(trade.id);
+    } catch { /* ignore */ }
+    setClosing(false);
+  };
+
   return (
     <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
       <div className="flex items-center justify-between mb-2">
@@ -394,7 +411,45 @@ function TradeRow({ trade }: { trade: Trade }) {
         {trade.stop_loss && <span className="text-text-quaternary">Stop: <span className="font-mono text-signal-red">${trade.stop_loss}</span></span>}
         {trade.take_profit && <span className="text-text-quaternary">Target: <span className="font-mono text-signal-green">${trade.take_profit}</span></span>}
         <span className="text-text-quaternary">Size: <span className="font-mono text-text-primary">{trade.position_size_pct}%</span></span>
+        {trade.realized_pnl != null && (
+          <span className={`font-mono font-medium ${trade.realized_pnl >= 0 ? "text-signal-green" : "text-signal-red"}`}>
+            P&L: {trade.realized_pnl > 0 ? "+" : ""}{trade.realized_pnl}%
+          </span>
+        )}
       </div>
+
+      {/* Close trade */}
+      {trade.status === "open" && onClose && (
+        <div className="mt-3 pt-3 border-t border-border-primary">
+          {showClose ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                step="0.01"
+                value={exitPrice}
+                onChange={(e) => setExitPrice(e.target.value)}
+                placeholder="Exit price..."
+                className="bg-bg-primary border border-border-primary rounded-lg px-2 py-1 text-xs text-text-primary outline-none w-28"
+              />
+              <button
+                onClick={handleClose}
+                disabled={closing || !exitPrice}
+                className="px-2 py-1 rounded-lg bg-signal-red/10 text-signal-red text-[11px] font-medium hover:bg-signal-red/20 transition-colors disabled:opacity-40"
+              >
+                {closing ? "Closing..." : "Confirm Close"}
+              </button>
+              <button onClick={() => setShowClose(false)} className="text-[11px] text-text-quaternary hover:text-text-tertiary">Cancel</button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setShowClose(true)}
+              className="text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
+            >
+              Close Trade
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
