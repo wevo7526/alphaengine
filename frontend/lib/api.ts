@@ -1,20 +1,16 @@
 function getApiBase(): string {
-  // Check env var first (set at build time for Next.js)
   if (process.env.NEXT_PUBLIC_BACKEND_URL) {
     return process.env.NEXT_PUBLIC_BACKEND_URL;
   }
-  // In browser: if we're on Railway, use the production backend
   if (typeof window !== "undefined" && window.location.hostname.includes("railway.app")) {
     return "https://alpha-backend-production-51df.up.railway.app";
   }
-  // Local dev
   return "http://localhost:8000";
 }
 
-const API_BASE = getApiBase();
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const base = getApiBase(); // Evaluate on every call, not at module load
+  const res = await fetch(`${base}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
@@ -28,14 +24,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request("/api/health"),
 
-  // Research desk — freeform query
   analyze: (query: string) =>
     request("/api/analyze", {
       method: "POST",
       body: JSON.stringify({ query }),
     }),
 
-  // Data endpoints
+  analyzeStreamUrl: () => `${getApiBase()}/api/analyze/stream`,
+
+  macroDashboard: () => request("/api/data/macro"),
   macro: () => request("/api/data/macro/snapshot"),
   market: (ticker: string, period = "3mo") =>
     request(`/api/data/market/${ticker}?period=${period}`),
@@ -45,11 +42,31 @@ export const api = {
     request(`/api/data/filings/${ticker}?form_type=${formType}&limit=${limit}`),
   news: (ticker: string) => request(`/api/data/news/${ticker}`),
 
-  // Quant enrichment
   enrich: (tickers: string[], period = "3mo") =>
     request(`/api/quant/enrich?tickers=${tickers.join(",")}&period=${period}`),
 
-  // Agent status
+  morningReport: () => request("/api/morning-report"),
+
+  takeTrade: (trade: {
+    memo_id?: string;
+    ticker: string;
+    direction: string;
+    action?: string;
+    entry_price?: number;
+    stop_loss?: number;
+    take_profit?: number;
+    position_size_pct?: number;
+    conviction?: number;
+    thesis?: string;
+  }) =>
+    request("/api/portfolio/trade", {
+      method: "POST",
+      body: JSON.stringify(trade),
+    }),
+
+  listTrades: (status = "all") =>
+    request(`/api/portfolio/trades?status=${status}`),
+
   agentStatus: () => request("/api/agents/status"),
   latestMemos: (limit = 20) => request(`/api/signals/latest?limit=${limit}`),
 };

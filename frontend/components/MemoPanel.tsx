@@ -17,9 +17,32 @@ const ACTION_MAP: Record<string, { label: string; color: string }> = {
   neutral: { label: "NEUTRAL", color: "bg-bg-elevated text-text-tertiary border-border-primary" },
 };
 
-function TradeIdeaCard({ idea, rank }: { idea: TradeIdea; rank: number }) {
+function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; memoId?: string }) {
   const [open, setOpen] = useState(false);
+  const [taken, setTaken] = useState(false);
   const action = ACTION_MAP[idea.direction] ?? ACTION_MAP.neutral;
+
+  const handleTakeTrade = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (taken) return;
+    try {
+      await api.takeTrade({
+        memo_id: memoId,
+        ticker: idea.ticker,
+        direction: idea.direction,
+        action: idea.direction.includes("bullish") ? "BUY" : idea.direction.includes("bearish") ? "SHORT" : "HOLD",
+        entry_price: idea.stop_loss ? undefined : undefined, // entry_zone is a string
+        stop_loss: idea.stop_loss ?? undefined,
+        take_profit: idea.take_profit ?? undefined,
+        position_size_pct: idea.position_size_pct,
+        conviction: idea.conviction,
+        thesis: idea.thesis,
+      });
+      setTaken(true);
+    } catch {
+      // Silently fail — non-critical
+    }
+  };
 
   return (
     <div
@@ -96,6 +119,16 @@ function TradeIdeaCard({ idea, rank }: { idea: TradeIdea; rank: number }) {
               <span className="text-text-secondary">{idea.risks.join(" · ")}</span>
             </div>
           )}
+          <button
+            onClick={handleTakeTrade}
+            className={`mt-2 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+              taken
+                ? "bg-signal-green/10 text-signal-green border border-signal-green/20 cursor-default"
+                : "bg-white text-bg-primary hover:bg-zinc-200"
+            }`}
+          >
+            {taken ? "Trade Logged" : "Take Trade"}
+          </button>
         </div>
       )}
     </div>
@@ -238,7 +271,7 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
           </h3>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {memo.trade_ideas.map((idea, i) => (
-              <TradeIdeaCard key={i} idea={idea} rank={i + 1} />
+              <TradeIdeaCard key={i} idea={idea} rank={i + 1} memoId={(memo as unknown as Record<string, unknown>).id as string} />
             ))}
           </div>
         </div>

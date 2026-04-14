@@ -2,8 +2,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
+import json
+import asyncio
 import logging
 
 from config import settings
@@ -144,14 +147,30 @@ async def latest_signals(limit: int = 20):
 
 # === DATA ENDPOINTS ===
 
+@app.get("/api/data/macro")
+async def macro_dashboard():
+    """Consolidated macro endpoint — snapshot + time series in one call."""
+    from quant.computations import get_macro_time_series
+    try:
+        snapshot = fred_client.get_macro_snapshot()
+        series = get_macro_time_series()
+        return {
+            "indicators": snapshot,
+            "count": len(snapshot),
+            "series": series,
+        }
+    except Exception as e:
+        logger.error(f"Macro dashboard failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/data/macro/snapshot")
-async def macro_snapshot():
-    """Current macro regime data from FRED."""
+async def macro_snapshot_legacy():
+    """Legacy endpoint — use /api/data/macro instead."""
     try:
         snapshot = fred_client.get_macro_snapshot()
         return {"indicators": snapshot, "count": len(snapshot)}
     except Exception as e:
-        logger.error(f"Macro snapshot failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -303,6 +322,56 @@ async def macro_time_series():
     return get_macro_time_series()
 
 
+# === MORNING REPORT ===
+
+@app.get("/api/morning-report")
+async def morning_report():
+    """Get today's morning report. Generates on first access, caches for the day."""
+    from db.models import MorningReportRecord
+    from datetime import date
+
+    today = date.today().isoformat()
+
+    # Check if already generated today
+    async with async_session() as session:
+        result = await session.execute(
+            select(MorningReportRecord).where(MorningReportRecord.report_date == today)
+        )
+        existing = result.scalar_one_or_none()
+        if existing:
+            return existing.full_report or {"report_date": today, "status": "empty"}
+
+    # Generate new morning report via research desk
+    from agents.orchestrator import run_research_desk
+    try:
+        memo = await run_research_desk(
+            "Generate a pre-market morning briefing for today. "
+            "Assess the macro regime, identify overnight developments, key risk alerts, "
+            "and surface 3-5 actionable trade opportunities across sectors."
+        )
+        report_data = memo.model_dump(mode="json")
+        report_data["report_date"] = today
+
+        # Persist
+        async with async_session() as session:
+            record = MorningReportRecord(
+                report_date=today,
+                executive_briefing=memo.executive_summary,
+                macro_regime=memo.macro_regime,
+                key_macro_changes=memo.key_findings,
+                risk_alerts=[rf.description if hasattr(rf, "description") else str(rf) for rf in memo.risk_factors[:3]],
+                overnight_opportunities=[ti.model_dump() if hasattr(ti, "model_dump") else ti for ti in memo.trade_ideas],
+                full_report=report_data,
+            )
+            session.add(record)
+            await session.commit()
+
+        return report_data
+    except Exception as e:
+        logger.error(f"Morning report generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # === AGENT ENDPOINTS ===
 
 @app.get("/api/agents/status")
@@ -318,12 +387,123 @@ async def agent_status():
     return {"agents": agents}
 
 
-# === PORTFOLIO ENDPOINTS ===
+# === TRADE JOURNAL & PORTFOLIO ===
 
-@app.get("/api/portfolio/positions")
-async def portfolio_positions():
-    """Current portfolio positions and P&L."""
-    return {"positions": [], "total_value": 0, "daily_pnl": 0}
+class TakeTradeRequest(BaseModel):
+    memo_id: str = ""
+    ticker: str
+    direction: str
+    action: str = "BUY"
+    entry_price: float | None = None
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    position_size_pct: float = 0
+    conviction: int = 50
+    thesis: str = ""
+    md_notes: str = ""
+
+
+@app.post("/api/portfolio/trade")
+async def take_trade(req: TakeTradeRequest):
+    """CIO takes a trade idea — persists to trade journal."""
+    from db.models import TradeRecord
+    async with async_session() as session:
+        record = TradeRecord(
+            memo_id=req.memo_id,
+            ticker=req.ticker,
+            direction=req.direction,
+            action=req.action,
+            entry_price=req.entry_price,
+            stop_loss=req.stop_loss,
+            take_profit=req.take_profit,
+            position_size_pct=req.position_size_pct,
+            conviction=req.conviction,
+            thesis=req.thesis,
+            md_notes=req.md_notes,
+            status="open",
+        )
+        session.add(record)
+        await session.commit()
+        return {"id": record.id, "status": "open", "ticker": req.ticker}
+
+
+@app.get("/api/portfolio/trades")
+async def list_trades(status: str = "all"):
+    """Get trade journal — open, closed, or all."""
+    from db.models import TradeRecord
+    async with async_session() as session:
+        query = select(TradeRecord).order_by(desc(TradeRecord.opened_at))
+        if status != "all":
+            query = query.where(TradeRecord.status == status)
+        result = await session.execute(query.limit(50))
+        records = result.scalars().all()
+        return {
+            "trades": [
+                {
+                    "id": r.id,
+                    "ticker": r.ticker,
+                    "direction": r.direction,
+                    "action": r.action,
+                    "entry_price": r.entry_price,
+                    "stop_loss": r.stop_loss,
+                    "take_profit": r.take_profit,
+                    "position_size_pct": r.position_size_pct,
+                    "conviction": r.conviction,
+                    "thesis": r.thesis,
+                    "status": r.status,
+                    "realized_pnl": r.realized_pnl,
+                    "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                    "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+                }
+                for r in records
+            ],
+            "count": len(records),
+        }
+
+
+@app.get("/api/portfolio/backtest")
+async def backtest_trades():
+    """Evaluate all open trades against current market prices."""
+    from db.models import TradeRecord
+    from quant.backtesting import evaluate_trades
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(TradeRecord).where(TradeRecord.status == "open")
+        )
+        records = result.scalars().all()
+        trades = [
+            {
+                "id": r.id,
+                "ticker": r.ticker,
+                "direction": r.direction,
+                "entry_price": r.entry_price,
+                "stop_loss": r.stop_loss,
+                "take_profit": r.take_profit,
+                "conviction": r.conviction,
+                "thesis": r.thesis,
+                "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+            }
+            for r in records
+        ]
+
+    evaluated = evaluate_trades(trades)
+
+    # Summary stats
+    wins = sum(1 for t in evaluated if t.get("evaluation", {}).get("hit_target"))
+    losses = sum(1 for t in evaluated if t.get("evaluation", {}).get("hit_stop"))
+    open_count = len(evaluated) - wins - losses
+
+    return {
+        "trades": evaluated,
+        "summary": {
+            "total": len(evaluated),
+            "wins": wins,
+            "losses": losses,
+            "open": open_count,
+            "win_rate": round(wins / max(wins + losses, 1) * 100, 1),
+        },
+    }
 
 
 @app.get("/api/portfolio/risk")
@@ -332,11 +512,122 @@ async def portfolio_risk():
     return {"beta": 0, "var_95": 0, "sector_exposure": {}}
 
 
-# === WEBSOCKET ===
+# === STREAMING ANALYSIS ===
 
-@app.websocket("/ws/analysis")
-async def analysis_stream(websocket: WebSocket):
-    """Stream real-time agent updates during analysis."""
-    await websocket.accept()
-    await websocket.send_json({"type": "connected", "message": "Analysis stream"})
-    await websocket.close()
+@app.post("/api/analyze/stream")
+async def analyze_stream(request: AnalyzeRequest):
+    """SSE streaming endpoint — sends phase updates as agents complete."""
+    from agents.orchestrator import (
+        _query_interpreter, _research_analyst, _risk_manager,
+        _portfolio_strategist, _cio_synthesizer, _with_timeout,
+        IntelligenceMemo,
+    )
+
+    query = request.query.strip()
+
+    async def event_stream():
+        def send(data: dict) -> str:
+            return f"data: {json.dumps(data)}\n\n"
+
+        # Phase 1: Interpret
+        yield send({"phase": "interpreting", "agent": "query_interpreter"})
+        try:
+            plan = await _with_timeout(
+                _query_interpreter.interpret(query), seconds=30, label="QI"
+            )
+            if not plan:
+                yield send({"phase": "error", "error": "Query interpretation timed out"})
+                return
+            plan_data = plan.model_dump(mode="json")
+            yield send({"phase": "interpreting_done", "tickers": plan_data.get("tickers", []), "intent": plan_data.get("intent", "")})
+        except Exception as e:
+            yield send({"phase": "error", "error": str(e)})
+            return
+
+        # Phase 2: Research
+        yield send({"phase": "researching", "agent": "research_analyst"})
+        output = await _with_timeout(
+            _research_analyst.analyze({"plan": plan_data}), seconds=120, label="RA"
+        )
+        research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
+        yield send({"phase": "researching_done"})
+
+        # Phase 3: Risk
+        yield send({"phase": "risk_assessment", "agent": "risk_manager"})
+        output = await _with_timeout(
+            _risk_manager.analyze({"plan": plan_data, "research": research_data}),
+            seconds=60, label="RM"
+        )
+        risk_data = output.output if output and not output.error else {
+            "macro_regime": "unknown", "regime_confidence": 0,
+            "risk_factors": [], "overall_risk_level": "elevated",
+            "risk_narrative": "Risk assessment unavailable.",
+        }
+        yield send({"phase": "risk_assessment_done", "macro_regime": risk_data.get("macro_regime", "")})
+
+        # Phase 4: Strategy
+        yield send({"phase": "strategizing", "agent": "portfolio_strategist"})
+        output = await _with_timeout(
+            _portfolio_strategist.analyze({"plan": plan_data, "research": research_data, "risk": risk_data}),
+            seconds=60, label="PS"
+        )
+        strategy_data = output.output if output and not output.error else {
+            "trade_ideas": [], "portfolio_positioning": "neutral",
+            "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
+        }
+        yield send({"phase": "strategizing_done", "trade_count": len(strategy_data.get("trade_ideas", []))})
+
+        # Phase 5: Synthesize
+        yield send({"phase": "synthesizing", "agent": "cio_synthesizer"})
+        output = await _with_timeout(
+            _cio_synthesizer.synthesize({"plan": plan_data, "research": research_data, "risk": risk_data, "strategy": strategy_data}),
+            seconds=60, label="CIO"
+        )
+        memo_data = output.output if output and not output.error else {"title": "Analysis incomplete", "executive_summary": "", "analysis": "", "key_findings": []}
+
+        # Inject structured data
+        memo_data["query"] = query
+        memo_data["intent"] = plan_data.get("intent", "thematic_research")
+        memo_data["tickers_analyzed"] = plan_data.get("tickers", [])
+        memo_data["themes"] = plan_data.get("themes", [])
+        memo_data["macro_regime"] = risk_data.get("macro_regime", "")
+        memo_data["overall_risk_level"] = risk_data.get("overall_risk_level", "")
+        memo_data["risk_factors"] = risk_data.get("risk_factors", [])
+        memo_data["trade_ideas"] = strategy_data.get("trade_ideas", [])
+        memo_data["portfolio_positioning"] = strategy_data.get("portfolio_positioning", "")
+        memo_data["hedging_recommendations"] = strategy_data.get("hedging_recommendations", [])
+
+        try:
+            memo = IntelligenceMemo(**memo_data)
+            result = memo.model_dump(mode="json")
+
+            # Persist
+            try:
+                async with async_session() as session:
+                    record = IntelligenceMemoRecord(
+                        query=memo.query,
+                        intent=memo.intent.value if hasattr(memo.intent, "value") else str(memo.intent),
+                        title=memo.title,
+                        executive_summary=memo.executive_summary,
+                        analysis=memo.analysis,
+                        key_findings=memo.key_findings,
+                        macro_regime=memo.macro_regime,
+                        overall_risk_level=memo.overall_risk_level,
+                        risk_factors=[rf.model_dump() if hasattr(rf, "model_dump") else rf for rf in memo.risk_factors],
+                        trade_ideas=[ti.model_dump() if hasattr(ti, "model_dump") else ti for ti in memo.trade_ideas],
+                        portfolio_positioning=memo.portfolio_positioning,
+                        hedging_recommendations=memo.hedging_recommendations,
+                        tickers_analyzed=memo.tickers_analyzed,
+                        themes=memo.themes,
+                    )
+                    session.add(record)
+                    await session.commit()
+                    result["id"] = record.id
+            except Exception:
+                pass
+
+            yield send({"phase": "complete", "memo": result})
+        except Exception as e:
+            yield send({"phase": "error", "error": str(e)})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

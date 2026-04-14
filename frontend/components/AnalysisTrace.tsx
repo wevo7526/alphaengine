@@ -53,12 +53,14 @@ function PhaseCard({
   state,
   index,
   startedAt,
+  detail,
 }: {
   agent: string;
   sources: string[];
   state: "pending" | "active" | "done";
   index: number;
   startedAt: number;
+  detail?: string;
 }) {
   const meta = AGENT_META[agent] ?? { label: agent, role: "" };
 
@@ -109,9 +111,12 @@ function PhaseCard({
           {state === "done" && (
             <span className="text-[10px] text-signal-green font-medium">done</span>
           )}
+          {detail && (
+            <span className="text-[10px] text-text-quaternary font-mono">{detail}</span>
+          )}
         </div>
 
-        {state !== "pending" && (
+        {state !== "pending" && !detail && (
           <p className="text-[11px] text-text-quaternary mb-1">{meta.role}</p>
         )}
 
@@ -156,6 +161,7 @@ export function AnalysisTrace({ run }: { run: AnalysisRun }) {
               state={state}
               index={i}
               startedAt={run.startedAt}
+              detail={state === "done" && run.phase === phase.key ? run.phaseDetail : undefined}
             />
           );
         })}

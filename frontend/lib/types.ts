@@ -36,6 +36,7 @@ export interface TradeIdea {
 }
 
 export interface IntelligenceMemo {
+  id?: string;
   query: string;
   timestamp: string;
   title: string;
@@ -51,6 +52,7 @@ export interface IntelligenceMemo {
   tickers_analyzed: string[];
   themes: string[];
   intent: QueryIntent;
+  created_at?: string;
 }
 
 export interface MacroIndicator {

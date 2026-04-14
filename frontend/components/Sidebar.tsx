@@ -6,7 +6,7 @@ import { IconHome, IconGlobe, IconBriefcase, IconSettings } from "./icons";
 
 const NAV = [
   { href: "/", label: "Home", icon: IconHome },
-  { href: "/macro", label: "Macro", icon: IconGlobe },
+  { href: "/analysis", label: "Analysis", icon: IconGlobe },
   { href: "/portfolio", label: "Portfolio", icon: IconBriefcase },
 ];
 
