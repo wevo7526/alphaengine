@@ -244,7 +244,6 @@ class ResearchAnalyst(BaseAgent):
             agent=agent, tools=tools, verbose=False,
             max_iterations=5,
             handle_parsing_errors=True,
-            early_stopping_method="generate",
         )
 
     def get_tools(self):

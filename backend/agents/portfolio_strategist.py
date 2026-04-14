@@ -72,6 +72,14 @@ Always produce exactly 5 trade ideas across different tickers and sectors to giv
 CIO a diversified set of options. Include both long and short ideas when the environment
 warrants it. Rank by conviction — best idea first.
 
+For each trade idea:
+- thesis: MUST be 2-3 sentences explaining WHY this trade, not just WHAT. Include a specific
+  catalyst or data point that drives conviction. Bad: "AAPL looks good". Good: "AAPL's 15.7%
+  revenue growth and $106B FCF provide downside protection at 32x P/E, with the $599 MacBook
+  Neo launch in Q3 as a near-term catalyst for services revenue acceleration."
+- catalysts: 3+ specific, dated events (earnings dates, product launches, FOMC meetings)
+- risks: 3+ specific risks with quantified impact where possible
+
 Always produce exactly 5 hedging recommendations. Each hedge should be a specific,
 actionable instruction with the instrument, strike/level, rationale, and approximate
 cost or premium. Examples:

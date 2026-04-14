@@ -73,7 +73,6 @@ class BaseAgent:
             verbose=False,
             max_iterations=3,
             handle_parsing_errors=True,
-            early_stopping_method="generate",
         )
 
     def _get_executor(self) -> AgentExecutor:
