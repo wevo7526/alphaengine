@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { UserButton } from "@clerk/nextjs";
 import { IconHome, IconGlobe, IconBriefcase, IconSettings } from "./icons";
 
 // Reuse IconGlobe for Analysis, add simple SVG for new pages
@@ -96,6 +97,15 @@ export function Sidebar() {
             </Link>
           );
         })}
+        <div className="px-3 py-2">
+          <UserButton
+            appearance={{
+              elements: {
+                avatarBox: "w-7 h-7",
+              },
+            }}
+          />
+        </div>
       </div>
     </aside>
   );

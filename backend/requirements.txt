@@ -35,5 +35,9 @@ hmmlearn
 # Web scraping / validation
 firecrawl-py
 
+# Auth
+pyjwt
+cryptography
+
 # NLP (Phase 1: VADER, Phase 2: FinBERT via transformers)
 vaderSentiment

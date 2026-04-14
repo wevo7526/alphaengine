@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket, HTTPException, Depends
+from fastapi import FastAPI, WebSocket, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -10,6 +10,7 @@ import asyncio
 import logging
 
 from config import settings
+from auth import get_user_id
 from data.fred_client import FREDDataClient
 from data.market_client import MarketDataClient
 from data.news_client import NewsDataClient
@@ -62,10 +63,11 @@ class AnalyzeRequest(BaseModel):
 
 
 @app.post("/api/analyze")
-async def analyze(request: AnalyzeRequest):
+async def analyze(request: AnalyzeRequest, req: Request = None):
     """Run the full research desk pipeline on a freeform query."""
     import traceback
     from agents.orchestrator import run_research_desk
+    user_id = get_user_id(req) if req else None
 
     query = request.query.strip()
     query_id = str(hash(query + str(id(request))))
@@ -79,6 +81,7 @@ async def analyze(request: AnalyzeRequest):
         try:
             async with async_session() as session:
                 record = IntelligenceMemoRecord(
+                    user_id=user_id,
                     query=memo.query,
                     intent=memo.intent.value if hasattr(memo.intent, "value") else str(memo.intent),
                     title=memo.title,
@@ -97,7 +100,7 @@ async def analyze(request: AnalyzeRequest):
                 session.add(record)
                 await session.commit()
                 result["id"] = record.id
-                logger.info(f"Memo persisted: {record.id}")
+                logger.info(f"Memo persisted: {record.id} for user {user_id}")
         except Exception as db_err:
             logger.error(f"DB persist failed (non-fatal): {db_err}")
 
@@ -117,14 +120,14 @@ async def analyze_ticker(ticker: str):
 
 
 @app.get("/api/signals/latest")
-async def latest_signals(limit: int = 20):
-    """Get most recent intelligence memos from the database."""
+async def latest_signals(limit: int = 20, req: Request = None):
+    """Get most recent intelligence memos for the current user."""
+    user_id = get_user_id(req) if req else None
     async with async_session() as session:
-        result = await session.execute(
-            select(IntelligenceMemoRecord)
-            .order_by(desc(IntelligenceMemoRecord.created_at))
-            .limit(limit)
-        )
+        query = select(IntelligenceMemoRecord).order_by(desc(IntelligenceMemoRecord.created_at))
+        if user_id:
+            query = query.where(IntelligenceMemoRecord.user_id == user_id)
+        result = await session.execute(query.limit(limit))
         records = result.scalars().all()
         memos = [
             {
@@ -736,11 +739,13 @@ class TakeTradeRequest(BaseModel):
 
 
 @app.post("/api/portfolio/trade")
-async def take_trade(req: TakeTradeRequest):
+async def take_trade(req: TakeTradeRequest, request: Request = None):
     """CIO takes a trade idea — persists to trade journal."""
     from db.models import TradeRecord
+    user_id = get_user_id(request) if request else None
     async with async_session() as session:
         record = TradeRecord(
+            user_id=user_id,
             memo_id=req.memo_id,
             ticker=req.ticker,
             direction=req.direction,
@@ -804,11 +809,14 @@ async def close_trade(trade_id: str, req: CloseTradeRequest):
 
 
 @app.get("/api/portfolio/trades")
-async def list_trades(status: str = "all"):
-    """Get trade journal — open, closed, or all."""
+async def list_trades(status: str = "all", req: Request = None):
+    """Get trade journal for current user — open, closed, or all."""
     from db.models import TradeRecord
+    user_id = get_user_id(req) if req else None
     async with async_session() as session:
         query = select(TradeRecord).order_by(desc(TradeRecord.opened_at))
+        if user_id:
+            query = query.where(TradeRecord.user_id == user_id)
         if status != "all":
             query = query.where(TradeRecord.status == status)
         result = await session.execute(query.limit(50))

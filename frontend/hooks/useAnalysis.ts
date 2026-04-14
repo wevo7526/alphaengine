@@ -54,9 +54,20 @@ export function useAnalysis() {
 
       try {
         const streamUrl = api.analyzeStreamUrl();
+        // Get auth token for streaming request
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        try {
+          // @ts-expect-error Clerk global
+          const clerk = window?.Clerk;
+          if (clerk?.session) {
+            const token = await clerk.session.getToken();
+            if (token) headers["Authorization"] = `Bearer ${token}`;
+          }
+        } catch { /* no auth */ }
+
         const response = await fetch(streamUrl, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify({ query }),
         });
 

@@ -8,11 +8,32 @@ function getApiBase(): string {
   return "http://localhost:8000";
 }
 
+// Get Clerk token for authenticated requests
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (typeof window !== "undefined") {
+    try {
+      // @ts-expect-error Clerk exposes this globally
+      const clerk = window.Clerk;
+      if (clerk?.session) {
+        const token = await clerk.session.getToken();
+        if (token) {
+          headers["Authorization"] = `Bearer ${token}`;
+        }
+      }
+    } catch {
+      // No auth available — requests work without it (backward compatible)
+    }
+  }
+  return headers;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const base = getApiBase(); // Evaluate on every call, not at module load
+  const base = getApiBase();
+  const authHeaders = await getAuthHeaders();
   const res = await fetch(`${base}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { ...authHeaders, ...init?.headers },
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));

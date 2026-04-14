@@ -26,6 +26,7 @@ class BacktestRunRecord(Base):
     __tablename__ = "backtest_runs"
 
     id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
     name = Column(String(200))
     tickers = Column(JSON, default=list)
     start_date = Column(Date)
@@ -125,6 +126,7 @@ class IntelligenceMemoRecord(Base):
     __tablename__ = "intelligence_memos"
 
     id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
     query = Column(Text, nullable=False)
     intent = Column(String(50), nullable=False)
     title = Column(Text, nullable=False)
@@ -147,6 +149,7 @@ class TradeRecord(Base):
     __tablename__ = "trades"
 
     id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
     memo_id = Column(String, nullable=True)  # FK to intelligence_memos.id
     ticker = Column(String(10), nullable=False)
     direction = Column(String(20), nullable=False)
@@ -197,6 +200,7 @@ class MorningReportRecord(Base):
     __tablename__ = "morning_reports"
 
     id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
     report_date = Column(String(10), nullable=False, unique=True)  # YYYY-MM-DD
     executive_briefing = Column(Text)
     macro_regime = Column(String(20))

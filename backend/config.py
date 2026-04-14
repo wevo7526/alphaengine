@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     ALPHA_VANTAGE_KEY: str = ""
     FIRECRAWL_API_KEY: str = ""
 
+    # Clerk Auth
+    CLERK_ISSUER: str = ""  # e.g. https://your-app.clerk.accounts.dev
+    CLERK_SECRET_KEY: str = ""
+
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/alphaengine"
 
