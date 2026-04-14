@@ -227,16 +227,19 @@ async def run_research_desk(query: str) -> IntelligenceMemo:
     risk = final_state.get("risk_data", {})
     strategy = final_state.get("strategy_data", {})
 
-    memo_data.setdefault("query", query)
-    memo_data.setdefault("intent", plan.get("intent", "thematic_research"))
-    memo_data.setdefault("tickers_analyzed", plan.get("tickers", []))
-    memo_data.setdefault("themes", plan.get("themes", []))
-    memo_data.setdefault("macro_regime", risk.get("macro_regime", ""))
-    memo_data.setdefault("overall_risk_level", risk.get("overall_risk_level", ""))
-    memo_data.setdefault("risk_factors", risk.get("risk_factors", []))
-    memo_data.setdefault("trade_ideas", strategy.get("trade_ideas", []))
-    memo_data.setdefault("portfolio_positioning", strategy.get("portfolio_positioning", ""))
-    memo_data.setdefault("hedging_recommendations", strategy.get("hedging_recommendations", []))
+    # CIO Synthesizer writes title, executive_summary, analysis, key_findings.
+    # Structured data (risk_factors, trade_ideas, hedges) comes from prior agents
+    # directly — don't trust the LLM to reconstruct structured objects from compressed text.
+    memo_data["query"] = query
+    memo_data["intent"] = plan.get("intent", "thematic_research")
+    memo_data["tickers_analyzed"] = plan.get("tickers", [])
+    memo_data["themes"] = plan.get("themes", [])
+    memo_data["macro_regime"] = risk.get("macro_regime", "")
+    memo_data["overall_risk_level"] = risk.get("overall_risk_level", "")
+    memo_data["risk_factors"] = risk.get("risk_factors", [])  # Always use structured data
+    memo_data["trade_ideas"] = strategy.get("trade_ideas", [])  # Always use structured data
+    memo_data["portfolio_positioning"] = strategy.get("portfolio_positioning", "")
+    memo_data["hedging_recommendations"] = strategy.get("hedging_recommendations", [])
 
     memo = IntelligenceMemo(**memo_data)
     logger.info(f"[orchestrator] Memo complete: {memo.title}")

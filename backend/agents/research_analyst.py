@@ -213,9 +213,10 @@ After gathering data, produce a JSON summary with:
 The data_summary is critical — it's what downstream agents (Risk Manager, Portfolio Strategist)
 will primarily read. Make it thorough, quantitative, and specific."""
 
-OUTPUT_INSTRUCTIONS = """After using your tools to gather data, respond with a single JSON object
-matching the schema above. The data_summary field should be a comprehensive 2-4 paragraph narrative
-that synthesizes all gathered data with specific numbers and dates cited."""
+OUTPUT_INSTRUCTIONS = """CRITICAL: You have very limited iterations. Call at MOST 3-4 tools total,
+then IMMEDIATELY produce your JSON response. Do NOT try to gather data for every ticker —
+prioritize the 2-3 most important data points. Your data_summary narrative is the most
+important output — make it 2-3 paragraphs with specific numbers."""
 
 
 class ResearchAnalyst(BaseAgent):
@@ -241,7 +242,7 @@ class ResearchAnalyst(BaseAgent):
         agent = create_tool_calling_agent(self.llm, tools, prompt)
         return AgentExecutor(
             agent=agent, tools=tools, verbose=False,
-            max_iterations=3,
+            max_iterations=5,
             handle_parsing_errors=True,
         )
 

@@ -108,8 +108,9 @@ Respond with JSON:
     "strategy_narrative": "<1-2 paragraph strategy explanation>"
 }}"""
 
-OUTPUT_INSTRUCTIONS = """Use your price tools to get current levels for the tickers you want
-to include in trade ideas, then respond with a single JSON object matching the schema above."""
+OUTPUT_INSTRUCTIONS = """CRITICAL: Call get_current_price for AT MOST 3 tickers, then IMMEDIATELY
+produce your JSON response. Do NOT call get_recent_prices unless absolutely needed.
+Produce exactly 5 trade ideas and 5 hedging recommendations."""
 
 
 class PortfolioStrategist(BaseAgent):

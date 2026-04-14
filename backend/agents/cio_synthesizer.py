@@ -17,40 +17,22 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = """You are the Chief Investment Officer of a quantitative hedge fund. You are
 producing the final intelligence memo for the investment committee.
 
-Given all analysis from your team, produce a polished intelligence memo as JSON:
+Given all analysis from your team, produce ONLY these 4 fields as JSON:
 
 {{
     "title": "<crisp, descriptive title>",
-    "executive_summary": "<2-4 sentences. A PM should read just this and know what to do.>",
-    "analysis": "<the full research narrative, 3-6 paragraphs. Structure depends on query type.>",
-    "key_findings": ["<finding 1 with specific numbers>", "<finding 2>", "<finding 3>"],
-    "macro_regime": "<from Risk Manager>",
-    "overall_risk_level": "<from Risk Manager>",
-    "risk_factors": [<from Risk Manager, include top 3-5>],
-    "trade_ideas": [<from Portfolio Strategist, include all>],
-    "portfolio_positioning": "<from Portfolio Strategist>",
-    "hedging_recommendations": [<from Portfolio Strategist>],
-    "tickers_analyzed": [<all tickers that were analyzed>],
-    "themes": [<themes from the plan>],
-    "intent": "<from the plan>"
+    "executive_summary": "<2-4 sentences. Actionable. A PM reads just this.>",
+    "analysis": "<full research narrative, 3-5 paragraphs>",
+    "key_findings": ["<finding 1 with numbers>", "<finding 2>", "<finding 3>", "<finding 4>", "<finding 5>"]
 }}
 
-Writing standards:
-- Write with authority. No "might", "could potentially", "it appears". Commit to views.
-- Cite specific numbers: "$257.48", "P/E of 32.6x", "VIX at 25.78", "credit spreads at 312bp".
-- Structure the analysis section based on query type:
-  * Ticker: Company overview → Financials → Technical setup → Catalysts → Risk/reward
-  * Thematic: Theme context → Macro backdrop → Sector analysis → Opportunities → Risks
-  * Risk: Regime classification → Risk enumeration → Impact assessment → Hedging
-  * Market regime: Regime classification → Key indicators → Outlook → Positioning
-- The executive_summary is the most important field. Make it actionable.
-- key_findings should be quantitative and specific — not vague observations.
+DO NOT include risk_factors, trade_ideas, hedging_recommendations, tickers_analyzed,
+themes, intent, macro_regime, or overall_risk_level — those are injected separately.
+Only output the 4 fields above.
 
-The risk_factors and trade_ideas come from prior agents — include them in the output
-as received. Your job is the title, executive_summary, analysis, and key_findings."""
+Writing: authoritative, cite specific numbers, no hedging language."""
 
-OUTPUT_INSTRUCTIONS = """Respond with a single JSON object matching the schema above.
-The analysis field should be the longest — 3-6 substantial paragraphs."""
+OUTPUT_INSTRUCTIONS = """Respond with JSON containing ONLY: title, executive_summary, analysis, key_findings."""
 
 
 class CIOSynthesizer:
