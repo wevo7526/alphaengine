@@ -3,10 +3,13 @@ import type { NextRequest } from "next/server";
 
 const PUBLIC_PATHS = ["/sign-in", "/sign-up"];
 
+// Clerk cookie names — they vary by environment
+const CLERK_COOKIES = ["__session", "__clerk_db_jwt", "__client_uat"];
+
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Allow public routes
+  // Allow public auth routes
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
     return NextResponse.next();
   }
@@ -20,14 +23,9 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // Check for Clerk session cookie — if not present, redirect to sign-in
-  const clerkConfigured = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
-  if (!clerkConfigured) {
-    return NextResponse.next();
-  }
-
-  const sessionCookie = request.cookies.get("__session") || request.cookies.get("__clerk_db_jwt");
-  if (!sessionCookie) {
+  // Check for ANY Clerk session cookie
+  const hasSession = CLERK_COOKIES.some((name) => request.cookies.has(name));
+  if (!hasSession) {
     const signInUrl = new URL("/sign-in", request.url);
     signInUrl.searchParams.set("redirect_url", pathname);
     return NextResponse.redirect(signInUrl);
