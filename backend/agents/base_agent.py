@@ -71,7 +71,7 @@ class BaseAgent:
             agent=agent,
             tools=tools,
             verbose=False,
-            max_iterations=8,
+            max_iterations=2,
             handle_parsing_errors=True,
         )
 

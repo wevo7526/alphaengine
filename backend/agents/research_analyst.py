@@ -33,20 +33,20 @@ def get_macro_snapshot() -> dict:
 
 
 @tool
-def get_yield_curve_history(lookback_days: int = 90) -> list:
-    """Get historical yield curve spread (10Y-2Y). Useful for regime trend analysis."""
+def get_yield_curve_history(lookback_days: int = 30) -> list:
+    """Get 30-day yield curve spread (10Y-2Y) trend."""
     return _fred.get_series_history("T10Y2Y", lookback_days)
 
 
 @tool
-def get_credit_spread_history(lookback_days: int = 90) -> list:
-    """Get historical high-yield credit spread (OAS). Widening = risk-off."""
+def get_credit_spread_history(lookback_days: int = 30) -> list:
+    """Get 30-day high-yield credit spread trend. Widening = risk-off."""
     return _fred.get_series_history("BAMLH0A0HYM2", lookback_days)
 
 
 @tool
-def get_vix_history(lookback_days: int = 90) -> list:
-    """Get historical VIX data. Rising VIX = increasing fear."""
+def get_vix_history(lookback_days: int = 30) -> list:
+    """Get 30-day VIX trend. Rising = increasing fear."""
     return _fred.get_series_history("VIXCLS", lookback_days)
 
 
@@ -54,15 +54,29 @@ def get_vix_history(lookback_days: int = 90) -> list:
 
 @tool
 def get_fundamentals(ticker: str) -> dict:
-    """Get key fundamentals for a ticker: P/E, P/B, EV/EBITDA, margins, growth,
-    debt/equity, FCF, beta, 52-week range, sector, industry, current price."""
-    return _market.get_fundamentals(ticker)
+    """Get key fundamentals: P/E, EV/EBITDA, margins, growth, beta, price, sector."""
+    data = _market.get_fundamentals(ticker)
+    return {
+        "current_price": data.get("current_price"),
+        "pe_ratio": data.get("pe_ratio"),
+        "forward_pe": data.get("forward_pe"),
+        "ev_ebitda": data.get("ev_ebitda"),
+        "revenue_growth": data.get("revenue_growth"),
+        "profit_margin": data.get("profit_margin"),
+        "debt_to_equity": data.get("debt_to_equity"),
+        "beta": data.get("beta"),
+        "52w_high": data.get("52w_high"),
+        "52w_low": data.get("52w_low"),
+        "sector": data.get("sector"),
+    }
 
 
 @tool
-def get_price_history(ticker: str, period: str = "3mo") -> list:
-    """Get OHLCV price history. Periods: 1mo, 3mo, 6mo, 1y. Default 3mo."""
-    return _market.get_price_history(ticker, period=period)
+def get_price_history(ticker: str, period: str = "1mo") -> list:
+    """Get OHLCV price history. Periods: 1mo, 3mo, 6mo. Default 1mo to conserve tokens."""
+    data = _market.get_price_history(ticker, period=period)
+    # Return only last 20 bars — enough for trend analysis without context blowout
+    return data[-20:] if len(data) > 20 else data
 
 
 @tool
@@ -75,14 +89,22 @@ def get_options_chain(ticker: str) -> dict:
 
 @tool
 def get_ticker_news(ticker: str) -> list:
-    """Get recent news articles for a ticker. Returns title, description, source, date."""
-    return _news.get_ticker_news(ticker, page_size=10)
+    """Get recent news for a ticker. Returns title, source, date. Limited to 5 articles."""
+    articles = _news.get_ticker_news(ticker, page_size=5)
+    # Return only title and source to minimize tokens
+    return [{"title": a.get("title", ""), "source": a.get("source", "")} for a in articles]
 
 
 @tool
 def get_finnhub_news(ticker: str) -> dict:
-    """Get company news from Finnhub with article count and headlines."""
-    return _news.get_market_sentiment_finnhub(ticker)
+    """Get company news from Finnhub. Returns article count and top 3 headlines."""
+    data = _news.get_market_sentiment_finnhub(ticker)
+    # Trim to just count + top 3 headlines to save tokens
+    articles = data.get("articles", [])[:3]
+    return {
+        "article_count": data.get("article_count", 0),
+        "top_headlines": [a.get("headline", "")[:80] for a in articles],
+    }
 
 
 @tool
@@ -116,24 +138,33 @@ def search_filings_fulltext(query_text: str) -> dict:
 
 @tool
 def score_news_sentiment(ticker: str) -> dict:
-    """Score sentiment on recent news for a ticker using financial NLP.
-    Returns per-article scores (positive/negative/neutral with confidence)
-    and aggregate metrics (bullish %, bearish %, compound score).
-    More precise than reading headlines — quantitative sentiment scoring."""
-    articles = _news.get_ticker_news(ticker, page_size=10)
+    """Score sentiment on recent news. Returns aggregate: compound score, bullish/bearish %."""
+    articles = _news.get_ticker_news(ticker, page_size=5)
     from agents.nlp.sentiment import score_articles
-    return score_articles(articles)
+    result = score_articles(articles)
+    # Return only aggregate — per-article scores waste tokens
+    return result.get("aggregate", {})
 
 
 # === Options Analytics ===
 
 @tool
 def get_options_analysis(ticker: str) -> dict:
-    """Get computed options analytics for a ticker: put/call ratio, implied move,
-    ATM IV, Greeks, IV skew, max pain, unusual activity detection. This is
-    computed math from live options chains — not raw chain data."""
+    """Get computed options analytics: put/call ratio, implied move, ATM IV, Greeks."""
     from quant.options_analytics import analyze_options
-    return analyze_options(ticker)
+    data = analyze_options(ticker)
+    if "error" in data:
+        return data
+    # Return only key metrics to conserve tokens
+    return {
+        "put_call_ratio": data.get("put_call_ratio"),
+        "implied_move_pct": data.get("implied_move_pct"),
+        "atm_iv": data.get("atm_iv"),
+        "iv_skew": data.get("iv_skew"),
+        "max_pain": data.get("max_pain"),
+        "pc_ratio_signal": data.get("pc_ratio_signal"),
+        "greeks": data.get("greeks"),
+    }
 
 
 # === Technical Tools ===
@@ -210,7 +241,7 @@ class ResearchAnalyst(BaseAgent):
         agent = create_tool_calling_agent(self.llm, tools, prompt)
         return AgentExecutor(
             agent=agent, tools=tools, verbose=False,
-            max_iterations=12,
+            max_iterations=3,
             handle_parsing_errors=True,
         )
 

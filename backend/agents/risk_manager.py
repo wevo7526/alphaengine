@@ -90,14 +90,12 @@ class RiskManager(BaseAgent):
         plan = context.get("plan", {})
         research = context.get("research", {})
         summary = research.get("data_summary", "No research data available.")
+        # Cap summary to prevent context blowout
+        if len(summary) > 2000:
+            summary = summary[:2000] + "..."
 
         return (
-            f"Analysis Plan:\n"
-            f"  Query: {plan.get('query', '')}\n"
-            f"  Intent: {plan.get('intent', '')}\n"
-            f"  Tickers: {', '.join(plan.get('tickers', []))}\n"
-            f"  Themes: {', '.join(plan.get('themes', []))}\n"
-            f"  Risk Focus: {', '.join(plan.get('risk_focus', []))}\n\n"
-            f"Research Data Summary:\n{summary}\n\n"
+            f"Query: {plan.get('query', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Risk Focus: {', '.join(plan.get('risk_focus', []))}\n\n"
+            f"Research Summary:\n{summary}\n\n"
             f"Evaluate the risks and produce your risk assessment JSON."
         )

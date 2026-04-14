@@ -126,22 +126,16 @@ class PortfolioStrategist(BaseAgent):
         risk = context.get("risk", {})
 
         summary = research.get("data_summary", "No research data.")
-        risk_level = risk.get("overall_risk_level", "moderate")
-        regime = risk.get("macro_regime", "unknown")
+        if len(summary) > 2000:
+            summary = summary[:2000] + "..."
         risk_narrative = risk.get("risk_narrative", "")
+        if len(risk_narrative) > 500:
+            risk_narrative = risk_narrative[:500] + "..."
 
         return (
-            f"Analysis Plan:\n"
-            f"  Query: {plan.get('query', '')}\n"
-            f"  Intent: {plan.get('intent', '')}\n"
-            f"  Tickers: {', '.join(plan.get('tickers', []))}\n"
-            f"  Themes: {', '.join(plan.get('themes', []))}\n"
-            f"  Time Horizon: {plan.get('time_horizon', 'weeks')}\n\n"
-            f"Research Summary:\n{summary}\n\n"
-            f"Risk Assessment:\n"
-            f"  Macro Regime: {regime}\n"
-            f"  Overall Risk Level: {risk_level}\n"
-            f"  {risk_narrative}\n\n"
-            f"Produce your trade ideas and portfolio strategy JSON. "
-            f"Use your price tools to get current levels for entry/stop/target precision."
+            f"Query: {plan.get('query', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Horizon: {plan.get('time_horizon', 'weeks')}\n"
+            f"Regime: {risk.get('macro_regime', '?')} | Risk: {risk.get('overall_risk_level', '?')}\n\n"
+            f"Research:\n{summary}\n\n"
+            f"Risk:\n{risk_narrative}\n\n"
+            f"Produce 5 trade ideas and portfolio strategy JSON. Use price tools for entry/stop/target levels."
         )

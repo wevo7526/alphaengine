@@ -68,23 +68,39 @@ class CIOSynthesizer:
         risk = context.get("risk", {})
         strategy = context.get("strategy", {})
 
+        # Compress risk factors to one-liners instead of full JSON
+        risk_factors = risk.get("risk_factors", [])
+        risk_lines = "\n".join(
+            f"- [{rf.get('severity','?')}/{rf.get('category','?')}] {rf.get('description','')[:100]}"
+            for rf in (risk_factors[:5] if isinstance(risk_factors, list) else [])
+        )
+
+        # Compress trade ideas to one-liners instead of full JSON
+        trade_ideas = strategy.get("trade_ideas", [])
+        trade_lines = "\n".join(
+            f"- {ti.get('ticker','?')} {ti.get('direction','?')} (conv:{ti.get('conviction','?')}) "
+            f"entry:{ti.get('entry_zone','?')} stop:{ti.get('stop_loss','?')} "
+            f"target:{ti.get('take_profit','?')} | {ti.get('thesis','')[:80]}"
+            for ti in (trade_ideas[:5] if isinstance(trade_ideas, list) else [])
+        )
+
+        hedges = strategy.get("hedging_recommendations", [])
+        hedge_lines = "\n".join(f"- {h[:120]}" for h in (hedges[:5] if isinstance(hedges, list) else []))
+
+        # Trim research summary to 2000 chars max
+        data_summary = research.get("data_summary", "No data.")
+        if len(data_summary) > 2000:
+            data_summary = data_summary[:2000] + "..."
+
         user_prompt = (
-            f"Original Query: {plan.get('query', '')}\n"
-            f"Intent: {plan.get('intent', '')}\n"
-            f"Tickers: {', '.join(plan.get('tickers', []))}\n"
-            f"Themes: {', '.join(plan.get('themes', []))}\n\n"
-            f"=== RESEARCH DATA ===\n{research.get('data_summary', 'No data.')}\n\n"
-            f"=== RISK ASSESSMENT ===\n"
-            f"Macro Regime: {risk.get('macro_regime', 'unknown')}\n"
-            f"Risk Level: {risk.get('overall_risk_level', 'unknown')}\n"
-            f"{risk.get('risk_narrative', '')}\n\n"
-            f"Risk Factors:\n{json.dumps(risk.get('risk_factors', []), indent=2)}\n\n"
-            f"=== PORTFOLIO STRATEGY ===\n"
-            f"Positioning: {strategy.get('portfolio_positioning', 'neutral')}\n"
-            f"{strategy.get('strategy_narrative', '')}\n\n"
-            f"Trade Ideas:\n{json.dumps(strategy.get('trade_ideas', []), indent=2)}\n\n"
-            f"Hedging: {json.dumps(strategy.get('hedging_recommendations', []))}\n\n"
-            f"Produce the final intelligence memo as JSON."
+            f"Query: {plan.get('query', '')}\n"
+            f"Intent: {plan.get('intent', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Themes: {', '.join(plan.get('themes', []))}\n\n"
+            f"=== RESEARCH ===\n{data_summary}\n\n"
+            f"=== RISK ===\nRegime: {risk.get('macro_regime', '?')} | Level: {risk.get('overall_risk_level', '?')}\n"
+            f"{risk.get('risk_narrative', '')[:500]}\n{risk_lines}\n\n"
+            f"=== TRADE IDEAS ===\nPositioning: {strategy.get('portfolio_positioning', 'neutral')}\n"
+            f"{trade_lines}\n\nHedges:\n{hedge_lines}\n\n"
+            f"Produce the final intelligence memo as JSON. Include the trade ideas and risk factors as structured objects in your output."
         )
 
         try:
