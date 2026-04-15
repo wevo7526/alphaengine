@@ -25,8 +25,14 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database on startup."""
-    await init_db()
-    logger.info("Database initialized")
+    import os
+    logger.info(f"Starting Alpha Engine — ENV={settings.ENV}, PORT={os.environ.get('PORT', 'not set')}")
+    logger.info(f"DATABASE_URL={'set' if settings.DATABASE_URL else 'empty'} (prefix: {settings.DATABASE_URL[:25]}...)" if settings.DATABASE_URL else "DATABASE_URL=empty")
+    try:
+        await init_db()
+        logger.info("Database initialized")
+    except Exception as e:
+        logger.error(f"Database init failed (non-fatal, app will start): {e}")
     yield
 
 

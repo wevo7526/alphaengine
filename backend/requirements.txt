@@ -36,8 +36,7 @@ hmmlearn
 firecrawl-py
 
 # Auth
-pyjwt
-cryptography
+pyjwt[crypto]
 
 # NLP (Phase 1: VADER, Phase 2: FinBERT via transformers)
 vaderSentiment

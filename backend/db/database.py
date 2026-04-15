@@ -32,7 +32,9 @@ def _get_url() -> str:
     return url
 
 
-engine = create_async_engine(_get_url(), echo=False)
+_db_url = _get_url()
+logger.info(f"Database URL resolved: {_db_url[:30]}...")
+engine = create_async_engine(_db_url, echo=False, pool_pre_ping=True)
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
