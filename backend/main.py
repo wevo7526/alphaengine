@@ -203,9 +203,13 @@ async def delete_memo(memo_id: str, req: Request = None):
 async def macro_dashboard():
     """Consolidated macro endpoint — snapshot + time series in one call."""
     from quant.computations import get_macro_time_series
+    from concurrent.futures import ThreadPoolExecutor
     try:
-        snapshot = fred_client.get_macro_snapshot()
-        series = get_macro_time_series()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            snapshot_future = pool.submit(fred_client.get_macro_snapshot)
+            series_future = pool.submit(get_macro_time_series)
+            snapshot = snapshot_future.result()
+            series = series_future.result()
         return {
             "indicators": snapshot,
             "count": len(snapshot),
@@ -332,17 +336,18 @@ async def enrich_tickers(tickers: str, period: str = "3mo"):
 
     result: dict = {"tickers": ticker_list, "analytics": {}, "correlation": None}
 
-    # Per-ticker analytics (cap at 6 to conserve API)
-    for t in ticker_list[:6]:
+    # Per-ticker analytics — run concurrently (cap at 6 to conserve API)
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    def _enrich_one(t: str) -> tuple[str, dict]:
         try:
             vol = compute_volatility_metrics(t, period)
             dd = compute_drawdown(t, period)
             prices = market_client.get_price_history(t, period="1mo")
             options = analyze_options(t)
-            # Sentiment scoring
             articles = news_client.get_ticker_news(t, page_size=10)
             sentiment = score_articles(articles)
-            result["analytics"][t] = {
+            return t, {
                 "volatility": vol,
                 "drawdown": dd,
                 "sparkline": [{"date": p["date"], "close": p["close"]} for p in prices[-20:]],
@@ -351,7 +356,13 @@ async def enrich_tickers(tickers: str, period: str = "3mo"):
             }
         except Exception as e:
             logger.warning(f"Enrichment failed for {t}: {e}")
-            result["analytics"][t] = {"error": str(e)}
+            return t, {"error": str(e)}
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_enrich_one, t) for t in ticker_list[:6]]
+        for future in as_completed(futures):
+            ticker_name, data = future.result()
+            result["analytics"][ticker_name] = data
 
     # Correlation matrix (only if 2+ tickers)
     if len(ticker_list) >= 2:

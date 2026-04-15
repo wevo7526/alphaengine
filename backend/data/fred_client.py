@@ -81,16 +81,17 @@ class FREDDataClient:
             logger.debug("Returning cached macro snapshot")
             return self._snapshot_cache
 
-        snapshot = {}
-        for series_id, name in MACRO_SERIES.items():
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def _fetch_one(series_id: str, name: str) -> tuple[str, dict | None]:
             try:
                 series = _retry_fetch(lambda sid=series_id: self.fred.get_series(sid))
                 if series is None:
-                    continue
+                    return name, None
                 series = series.dropna()
                 if len(series) < 2:
-                    continue
-                snapshot[name] = {
+                    return name, None
+                return name, {
                     "value": float(series.iloc[-1]),
                     "previous": float(series.iloc[-2]),
                     "change": float(series.iloc[-1] - series.iloc[-2]),
@@ -99,7 +100,18 @@ class FREDDataClient:
                 }
             except Exception as e:
                 logger.warning(f"Failed to fetch {series_id} ({name}): {e}")
-                continue
+                return name, None
+
+        snapshot = {}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = {
+                pool.submit(_fetch_one, sid, name): name
+                for sid, name in MACRO_SERIES.items()
+            }
+            for future in as_completed(futures):
+                name, data = future.result()
+                if data:
+                    snapshot[name] = data
 
         self._snapshot_cache = snapshot
         self._snapshot_timestamp = now

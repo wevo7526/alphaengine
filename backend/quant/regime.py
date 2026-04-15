@@ -7,19 +7,30 @@ Pure math — zero LLM calls, reproducible, auditable.
 """
 
 import numpy as np
-from sklearn.preprocessing import StandardScaler
 import logging
 import time
 
 logger = logging.getLogger(__name__)
 
-# Try to import hmmlearn — graceful fallback if not installed
-try:
-    from hmmlearn.hmm import GaussianHMM
-    HMM_AVAILABLE = True
-except ImportError:
-    HMM_AVAILABLE = False
-    logger.warning("hmmlearn not installed — regime detection will use rule-based fallback")
+# Lazy imports for heavy ML libraries — saves ~1.2s on cold start
+_GaussianHMM = None
+_StandardScaler = None
+HMM_AVAILABLE = None  # Resolved on first use
+
+
+def _ensure_ml_imports():
+    global _GaussianHMM, _StandardScaler, HMM_AVAILABLE
+    if HMM_AVAILABLE is not None:
+        return
+    try:
+        from hmmlearn.hmm import GaussianHMM
+        from sklearn.preprocessing import StandardScaler
+        _GaussianHMM = GaussianHMM
+        _StandardScaler = StandardScaler
+        HMM_AVAILABLE = True
+    except ImportError:
+        HMM_AVAILABLE = False
+        logger.warning("hmmlearn not installed — regime detection will use rule-based fallback")
 
 
 _DEFAULT_REGIME_LABELS = {0: "risk_on", 1: "risk_off", 2: "transition"}
@@ -60,6 +71,7 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
     """
     global _fitted_model, _fitted_scaler, _fitted_labels, _fit_timestamp
 
+    _ensure_ml_imports()
     if not HMM_AVAILABLE:
         return False
 
@@ -77,10 +89,10 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
         if len(features) < 60:
             return False
 
-        scaler = StandardScaler()
+        scaler = _StandardScaler()
         X = scaler.fit_transform(features)
 
-        model = GaussianHMM(
+        model = _GaussianHMM(
             n_components=3,
             covariance_type="full",
             n_iter=100,
