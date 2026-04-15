@@ -1029,7 +1029,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request = None):
         yield send({"phase": "researching", "agent": "research_analyst"})
         try:
             output = await _with_timeout(
-                _research_analyst.analyze({"plan": plan_data}), seconds=180, label="RA"
+                _research_analyst.analyze({"plan": plan_data}), seconds=240, label="RA"
             )
             research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
         except Exception as e:
@@ -1085,12 +1085,29 @@ async def analyze_stream(request: AnalyzeRequest, req: Request = None):
         try:
             output = await _with_timeout(
                 _cio_synthesizer.synthesize({"plan": plan_data, "research": research_data, "risk": risk_data, "strategy": strategy_data}),
-                seconds=90, label="CIO"
+                seconds=120, label="CIO"
             )
-            memo_data = output.output if output and not output.error else {"title": "Analysis incomplete", "executive_summary": "", "analysis": "", "key_findings": []}
+            memo_data = output.output if output and not output.error else None
         except Exception as e:
             logger.error(f"[stream] CIO Synthesizer failed: {e}")
-            memo_data = {"title": "Analysis incomplete", "executive_summary": str(e), "analysis": "", "key_findings": []}
+            memo_data = None
+
+        # If CIO failed, build a useful memo from prior agent data instead of returning empty
+        if not memo_data or not memo_data.get("title"):
+            logger.warning("[stream] CIO failed — constructing memo from prior agent outputs")
+            trade_ideas = strategy_data.get("trade_ideas", [])
+            top_tickers = ", ".join(plan_data.get("tickers", [])[:4])
+            memo_data = {
+                "title": f"Analysis: {plan_data.get('query', 'Market Analysis')[:80]}",
+                "executive_summary": (
+                    f"Macro regime: {risk_data.get('macro_regime', 'unknown')}. "
+                    f"Risk level: {risk_data.get('overall_risk_level', 'elevated')}. "
+                    f"{len(trade_ideas)} trade ideas generated for {top_tickers}. "
+                    f"{strategy_data.get('strategy_narrative', '')[:300]}"
+                ),
+                "analysis": research_data.get("data_summary", ""),
+                "key_findings": [risk_data.get("risk_narrative", "")[:200]] if risk_data.get("risk_narrative") else [],
+            }
 
         yield keepalive()
 

@@ -81,7 +81,7 @@ async def run_research(state: ResearchDeskState) -> ResearchDeskState:
     logger.info("[orchestrator] Research Analyst gathering data")
     output = await _with_timeout(
         _research_analyst.analyze({"plan": state["plan_data"]}),
-        seconds=120, label="Research Analyst"
+        seconds=180, label="Research Analyst"
     )
     if output is None:
         state["research_data"] = {"data_summary": "Research timed out — using limited data."}
@@ -103,7 +103,7 @@ async def run_risk(state: ResearchDeskState) -> ResearchDeskState:
             "plan": state["plan_data"],
             "research": state["research_data"],
         }),
-        seconds=60, label="Risk Manager"
+        seconds=90, label="Risk Manager"
     )
     if output is None or (output and output.error):
         err = output.error if output else "timed out"
@@ -131,7 +131,7 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
             "research": state["research_data"],
             "risk": state["risk_data"],
         }),
-        seconds=60, label="Portfolio Strategist"
+        seconds=90, label="Portfolio Strategist"
     )
     if output is None or (output and output.error):
         err = output.error if output else "timed out"
@@ -159,12 +159,28 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
             "risk": state["risk_data"],
             "strategy": state["strategy_data"],
         }),
-        seconds=60, label="CIO Synthesizer"
+        seconds=120, label="CIO Synthesizer"
     )
-    if output is None:
-        state["error"] = "Memo synthesis timed out"
-    elif output.error:
-        state["error"] = f"Memo synthesis failed: {output.error}"
+    if output is None or (output and output.error):
+        err = output.error if output else "timed out"
+        logger.warning(f"[orchestrator] CIO failed ({err}) — constructing memo from prior outputs")
+        plan = state.get("plan_data", {})
+        risk = state.get("risk_data", {})
+        strategy = state.get("strategy_data", {})
+        research = state.get("research_data", {})
+        trade_ideas = strategy.get("trade_ideas", [])
+        top_tickers = ", ".join(plan.get("tickers", [])[:4])
+        state["memo_data"] = {
+            "title": f"Analysis: {plan.get('query', 'Market Analysis')[:80]}",
+            "executive_summary": (
+                f"Macro regime: {risk.get('macro_regime', 'unknown')}. "
+                f"Risk level: {risk.get('overall_risk_level', 'elevated')}. "
+                f"{len(trade_ideas)} trade ideas generated for {top_tickers}. "
+                f"{strategy.get('strategy_narrative', '')[:300]}"
+            ),
+            "analysis": research.get("data_summary", ""),
+            "key_findings": [risk.get("risk_narrative", "")[:200]] if risk.get("risk_narrative") else [],
+        }
     else:
         state["memo_data"] = output.output
     return state

@@ -29,6 +29,8 @@ def get_llm() -> ChatAnthropic:
             api_key=settings.ANTHROPIC_API_KEY,
             max_tokens=4096,
             temperature=0,
+            max_retries=3,
+            timeout=120,
         )
     return _llm
 

@@ -224,21 +224,20 @@ After gathering data, produce a JSON summary with:
 The data_summary is critical — it's what downstream agents (Risk Manager, Portfolio Strategist)
 will primarily read. Make it thorough, quantitative, and specific."""
 
-OUTPUT_INSTRUCTIONS = """CRITICAL: You have very limited iterations. Call at MOST 3-4 tools total,
-then IMMEDIATELY produce your JSON response. Do NOT try to gather data for every ticker —
-prioritize the 2-3 most important data points. Your data_summary narrative is the most
-important output — make it 2-3 paragraphs with specific numbers."""
+OUTPUT_INSTRUCTIONS = """You have up to 10 tool calls. Use them efficiently:
+- Call macro_snapshot first (1 call, covers all macro data).
+- Batch ticker research: fundamentals + news per ticker (2 calls each).
+- For 4 tickers: ~9 calls total. Prioritize the top 3-4 tickers.
+- Skip Alpha Vantage unless specifically needed — RSI/MACD can be inferred from price history.
+
+After gathering data, produce your JSON response immediately. Your data_summary narrative
+is the most important output — make it 3-4 paragraphs with specific numbers from the data."""
 
 
 class ResearchAnalyst(BaseAgent):
     agent_name = "research_analyst"
     system_prompt = SYSTEM_PROMPT
     output_instructions = OUTPUT_INSTRUCTIONS
-
-    def __init__(self):
-        super().__init__()
-        # Research analyst needs more iterations — it makes the most tool calls
-        self._max_iterations = 20
 
     def _build_executor(self):
         from langchain.agents import create_tool_calling_agent, AgentExecutor
@@ -253,7 +252,7 @@ class ResearchAnalyst(BaseAgent):
         agent = create_tool_calling_agent(self.llm, tools, prompt)
         return AgentExecutor(
             agent=agent, tools=tools, verbose=False,
-            max_iterations=8,
+            max_iterations=12,
             handle_parsing_errors=True,
         )
 
