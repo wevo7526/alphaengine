@@ -131,9 +131,14 @@ async def latest_signals(limit: int = 20, req: Request = None):
                 "intent": r.intent,
                 "title": r.title,
                 "executive_summary": r.executive_summary,
+                "analysis": r.analysis or "",
+                "key_findings": r.key_findings or [],
                 "macro_regime": r.macro_regime,
                 "overall_risk_level": r.overall_risk_level,
+                "risk_factors": r.risk_factors or [],
                 "trade_ideas": r.trade_ideas or [],
+                "portfolio_positioning": r.portfolio_positioning or "",
+                "hedging_recommendations": r.hedging_recommendations or [],
                 "tickers_analyzed": r.tickers_analyzed or [],
                 "themes": r.themes or [],
                 "created_at": r.created_at.isoformat() if r.created_at else None,
@@ -141,6 +146,21 @@ async def latest_signals(limit: int = 20, req: Request = None):
             for r in records
         ]
         return {"memos": memos, "count": len(memos)}
+
+
+@app.delete("/api/signals/{memo_id}")
+async def delete_memo(memo_id: str):
+    """Delete an intelligence memo by ID."""
+    async with async_session() as session:
+        result = await session.execute(
+            select(IntelligenceMemoRecord).where(IntelligenceMemoRecord.id == memo_id)
+        )
+        record = result.scalar_one_or_none()
+        if not record:
+            raise HTTPException(status_code=404, detail="Memo not found")
+        await session.delete(record)
+        await session.commit()
+    return {"deleted": memo_id}
 
 
 # === DATA ENDPOINTS ===

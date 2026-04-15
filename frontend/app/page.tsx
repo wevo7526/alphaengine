@@ -330,7 +330,7 @@ export default function HomePage() {
                 </div>
                 {expandedMemo === i && (
                   <div className="mt-2">
-                    <MemoPanel memo={memo} />
+                    <MemoPanel memo={memo} onDelete={(id) => setRecentMemos((prev) => prev.filter((m) => m.id !== id))} />
                   </div>
                 )}
               </div>

@@ -6,7 +6,7 @@ import { AnalysisTrace } from "@/components/AnalysisTrace";
 
 export default function AnalysisPage() {
   const [input, setInput] = useState("");
-  const { runs, activeRun, analyze } = useAnalysisContext();
+  const { runs, activeRun, analyze, removeRun } = useAnalysisContext();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -79,7 +79,7 @@ export default function AnalysisPage() {
                     <p className="text-[13px] text-text-primary">{run.query}</p>
                   </div>
                 </div>
-                <AnalysisTrace run={run} />
+                <AnalysisTrace run={run} onDeleteMemo={() => removeRun(run.id)} />
               </div>
             ))}
           </div>

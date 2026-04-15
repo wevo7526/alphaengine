@@ -7,6 +7,7 @@ interface AnalysisContextType {
   runs: AnalysisRun[];
   activeRun: string | null;
   analyze: (query: string) => Promise<void>;
+  removeRun: (id: string) => void;
 }
 
 const AnalysisContext = createContext<AnalysisContextType | null>(null);

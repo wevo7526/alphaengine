@@ -116,4 +116,6 @@ export const api = {
 
   agentStatus: () => request("/api/agents/status"),
   latestMemos: (limit = 20) => request(`/api/signals/latest?limit=${limit}`),
+  deleteMemo: (id: string) =>
+    request(`/api/signals/${id}`, { method: "DELETE" }),
 };

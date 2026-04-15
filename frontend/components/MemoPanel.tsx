@@ -178,11 +178,24 @@ function RiskMatrix({ factors }: { factors: RiskFactor[] }) {
   );
 }
 
-export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
+export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete?: (id: string) => void }) {
   const [showFull, setShowFull] = useState(false);
   const [enrichment, setEnrichment] = useState<EnrichmentData | null>(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const riskColor = RISK_LEVEL_STYLE[memo.overall_risk_level] ?? "text-text-tertiary";
+
+  const handleDelete = async () => {
+    const id = memo.id;
+    if (!id || deleting) return;
+    setDeleting(true);
+    try {
+      await api.deleteMemo(id);
+      onDelete?.(id);
+    } catch {
+      setDeleting(false);
+    }
+  };
 
   // Fetch computed enrichment data for all tickers in the memo
   useEffect(() => {
@@ -203,9 +216,21 @@ export function MemoPanel({ memo }: { memo: IntelligenceMemo }) {
     <div className="space-y-4" style={{ animation: "fade-in 0.5s ease-out" }}>
       {/* Title + Executive Summary */}
       <div className="rounded-xl border border-border-primary bg-bg-surface p-6">
-        <h2 className="text-lg font-semibold text-text-primary leading-snug mb-3">
-          {memo.title}
-        </h2>
+        <div className="flex items-start justify-between gap-4 mb-3">
+          <h2 className="text-lg font-semibold text-text-primary leading-snug">
+            {memo.title}
+          </h2>
+          {memo.id && onDelete && (
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-text-quaternary hover:text-signal-red hover:bg-signal-red/10 transition-colors disabled:opacity-30"
+              title="Delete this analysis"
+            >
+              {deleting ? "..." : "Delete"}
+            </button>
+          )}
+        </div>
         <p className="text-[13px] text-text-secondary leading-relaxed">
           {memo.executive_summary}
         </p>

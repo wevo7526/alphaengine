@@ -224,7 +224,7 @@ export default function PortfolioPage() {
                   </div>
                   {expandedMemo === i && (
                     <div className="mt-2">
-                      <MemoPanel memo={memo} />
+                      <MemoPanel memo={memo} onDelete={(id) => setMemos((prev) => prev.filter((m) => m.id !== id))} />
                     </div>
                   )}
                 </div>

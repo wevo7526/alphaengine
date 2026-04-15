@@ -146,7 +146,7 @@ function PhaseCard({
   );
 }
 
-export function AnalysisTrace({ run }: { run: AnalysisRun }) {
+export function AnalysisTrace({ run, onDeleteMemo }: { run: AnalysisRun; onDeleteMemo?: (id: string) => void }) {
   const currentIdx =
     run.phase === "complete" || run.phase === "error"
       ? PHASES.length
@@ -178,7 +178,7 @@ export function AnalysisTrace({ run }: { run: AnalysisRun }) {
 
       {/* Final output */}
       {run.phase === "complete" && run.result && (
-        <MemoPanel memo={run.result} />
+        <MemoPanel memo={run.result} onDelete={onDeleteMemo} />
       )}
 
       {/* Error */}

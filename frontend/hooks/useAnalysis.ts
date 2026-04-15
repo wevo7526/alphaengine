@@ -150,5 +150,9 @@ export function useAnalysis() {
     [updateRun]
   );
 
-  return { runs, activeRun, analyze };
+  const removeRun = useCallback((id: string) => {
+    setRuns((prev) => prev.filter((r) => r.id !== id));
+  }, []);
+
+  return { runs, activeRun, analyze, removeRun };
 }
