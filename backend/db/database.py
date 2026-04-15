@@ -37,11 +37,37 @@ async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
 async def init_db():
-    """Create all tables. Called on app startup."""
+    """Create all tables and add any missing columns. Called on app startup."""
     async with engine.begin() as conn:
         from db.models import Base  # noqa: F811
         await conn.run_sync(Base.metadata.create_all)
+
+    # Migrate missing columns for SQLite (create_all doesn't alter existing tables)
+    url = _get_url()
+    if "sqlite" in url:
+        await _migrate_sqlite()
+
     logger.info("Database tables initialized")
+
+
+async def _migrate_sqlite():
+    """Add missing columns to existing SQLite tables."""
+    migrations = [
+        ("intelligence_memos", "user_id", "TEXT"),
+        ("trades", "user_id", "TEXT"),
+    ]
+    async with engine.begin() as conn:
+        for table, column, col_type in migrations:
+            try:
+                await conn.execute(
+                    __import__("sqlalchemy").text(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
+                    )
+                )
+                logger.info(f"Added column {table}.{column}")
+            except Exception:
+                # Column already exists — ignore
+                pass
 
 
 async def get_session() -> AsyncSession:

@@ -50,6 +50,11 @@ const BOTTOM = [{ href: "/settings", label: "Settings", icon: IconSettings }];
 export function Sidebar() {
   const pathname = usePathname();
 
+  // Hide sidebar on auth pages — auth layout takes over the full screen
+  if (pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up")) {
+    return null;
+  }
+
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 

@@ -911,7 +911,12 @@ async def analyze_stream(request: AnalyzeRequest):
 
     async def event_stream():
         def send(data: dict) -> str:
-            return f"data: {json.dumps(data)}\n\n"
+            try:
+                return f"data: {json.dumps(data, default=str)}\n\n"
+            except Exception:
+                # Last resort — at least send something so the stream doesn't die
+                safe = {k: str(v)[:200] if not isinstance(v, (str, int, float, bool, type(None))) else v for k, v in data.items()}
+                return f"data: {json.dumps(safe, default=str)}\n\n"
 
         # Phase 1: Interpret
         yield send({"phase": "interpreting", "agent": "query_interpreter"})
@@ -1039,4 +1044,12 @@ async def analyze_stream(request: AnalyzeRequest):
             logger.error(f"[stream] Memo construction failed: {e}")
             yield send({"phase": "error", "error": f"Memo construction failed: {e}"})
 
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

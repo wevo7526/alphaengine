@@ -4,10 +4,15 @@ Alpha Engine schemas — structured types for the hedge fund research desk pipel
 Pipeline: Query Interpreter → Research Analyst → Risk Manager → Portfolio Strategist → CIO Synthesizer
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional
 from enum import Enum
 from datetime import datetime
+
+
+# All schemas use extra="ignore" because LLM outputs frequently include
+# unexpected fields. Without this, Pydantic throws ValidationError and
+# the streaming pipeline dies silently.
 
 
 # === Query Classification ===
@@ -21,6 +26,8 @@ class QueryIntent(str, Enum):
 
 
 class AnalysisPlan(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     """Output of the Query Interpreter — the research plan."""
     query: str
     intent: QueryIntent
@@ -38,6 +45,8 @@ class AnalysisPlan(BaseModel):
 # === Research Data ===
 
 class ResearchData(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     """Structured output from the Research Analyst."""
     macro_data: Optional[dict] = None
     ticker_data: dict[str, dict] = Field(default_factory=dict)
@@ -50,6 +59,8 @@ class ResearchData(BaseModel):
 # === Risk Assessment ===
 
 class RiskFactor(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     category: str = ""
     description: str = ""
     severity: str = "medium"
@@ -58,11 +69,13 @@ class RiskFactor(BaseModel):
 
 
 class RiskAssessment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     """Output from the Risk Manager."""
     macro_regime: str = "unknown"
     regime_confidence: int = Field(default=50, ge=0, le=100)
     risk_factors: list[RiskFactor] = Field(default_factory=list)
-    overall_risk_level: str
+    overall_risk_level: str = "elevated"
     risk_narrative: str = ""
 
 
@@ -76,7 +89,25 @@ class SignalDirection(str, Enum):
     STRONG_BEARISH = "strong_bearish"
 
 
+# Map common LLM synonyms to valid enum values
+_DIRECTION_ALIASES = {
+    "long": "bullish",
+    "short": "bearish",
+    "buy": "bullish",
+    "sell": "bearish",
+    "strong_buy": "strong_bullish",
+    "strong_sell": "strong_bearish",
+    "strong buy": "strong_bullish",
+    "strong sell": "strong_bearish",
+    "hold": "neutral",
+    "overweight": "bullish",
+    "underweight": "bearish",
+}
+
+
 class TradeIdea(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     ticker: str = ""
     direction: SignalDirection = SignalDirection.NEUTRAL
     conviction: int = Field(default=50, ge=0, le=100)
@@ -90,8 +121,38 @@ class TradeIdea(BaseModel):
     catalysts: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
 
+    @field_validator("direction", mode="before")
+    @classmethod
+    def normalize_direction(cls, v):
+        if isinstance(v, str):
+            v_lower = v.strip().lower()
+            if v_lower in _DIRECTION_ALIASES:
+                return _DIRECTION_ALIASES[v_lower]
+        return v
+
+    @field_validator("conviction", mode="before")
+    @classmethod
+    def clamp_conviction(cls, v):
+        try:
+            v = int(v)
+            return max(0, min(100, v))
+        except (ValueError, TypeError):
+            return 50
+
+    @field_validator("stop_loss", "take_profit", "risk_reward_ratio", mode="before")
+    @classmethod
+    def coerce_float(cls, v):
+        if v is None or v == "" or v == "N/A" or v == "n/a":
+            return None
+        try:
+            return float(v)
+        except (ValueError, TypeError):
+            return None
+
 
 class PortfolioStrategy(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     """Output from the Portfolio Strategist."""
     trade_ideas: list[TradeIdea] = Field(default_factory=list)
     portfolio_positioning: str = "neutral"
@@ -102,6 +163,8 @@ class PortfolioStrategy(BaseModel):
 # === Final Output ===
 
 class IntelligenceMemo(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     """The final CIO-level intelligence memo with trade ideas."""
     query: str = ""
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -119,10 +182,22 @@ class IntelligenceMemo(BaseModel):
     themes: list[str] = Field(default_factory=list)
     intent: QueryIntent = QueryIntent.THEMATIC_RESEARCH
 
+    @field_validator("intent", mode="before")
+    @classmethod
+    def coerce_intent(cls, v):
+        if isinstance(v, str):
+            try:
+                return QueryIntent(v)
+            except ValueError:
+                return QueryIntent.THEMATIC_RESEARCH
+        return v
+
 
 # === Internal Agent Output ===
 
 class AgentOutput(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     """Generic internal agent output for pipeline state."""
     agent_name: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)

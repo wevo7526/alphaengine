@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 import { Sidebar } from "@/components/Sidebar";
+import { MainContent } from "@/components/MainContent";
 import { Providers } from "@/components/Providers";
 
 const geistSans = Geist({
@@ -27,6 +28,7 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider
+      afterSignOutUrl="/sign-in"
       appearance={{
         variables: {
           colorPrimary: "#3b82f6",
@@ -100,9 +102,7 @@ export default function RootLayout({
         <body className="h-full flex">
           <Providers>
             <Sidebar />
-            <main className="flex-1 ml-52 flex flex-col min-h-screen">
-              {children}
-            </main>
+            <MainContent>{children}</MainContent>
           </Providers>
         </body>
       </html>
