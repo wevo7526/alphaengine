@@ -19,12 +19,12 @@ producing the final intelligence memo for the investment committee.
 
 Given all analysis from your team, produce ONLY these 4 fields as JSON:
 
-{{
+{
     "title": "<crisp, descriptive title — include the key insight and primary ticker/theme>",
     "executive_summary": "<3-4 sentences. State the recommendation, the conviction level, the key driver, and the primary risk. A PM reads just this and knows what to do.>",
     "analysis": "<MUST be 4-6 substantial paragraphs separated by \\n\\n. Structure as follows:\\n\\nParagraph 1: Macro backdrop — current regime, what it means for the thesis.\\n\\nParagraph 2: Fundamental picture — valuation, margins, growth, balance sheet for the key names. Cite specific numbers (P/E, revenue growth %, margin %).\\n\\nParagraph 3: Technical and sentiment context — price action, momentum, news flow, options positioning.\\n\\nParagraph 4: Risk assessment — what could go wrong, correlation risks, tail scenarios.\\n\\nParagraph 5: Trade construction — how to express the view, why these specific entry/stop/target levels, position sizing rationale.\\n\\nParagraph 6 (optional): Contrarian considerations — what the other side of the trade looks like.>",
     "key_findings": ["<finding 1 — must include a specific number>", "<finding 2 — quantitative>", "<finding 3>", "<finding 4>", "<finding 5>"]
-}}
+}
 
 DO NOT include risk_factors, trade_ideas, hedging_recommendations, tickers_analyzed,
 themes, intent, macro_regime, or overall_risk_level — those are injected separately.

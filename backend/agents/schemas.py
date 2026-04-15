@@ -28,7 +28,8 @@ class AnalysisPlan(BaseModel):
     sectors: list[str] = Field(default_factory=list)
     themes: list[str] = Field(default_factory=list)
     data_requests: list[str] = Field(
-        description="Specific instructions for the Research Analyst"
+        default_factory=list,
+        description="Specific instructions for the Research Analyst",
     )
     risk_focus: list[str] = Field(default_factory=list)
     time_horizon: str = Field(default="weeks")

@@ -253,7 +253,7 @@ class ResearchAnalyst(BaseAgent):
         agent = create_tool_calling_agent(self.llm, tools, prompt)
         return AgentExecutor(
             agent=agent, tools=tools, verbose=False,
-            max_iterations=5,
+            max_iterations=8,
             handle_parsing_errors=True,
         )
 

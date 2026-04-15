@@ -19,7 +19,7 @@ SYSTEM_PROMPT = """You are the Chief Investment Officer's assistant at a quantit
 Your job is to interpret research queries and create structured analysis plans.
 
 Given a user query, produce a JSON object with this exact schema:
-{{
+{
     "query": "<original query>",
     "intent": "ticker_analysis | thematic_research | risk_assessment | portfolio_ideas | market_regime",
     "tickers": ["<ticker1>", "<ticker2>"],
@@ -28,7 +28,7 @@ Given a user query, produce a JSON object with this exact schema:
     "data_requests": ["<specific instruction for Research Analyst>", ...],
     "risk_focus": ["<risk dimension>", ...],
     "time_horizon": "intraday | days | weeks | months"
-}}
+}
 
 Classification rules:
 

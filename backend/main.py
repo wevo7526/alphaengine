@@ -925,51 +925,75 @@ async def analyze_stream(request: AnalyzeRequest):
             plan_data = plan.model_dump(mode="json")
             yield send({"phase": "interpreting_done", "tickers": plan_data.get("tickers", []), "intent": plan_data.get("intent", "")})
         except Exception as e:
-            yield send({"phase": "error", "error": str(e)})
+            logger.error(f"[stream] Query Interpreter failed: {e}")
+            yield send({"phase": "error", "error": f"Query interpretation failed: {e}"})
             return
 
         # Phase 2: Research
         yield send({"phase": "researching", "agent": "research_analyst"})
-        output = await _with_timeout(
-            _research_analyst.analyze({"plan": plan_data}), seconds=120, label="RA"
-        )
-        research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
+        try:
+            output = await _with_timeout(
+                _research_analyst.analyze({"plan": plan_data}), seconds=120, label="RA"
+            )
+            research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
+        except Exception as e:
+            logger.error(f"[stream] Research Analyst failed: {e}")
+            research_data = {"data_summary": f"Research failed: {e}"}
         yield send({"phase": "researching_done"})
 
         # Phase 3: Risk
         yield send({"phase": "risk_assessment", "agent": "risk_manager"})
-        output = await _with_timeout(
-            _risk_manager.analyze({"plan": plan_data, "research": research_data}),
-            seconds=60, label="RM"
-        )
-        risk_data = output.output if output and not output.error else {
-            "macro_regime": "unknown", "regime_confidence": 0,
-            "risk_factors": [], "overall_risk_level": "elevated",
-            "risk_narrative": "Risk assessment unavailable.",
-        }
+        try:
+            output = await _with_timeout(
+                _risk_manager.analyze({"plan": plan_data, "research": research_data}),
+                seconds=60, label="RM"
+            )
+            risk_data = output.output if output and not output.error else {
+                "macro_regime": "unknown", "regime_confidence": 0,
+                "risk_factors": [], "overall_risk_level": "elevated",
+                "risk_narrative": "Risk assessment unavailable.",
+            }
+        except Exception as e:
+            logger.error(f"[stream] Risk Manager failed: {e}")
+            risk_data = {
+                "macro_regime": "unknown", "regime_confidence": 0,
+                "risk_factors": [], "overall_risk_level": "elevated",
+                "risk_narrative": f"Risk assessment failed: {e}",
+            }
         yield send({"phase": "risk_assessment_done", "macro_regime": risk_data.get("macro_regime", "")})
 
         # Phase 4: Strategy
         yield send({"phase": "strategizing", "agent": "portfolio_strategist"})
-        output = await _with_timeout(
-            _portfolio_strategist.analyze({"plan": plan_data, "research": research_data, "risk": risk_data}),
-            seconds=60, label="PS"
-        )
-        strategy_data = output.output if output and not output.error else {
-            "trade_ideas": [], "portfolio_positioning": "neutral",
-            "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
-        }
+        try:
+            output = await _with_timeout(
+                _portfolio_strategist.analyze({"plan": plan_data, "research": research_data, "risk": risk_data}),
+                seconds=60, label="PS"
+            )
+            strategy_data = output.output if output and not output.error else {
+                "trade_ideas": [], "portfolio_positioning": "neutral",
+                "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
+            }
+        except Exception as e:
+            logger.error(f"[stream] Portfolio Strategist failed: {e}")
+            strategy_data = {
+                "trade_ideas": [], "portfolio_positioning": "neutral",
+                "hedging_recommendations": [], "strategy_narrative": f"Strategy failed: {e}",
+            }
         yield send({"phase": "strategizing_done", "trade_count": len(strategy_data.get("trade_ideas", []))})
 
         # Phase 5: Synthesize
         yield send({"phase": "synthesizing", "agent": "cio_synthesizer"})
-        output = await _with_timeout(
-            _cio_synthesizer.synthesize({"plan": plan_data, "research": research_data, "risk": risk_data, "strategy": strategy_data}),
-            seconds=60, label="CIO"
-        )
-        memo_data = output.output if output and not output.error else {"title": "Analysis incomplete", "executive_summary": "", "analysis": "", "key_findings": []}
+        try:
+            output = await _with_timeout(
+                _cio_synthesizer.synthesize({"plan": plan_data, "research": research_data, "risk": risk_data, "strategy": strategy_data}),
+                seconds=60, label="CIO"
+            )
+            memo_data = output.output if output and not output.error else {"title": "Analysis incomplete", "executive_summary": "", "analysis": "", "key_findings": []}
+        except Exception as e:
+            logger.error(f"[stream] CIO Synthesizer failed: {e}")
+            memo_data = {"title": "Analysis incomplete", "executive_summary": str(e), "analysis": "", "key_findings": []}
 
-        # Inject structured data
+        # Inject structured data from prior agents (never trust LLM reconstruction)
         memo_data["query"] = query
         memo_data["intent"] = plan_data.get("intent", "thematic_research")
         memo_data["tickers_analyzed"] = plan_data.get("tickers", [])
@@ -1007,11 +1031,12 @@ async def analyze_stream(request: AnalyzeRequest):
                     session.add(record)
                     await session.commit()
                     result["id"] = record.id
-            except Exception:
-                pass
+            except Exception as db_err:
+                logger.warning(f"[stream] DB persist failed (non-fatal): {db_err}")
 
             yield send({"phase": "complete", "memo": result})
         except Exception as e:
-            yield send({"phase": "error", "error": str(e)})
+            logger.error(f"[stream] Memo construction failed: {e}")
+            yield send({"phase": "error", "error": f"Memo construction failed: {e}"})
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

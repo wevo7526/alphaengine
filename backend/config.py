@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     model_config = {
         "env_file": str(_ENV_FILE),
         "env_file_encoding": "utf-8",
+        "extra": "ignore",
     }
 
 
