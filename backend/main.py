@@ -117,35 +117,39 @@ async def analyze(request: AnalyzeRequest, req: Request = None):
 @app.get("/api/signals/latest")
 async def latest_signals(limit: int = 20, req: Request = None):
     """Get most recent intelligence memos for the current user."""
-    user_id = get_user_id(req) if req else None
-    async with async_session() as session:
-        query = select(IntelligenceMemoRecord).order_by(desc(IntelligenceMemoRecord.created_at))
-        if user_id:
-            query = query.where(IntelligenceMemoRecord.user_id == user_id)
-        result = await session.execute(query.limit(limit))
-        records = result.scalars().all()
-        memos = [
-            {
-                "id": r.id,
-                "query": r.query,
-                "intent": r.intent,
-                "title": r.title,
-                "executive_summary": r.executive_summary,
-                "analysis": r.analysis or "",
-                "key_findings": r.key_findings or [],
-                "macro_regime": r.macro_regime,
-                "overall_risk_level": r.overall_risk_level,
-                "risk_factors": r.risk_factors or [],
-                "trade_ideas": r.trade_ideas or [],
-                "portfolio_positioning": r.portfolio_positioning or "",
-                "hedging_recommendations": r.hedging_recommendations or [],
-                "tickers_analyzed": r.tickers_analyzed or [],
-                "themes": r.themes or [],
-                "created_at": r.created_at.isoformat() if r.created_at else None,
-            }
-            for r in records
-        ]
-        return {"memos": memos, "count": len(memos)}
+    try:
+        user_id = get_user_id(req) if req else None
+        async with async_session() as session:
+            query = select(IntelligenceMemoRecord).order_by(desc(IntelligenceMemoRecord.created_at))
+            if user_id:
+                query = query.where(IntelligenceMemoRecord.user_id == user_id)
+            result = await session.execute(query.limit(limit))
+            records = result.scalars().all()
+            memos = [
+                {
+                    "id": r.id,
+                    "query": r.query,
+                    "intent": r.intent,
+                    "title": r.title,
+                    "executive_summary": r.executive_summary,
+                    "analysis": r.analysis or "",
+                    "key_findings": r.key_findings or [],
+                    "macro_regime": r.macro_regime,
+                    "overall_risk_level": r.overall_risk_level,
+                    "risk_factors": r.risk_factors or [],
+                    "trade_ideas": r.trade_ideas or [],
+                    "portfolio_positioning": r.portfolio_positioning or "",
+                    "hedging_recommendations": r.hedging_recommendations or [],
+                    "tickers_analyzed": r.tickers_analyzed or [],
+                    "themes": r.themes or [],
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in records
+            ]
+            return {"memos": memos, "count": len(memos)}
+    except Exception as e:
+        logger.error(f"Failed to fetch memos: {e}")
+        return {"memos": [], "count": 0}
 
 
 @app.delete("/api/signals/{memo_id}")
@@ -345,11 +349,19 @@ async def macro_time_series():
 @app.get("/api/quant/portfolio-risk")
 async def portfolio_risk_analysis():
     """Full portfolio risk dashboard: VaR, CVaR, sector exposure, circuit breaker."""
-    from quant.risk import compute_ewma_covariance, compute_portfolio_var, compute_portfolio_cvar, check_sector_limits, drawdown_circuit_breaker
-    from quant.computations import compute_drawdown
+    try:
+        from quant.risk import compute_ewma_covariance, compute_portfolio_var, compute_portfolio_cvar, check_sector_limits, drawdown_circuit_breaker
+        from quant.computations import compute_drawdown
+    except Exception as e:
+        logger.error(f"Import error in portfolio-risk: {e}")
+        return {"error": str(e), "var_95": None, "cvar_95": None}
 
     # Get open trades as positions
-    trades = await list_trades_internal("open")
+    try:
+        trades = await list_trades_internal("open")
+    except Exception as e:
+        logger.error(f"Failed to get trades for risk: {e}")
+        trades = []
     if not trades:
         return {"error": "No open positions", "var_95": None, "cvar_95": None}
 
@@ -826,38 +838,42 @@ async def close_trade(trade_id: str, req: CloseTradeRequest):
 @app.get("/api/portfolio/trades")
 async def list_trades(status: str = "all", req: Request = None):
     """Get trade journal for current user — open, closed, or all."""
-    from db.models import TradeRecord
-    user_id = get_user_id(req) if req else None
-    async with async_session() as session:
-        query = select(TradeRecord).order_by(desc(TradeRecord.opened_at))
-        if user_id:
-            query = query.where(TradeRecord.user_id == user_id)
-        if status != "all":
-            query = query.where(TradeRecord.status == status)
-        result = await session.execute(query.limit(50))
-        records = result.scalars().all()
-        return {
-            "trades": [
-                {
-                    "id": r.id,
-                    "ticker": r.ticker,
-                    "direction": r.direction,
-                    "action": r.action,
-                    "entry_price": r.entry_price,
-                    "stop_loss": r.stop_loss,
-                    "take_profit": r.take_profit,
-                    "position_size_pct": r.position_size_pct,
-                    "conviction": r.conviction,
-                    "thesis": r.thesis,
-                    "status": r.status,
-                    "realized_pnl": r.realized_pnl,
-                    "opened_at": r.opened_at.isoformat() if r.opened_at else None,
-                    "closed_at": r.closed_at.isoformat() if r.closed_at else None,
-                }
-                for r in records
-            ],
-            "count": len(records),
-        }
+    try:
+        from db.models import TradeRecord
+        user_id = get_user_id(req) if req else None
+        async with async_session() as session:
+            query = select(TradeRecord).order_by(desc(TradeRecord.opened_at))
+            if user_id:
+                query = query.where(TradeRecord.user_id == user_id)
+            if status != "all":
+                query = query.where(TradeRecord.status == status)
+            result = await session.execute(query.limit(50))
+            records = result.scalars().all()
+            return {
+                "trades": [
+                    {
+                        "id": r.id,
+                        "ticker": r.ticker,
+                        "direction": r.direction,
+                        "action": r.action,
+                        "entry_price": r.entry_price,
+                        "stop_loss": r.stop_loss,
+                        "take_profit": r.take_profit,
+                        "position_size_pct": r.position_size_pct,
+                        "conviction": r.conviction,
+                        "thesis": r.thesis,
+                        "status": r.status,
+                        "realized_pnl": r.realized_pnl,
+                        "opened_at": r.opened_at.isoformat() if r.opened_at else None,
+                        "closed_at": r.closed_at.isoformat() if r.closed_at else None,
+                    }
+                    for r in records
+                ],
+                "count": len(records),
+            }
+    except Exception as e:
+        logger.error(f"Failed to list trades: {e}")
+        return {"trades": [], "count": 0}
 
 
 @app.get("/api/portfolio/backtest")

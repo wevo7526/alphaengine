@@ -42,16 +42,14 @@ async def init_db():
         from db.models import Base  # noqa: F811
         await conn.run_sync(Base.metadata.create_all)
 
-    # Migrate missing columns for SQLite (create_all doesn't alter existing tables)
-    url = _get_url()
-    if "sqlite" in url:
-        await _migrate_sqlite()
+    # Migrate missing columns (create_all doesn't alter existing tables)
+    await _migrate_columns()
 
     logger.info("Database tables initialized")
 
 
-async def _migrate_sqlite():
-    """Add missing columns to existing SQLite tables."""
+async def _migrate_columns():
+    """Add missing columns to existing tables (works for both SQLite and Postgres)."""
     migrations = [
         ("intelligence_memos", "user_id", "TEXT"),
         ("trades", "user_id", "TEXT"),
@@ -64,7 +62,7 @@ async def _migrate_sqlite():
                         f"ALTER TABLE {table} ADD COLUMN {column} {col_type}"
                     )
                 )
-                logger.info(f"Added column {table}.{column}")
+                logger.info(f"Migrated: added {table}.{column}")
             except Exception:
                 # Column already exists — ignore
                 pass
