@@ -38,34 +38,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Alpha Engine API", version="2.0.0", lifespan=lifespan)
 
-def _get_allowed_origins() -> list[str]:
-    """Build CORS origins from config. Falls back to permissive in dev."""
-    origins = [settings.FRONTEND_URL]
-    if settings.BACKEND_URL:
-        origins.append(settings.BACKEND_URL)
-    if settings.ENV == "production":
-        # Add any extra origins from env
-        extra = settings.CORS_ORIGINS
-        if extra:
-            origins.extend([o.strip() for o in extra.split(",") if o.strip()])
-        # Auto-allow Railway domains derived from configured URLs
-        for url in [settings.FRONTEND_URL, settings.BACKEND_URL]:
-            if "railway.app" in url:
-                # Allow both http and https variants
-                origins.append(url.replace("http://", "https://"))
-    else:
-        # Dev mode: allow localhost variants
-        origins.extend([
-            "http://localhost:3000",
-            "http://localhost:8000",
-            "http://127.0.0.1:3000",
-            "http://127.0.0.1:8000",
-        ])
-    return list(set(o for o in origins if o))
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_get_allowed_origins(),
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
