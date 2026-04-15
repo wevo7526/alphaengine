@@ -1,9 +1,14 @@
 function getApiBase(): string {
+  // Build-time env var takes priority
   if (process.env.NEXT_PUBLIC_BACKEND_URL) {
     return process.env.NEXT_PUBLIC_BACKEND_URL;
   }
-  if (typeof window !== "undefined" && window.location.hostname.includes("railway.app")) {
-    return "https://alpha-backend-production-51df.up.railway.app";
+  // Runtime detection for Railway production
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host.includes("railway.app") || host.includes("alphaengine")) {
+      return "https://alpha-backend-production-51df.up.railway.app";
+    }
   }
   return "http://localhost:8000";
 }

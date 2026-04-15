@@ -933,6 +933,10 @@ async def analyze_stream(request: AnalyzeRequest):
                 safe = {k: str(v)[:200] if not isinstance(v, (str, int, float, bool, type(None))) else v for k, v in data.items()}
                 return f"data: {json.dumps(safe, default=str)}\n\n"
 
+        def keepalive() -> str:
+            """SSE comment to keep the connection alive through proxies."""
+            return ": keepalive\n\n"
+
         # Phase 1: Interpret
         yield send({"phase": "interpreting", "agent": "query_interpreter"})
         try:
@@ -949,16 +953,17 @@ async def analyze_stream(request: AnalyzeRequest):
             yield send({"phase": "error", "error": f"Query interpretation failed: {e}"})
             return
 
-        # Phase 2: Research
+        # Phase 2: Research (longest phase — send keepalives)
         yield send({"phase": "researching", "agent": "research_analyst"})
         try:
             output = await _with_timeout(
-                _research_analyst.analyze({"plan": plan_data}), seconds=120, label="RA"
+                _research_analyst.analyze({"plan": plan_data}), seconds=180, label="RA"
             )
             research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
         except Exception as e:
             logger.error(f"[stream] Research Analyst failed: {e}")
             research_data = {"data_summary": f"Research failed: {e}"}
+        yield keepalive()
         yield send({"phase": "researching_done"})
 
         # Phase 3: Risk
@@ -966,7 +971,7 @@ async def analyze_stream(request: AnalyzeRequest):
         try:
             output = await _with_timeout(
                 _risk_manager.analyze({"plan": plan_data, "research": research_data}),
-                seconds=60, label="RM"
+                seconds=90, label="RM"
             )
             risk_data = output.output if output and not output.error else {
                 "macro_regime": "unknown", "regime_confidence": 0,
@@ -980,6 +985,7 @@ async def analyze_stream(request: AnalyzeRequest):
                 "risk_factors": [], "overall_risk_level": "elevated",
                 "risk_narrative": f"Risk assessment failed: {e}",
             }
+        yield keepalive()
         yield send({"phase": "risk_assessment_done", "macro_regime": risk_data.get("macro_regime", "")})
 
         # Phase 4: Strategy
@@ -987,7 +993,7 @@ async def analyze_stream(request: AnalyzeRequest):
         try:
             output = await _with_timeout(
                 _portfolio_strategist.analyze({"plan": plan_data, "research": research_data, "risk": risk_data}),
-                seconds=60, label="PS"
+                seconds=90, label="PS"
             )
             strategy_data = output.output if output and not output.error else {
                 "trade_ideas": [], "portfolio_positioning": "neutral",
@@ -999,6 +1005,7 @@ async def analyze_stream(request: AnalyzeRequest):
                 "trade_ideas": [], "portfolio_positioning": "neutral",
                 "hedging_recommendations": [], "strategy_narrative": f"Strategy failed: {e}",
             }
+        yield keepalive()
         yield send({"phase": "strategizing_done", "trade_count": len(strategy_data.get("trade_ideas", []))})
 
         # Phase 5: Synthesize
@@ -1006,12 +1013,14 @@ async def analyze_stream(request: AnalyzeRequest):
         try:
             output = await _with_timeout(
                 _cio_synthesizer.synthesize({"plan": plan_data, "research": research_data, "risk": risk_data, "strategy": strategy_data}),
-                seconds=60, label="CIO"
+                seconds=90, label="CIO"
             )
             memo_data = output.output if output and not output.error else {"title": "Analysis incomplete", "executive_summary": "", "analysis": "", "key_findings": []}
         except Exception as e:
             logger.error(f"[stream] CIO Synthesizer failed: {e}")
             memo_data = {"title": "Analysis incomplete", "executive_summary": str(e), "analysis": "", "key_findings": []}
+
+        yield keepalive()
 
         # Inject structured data from prior agents (never trust LLM reconstruction)
         memo_data["query"] = query

@@ -7,11 +7,13 @@ RUN npm ci
 
 COPY . .
 
-ARG NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# Build-time env vars for Next.js (baked into the JS bundle)
+ARG NEXT_PUBLIC_BACKEND_URL
+ENV NEXT_PUBLIC_BACKEND_URL=$NEXT_PUBLIC_BACKEND_URL
 
 RUN npm run build
 
-EXPOSE 3000
+# Railway assigns $PORT dynamically — must not hardcode
+ENV PORT=3000
 
-CMD ["npm", "start"]
+CMD ["sh", "-c", "npx next start -p $PORT"]

@@ -7,12 +7,17 @@ import type { IntelligenceMemo } from "@/lib/types";
 import { ConvictionBar } from "@/components/ConvictionBar";
 import { MemoPanel } from "@/components/MemoPanel";
 
-const API_BASE = (() => {
+// Use the same base URL detection as the shared api module
+function getApiBase(): string {
   if (process.env.NEXT_PUBLIC_BACKEND_URL) return process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (typeof window !== "undefined" && window.location.hostname.includes("railway.app"))
-    return "https://alpha-backend-production-51df.up.railway.app";
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host.includes("railway.app") || host.includes("alphaengine"))
+      return "https://alpha-backend-production-51df.up.railway.app";
+  }
   return "http://localhost:8000";
-})();
+}
+const API_BASE = getApiBase();
 
 interface Trade {
   id: string;
