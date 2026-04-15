@@ -119,6 +119,7 @@ export const api = {
   optimize: (config: { tickers: string[]; method?: string; trade_ideas?: unknown[] }) =>
     request("/api/portfolio/optimize", { method: "POST", body: JSON.stringify(config) }),
 
+  evaluateTrades: () => request("/api/portfolio/backtest"),
   agentStatus: () => request("/api/agents/status"),
   latestMemos: (limit = 20) => request(`/api/signals/latest?limit=${limit}`),
   deleteMemo: (id: string) =>

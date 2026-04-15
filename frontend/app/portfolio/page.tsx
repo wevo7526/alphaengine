@@ -7,17 +7,7 @@ import type { IntelligenceMemo } from "@/lib/types";
 import { ConvictionBar } from "@/components/ConvictionBar";
 import { MemoPanel } from "@/components/MemoPanel";
 
-// Use the same base URL detection as the shared api module
-function getApiBase(): string {
-  if (process.env.NEXT_PUBLIC_BACKEND_URL) return process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (typeof window !== "undefined") {
-    const host = window.location.hostname;
-    if (host.includes("railway.app") || host.includes("alphaengine"))
-      return "https://alpha-backend-production-51df.up.railway.app";
-  }
-  return "http://localhost:8000";
-}
-const API_BASE = getApiBase();
+// Removed: was evaluating at module load (SSR) and always returning localhost
 
 interface Trade {
   id: string;
@@ -87,11 +77,11 @@ export default function PortfolioPage() {
 
   const runBacktest = () => {
     setBacktesting(true);
-    fetch(`${API_BASE}/api/portfolio/backtest`)
-      .then((r) => r.json())
-      .then((d: { trades: BacktestResult[]; summary: BacktestSummary }) => {
-        setBacktestResults(d.trades);
-        setBacktestSummary(d.summary);
+    api.evaluateTrades()
+      .then((d: unknown) => {
+        const data = d as { trades: BacktestResult[]; summary: BacktestSummary };
+        setBacktestResults(data.trades);
+        setBacktestSummary(data.summary);
         setBacktesting(false);
         setTab("backtest");
       })
