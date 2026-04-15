@@ -113,11 +113,6 @@ async def analyze(request: AnalyzeRequest, req: Request = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/analyze/{ticker}")
-async def analyze_ticker(ticker: str):
-    """Legacy ticker endpoint — redirects to query-based analysis."""
-    return await analyze(AnalyzeRequest(query=f"Deep analysis of {ticker.upper()}"))
-
 
 @app.get("/api/signals/latest")
 async def latest_signals(limit: int = 20, req: Request = None):
@@ -1053,3 +1048,11 @@ async def analyze_stream(request: AnalyzeRequest):
             "Connection": "keep-alive",
         },
     )
+
+
+# Legacy ticker endpoint — MUST be after /api/analyze/stream to avoid
+# FastAPI matching /api/analyze/{ticker} where ticker="stream"
+@app.post("/api/analyze/{ticker}")
+async def analyze_ticker(ticker: str):
+    """Legacy ticker endpoint — redirects to query-based analysis."""
+    return await analyze(AnalyzeRequest(query=f"Deep analysis of {ticker.upper()}"))
