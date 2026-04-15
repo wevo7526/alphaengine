@@ -22,11 +22,12 @@ except ImportError:
     logger.warning("hmmlearn not installed — regime detection will use rule-based fallback")
 
 
-REGIME_LABELS = {0: "risk_on", 1: "risk_off", 2: "transition"}
+_DEFAULT_REGIME_LABELS = {0: "risk_on", 1: "risk_off", 2: "transition"}
 
 # Cache fitted model
 _fitted_model = None
 _fitted_scaler = None
+_fitted_labels: dict = dict(_DEFAULT_REGIME_LABELS)
 _fit_timestamp = 0
 _FIT_TTL = 86400  # Refit daily
 
@@ -57,7 +58,7 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
     macro_history = [{date, vix, credit_spread, yield_curve}, ...]
     Returns True if fitting succeeded.
     """
-    global _fitted_model, _fitted_scaler, _fit_timestamp
+    global _fitted_model, _fitted_scaler, _fitted_labels, _fit_timestamp
 
     if not HMM_AVAILABLE:
         return False
@@ -92,15 +93,16 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
         vix_means = means[:, 0]  # First feature is VIX (scaled)
         sorted_indices = np.argsort(vix_means)
         # Remap: lowest VIX cluster = risk_on, highest = risk_off
-        global REGIME_LABELS
-        REGIME_LABELS = {
-            sorted_indices[0]: "risk_on",
-            sorted_indices[1]: "transition",
-            sorted_indices[2]: "risk_off",
+        new_labels = {
+            int(sorted_indices[0]): "risk_on",
+            int(sorted_indices[1]): "transition",
+            int(sorted_indices[2]): "risk_off",
         }
 
+        # Atomic swap — assign all at once to avoid partial state
         _fitted_model = model
         _fitted_scaler = scaler
+        _fitted_labels = new_labels
         _fit_timestamp = time.time()
         logger.info("HMM regime model fitted successfully")
         return True
@@ -124,8 +126,8 @@ def classify_regime(vix: float, credit_spread: float, yield_curve: float) -> dic
         state = int(_fitted_model.predict(X)[0])
         probs = _fitted_model.predict_proba(X)[0]
 
-        regime = REGIME_LABELS.get(state, "transition")
-        prob_dict = {REGIME_LABELS.get(i, f"state_{i}"): round(float(p), 3) for i, p in enumerate(probs)}
+        regime = _fitted_labels.get(state, "transition")
+        prob_dict = {_fitted_labels.get(i, f"state_{i}"): round(float(p), 3) for i, p in enumerate(probs)}
 
         # Transition matrix
         trans = _fitted_model.transmat_
@@ -159,8 +161,8 @@ def get_regime_history(macro_history: list[dict]) -> list[dict]:
 
         history = []
         for i, d in enumerate(macro_history):
-            regime = REGIME_LABELS.get(int(states[i]), "transition")
-            prob_dict = {REGIME_LABELS.get(j, f"s{j}"): round(float(probs[i, j]), 3) for j in range(3)}
+            regime = _fitted_labels.get(int(states[i]), "transition")
+            prob_dict = {_fitted_labels.get(j, f"s{j}"): round(float(probs[i, j]), 3) for j in range(3)}
             history.append({
                 "date": d.get("date", ""),
                 "regime": regime,

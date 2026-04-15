@@ -3,11 +3,14 @@ function getApiBase(): string {
   if (process.env.NEXT_PUBLIC_BACKEND_URL) {
     return process.env.NEXT_PUBLIC_BACKEND_URL;
   }
-  // Runtime detection for Railway production
+  // Runtime detection for Railway production — derive backend URL from frontend host
   if (typeof window !== "undefined") {
     const host = window.location.hostname;
     if (host.includes("railway.app") || host.includes("alphaengine")) {
-      return "https://alpha-backend-production-51df.up.railway.app";
+      // In production, backend URL must be set via NEXT_PUBLIC_BACKEND_URL at build time.
+      // Fall through to localhost only in dev — this will surface the misconfiguration
+      // in the browser console rather than silently pointing to a stale URL.
+      console.warn("NEXT_PUBLIC_BACKEND_URL not set in production — API calls will fail");
     }
   }
   return "http://localhost:8000";

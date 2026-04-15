@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # Clerk Auth
     CLERK_ISSUER: str = ""  # e.g. https://your-app.clerk.accounts.dev
     CLERK_SECRET_KEY: str = ""
+    CLERK_AUDIENCE: str = ""  # Optional: restrict JWT audience claim
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/alphaengine"
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     BACKEND_URL: str = "http://localhost:8000"
     FRONTEND_URL: str = "http://localhost:3000"
     ENV: str = "development"
+    CORS_ORIGINS: str = ""  # Comma-separated extra origins for production
 
     model_config = {
         "env_file": str(_ENV_FILE),

@@ -32,9 +32,34 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Alpha Engine API", version="2.0.0", lifespan=lifespan)
 
+def _get_allowed_origins() -> list[str]:
+    """Build CORS origins from config. Falls back to permissive in dev."""
+    origins = [settings.FRONTEND_URL]
+    if settings.BACKEND_URL:
+        origins.append(settings.BACKEND_URL)
+    if settings.ENV == "production":
+        # Add any extra origins from env
+        extra = settings.CORS_ORIGINS
+        if extra:
+            origins.extend([o.strip() for o in extra.split(",") if o.strip()])
+        # Auto-allow Railway domains derived from configured URLs
+        for url in [settings.FRONTEND_URL, settings.BACKEND_URL]:
+            if "railway.app" in url:
+                # Allow both http and https variants
+                origins.append(url.replace("http://", "https://"))
+    else:
+        # Dev mode: allow localhost variants
+        origins.extend([
+            "http://localhost:3000",
+            "http://localhost:8000",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.1:8000",
+        ])
+    return list(set(o for o in origins if o))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,7 +71,26 @@ market_client = MarketDataClient()
 news_client = NewsDataClient()
 sec_client = SECDataClient()
 
+import time as _time
+
 _analysis_status: dict[str, dict] = {}
+_ANALYSIS_STATUS_MAX = 200  # Max entries before cleanup
+_ANALYSIS_STATUS_TTL = 3600  # 1 hour
+
+
+def _cleanup_analysis_status():
+    """Evict stale entries from _analysis_status to prevent memory leak."""
+    if len(_analysis_status) <= _ANALYSIS_STATUS_MAX:
+        return
+    now = _time.time()
+    stale = [k for k, v in _analysis_status.items() if now - v.get("_ts", 0) > _ANALYSIS_STATUS_TTL]
+    for k in stale:
+        del _analysis_status[k]
+    # If still over limit, remove oldest
+    if len(_analysis_status) > _ANALYSIS_STATUS_MAX:
+        oldest = sorted(_analysis_status, key=lambda k: _analysis_status[k].get("_ts", 0))
+        for k in oldest[:len(_analysis_status) - _ANALYSIS_STATUS_MAX]:
+            del _analysis_status[k]
 
 
 # === HEALTH CHECK ===
@@ -71,7 +115,8 @@ async def analyze(request: AnalyzeRequest, req: Request = None):
 
     query = request.query.strip()
     query_id = str(hash(query + str(id(request))))
-    _analysis_status[query_id] = {"status": "running", "phase": "interpreting"}
+    _cleanup_analysis_status()
+    _analysis_status[query_id] = {"status": "running", "phase": "interpreting", "_ts": _time.time()}
 
     try:
         memo = await run_research_desk(query)
@@ -104,12 +149,12 @@ async def analyze(request: AnalyzeRequest, req: Request = None):
         except Exception as db_err:
             logger.error(f"DB persist failed (non-fatal): {db_err}")
 
-        _analysis_status[query_id] = {"status": "complete", "phase": "done"}
+        _analysis_status[query_id] = {"status": "complete", "phase": "done", "_ts": _time.time()}
         return result
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"Analysis failed: {e}\n{tb}")
-        _analysis_status[query_id] = {"status": "error", "error": str(e)}
+        _analysis_status[query_id] = {"status": "error", "error": str(e), "_ts": _time.time()}
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -153,8 +198,9 @@ async def latest_signals(limit: int = 20, req: Request = None):
 
 
 @app.delete("/api/signals/{memo_id}")
-async def delete_memo(memo_id: str):
-    """Delete an intelligence memo by ID."""
+async def delete_memo(memo_id: str, req: Request = None):
+    """Delete an intelligence memo by ID. Only the owner can delete."""
+    user_id = get_user_id(req) if req else None
     async with async_session() as session:
         result = await session.execute(
             select(IntelligenceMemoRecord).where(IntelligenceMemoRecord.id == memo_id)
@@ -162,6 +208,9 @@ async def delete_memo(memo_id: str):
         record = result.scalar_one_or_none()
         if not record:
             raise HTTPException(status_code=404, detail="Memo not found")
+        # Ownership check: if memo has a user_id, only that user can delete
+        if record.user_id and user_id and record.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to delete this memo")
         await session.delete(record)
         await session.commit()
     return {"deleted": memo_id}
@@ -307,7 +356,7 @@ async def enrich_tickers(tickers: str, period: str = "3mo"):
         try:
             vol = compute_volatility_metrics(t, period)
             dd = compute_drawdown(t, period)
-            prices = _market_client_for_enrich.get_price_history(t, period="1mo")
+            prices = market_client.get_price_history(t, period="1mo")
             options = analyze_options(t)
             # Sentiment scoring
             articles = news_client.get_ticker_news(t, page_size=10)
@@ -332,9 +381,7 @@ async def enrich_tickers(tickers: str, period: str = "3mo"):
 
     return result
 
-# Lazy import for enrichment
-from data.market_client import MarketDataClient as _MC
-_market_client_for_enrich = _MC()
+# market_client singleton is defined above with other data clients
 
 
 @app.get("/api/quant/macro-series")
@@ -373,15 +420,15 @@ async def portfolio_risk_analysis():
     sectors = {}
     for ticker in tickers:
         try:
-            history = _market_client_for_enrich.get_price_history(ticker, period="3mo")
+            history = market_client.get_price_history(ticker, period="3mo")
             if history and len(history) > 20:
                 closes = [b["close"] for b in history]
                 rets = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
                 returns_dict[ticker] = rets
-            fundamentals = _market_client_for_enrich.get_fundamentals(ticker)
+            fundamentals = market_client.get_fundamentals(ticker)
             sectors[ticker] = {"sector": fundamentals.get("sector", "Unknown"), "weight": weights.get(ticker, 0)}
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Portfolio risk: failed to fetch data for {ticker}: {e}")
 
     if len(returns_dict) < 1:
         return {"error": "Could not fetch price data"}
@@ -455,8 +502,8 @@ async def regime_detection():
                 for i in range(min_len)
             ]
             fit_regime_model(macro_hist)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Regime model fitting failed (using rule-based): {e}")
 
     return classify_regime(vix, credit, yc)
 
@@ -541,28 +588,39 @@ async def factor_analysis(tickers: str = "SPY"):
     from quant.factors import compute_factor_loadings
     ticker_list = [t.strip().upper() for t in tickers.split(",")]
 
-    # Get portfolio and benchmark returns
-    port_returns = []
+    # Get per-ticker return series
+    ticker_returns: dict[str, list[float]] = {}
     for t in ticker_list[:5]:
         try:
-            history = _market_client_for_enrich.get_price_history(t, period="6mo")
-            if history:
+            history = market_client.get_price_history(t, period="6mo")
+            if history and len(history) > 30:
                 closes = [b["close"] for b in history]
                 rets = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
-                port_returns.extend(rets[-60:])  # Last 60 days
+                ticker_returns[t] = rets
         except Exception:
-            pass
+            logger.warning(f"Factor analysis: failed to fetch {t}")
 
     # Benchmark
     try:
-        spy = _market_client_for_enrich.get_price_history("SPY", period="6mo")
+        spy = market_client.get_price_history("SPY", period="6mo")
         spy_closes = [b["close"] for b in spy]
         benchmark = [(spy_closes[i] - spy_closes[i-1]) / spy_closes[i-1] for i in range(1, len(spy_closes))]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Factor analysis: failed to fetch SPY benchmark: {e}")
         benchmark = []
 
-    if not port_returns or not benchmark:
+    if not ticker_returns or not benchmark:
         return {"error": "Insufficient data for factor analysis"}
+
+    # Build equal-weighted portfolio return series aligned to shortest length
+    min_len = min(len(r) for r in ticker_returns.values())
+    min_len = min(min_len, len(benchmark))
+    n_tickers = len(ticker_returns)
+    port_returns = []
+    for i in range(min_len):
+        daily = sum(ticker_returns[t][i] for t in ticker_returns) / n_tickers
+        port_returns.append(daily)
+    benchmark = benchmark[:min_len]
 
     loadings = compute_factor_loadings(port_returns, benchmark)
 
@@ -587,25 +645,25 @@ async def pre_trade_check(ticker: str, size_pct: float = 0.03, action: str = "BU
         tk = t["ticker"]
         positions[tk] = {"sector": "Unknown", "weight": (t.get("position_size_pct") or 5) / 100}
         try:
-            history = _market_client_for_enrich.get_price_history(tk, period="3mo")
+            history = market_client.get_price_history(tk, period="3mo")
             if history and len(history) > 20:
                 closes = [b["close"] for b in history]
                 returns_dict[tk] = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
-            fundamentals = _market_client_for_enrich.get_fundamentals(tk)
+            fundamentals = market_client.get_fundamentals(tk)
             positions[tk]["sector"] = fundamentals.get("sector", "Unknown")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Pre-trade check: failed to fetch data for {tk}: {e}")
 
     # Also fetch new ticker returns
     try:
-        history = _market_client_for_enrich.get_price_history(ticker, period="3mo")
+        history = market_client.get_price_history(ticker, period="3mo")
         if history and len(history) > 20:
             closes = [b["close"] for b in history]
             returns_dict[ticker] = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
-        fundamentals = _market_client_for_enrich.get_fundamentals(ticker)
+        fundamentals = market_client.get_fundamentals(ticker)
         positions.setdefault(ticker, {})["sector"] = fundamentals.get("sector", "Unknown")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Pre-trade check: failed to fetch data for {ticker}: {e}")
 
     return pre_trade_risk_check(ticker, action, size_pct / 100, positions, returns_dict)
 
@@ -629,17 +687,19 @@ async def regime_conditional(ticker: str = "SPY"):
         ]
         fit_regime_model(macro_hist)
         regime_hist = get_regime_history(macro_hist)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Regime conditional: failed to compute regime history: {e}")
         return {"error": "Could not compute regime history"}
 
     # Get asset returns
     try:
-        history = _market_client_for_enrich.get_price_history(ticker.upper(), period="2y")
+        history = market_client.get_price_history(ticker.upper(), period="2y")
         if not history or len(history) < 60:
             return {"error": "Insufficient price data"}
         closes = [b["close"] for b in history]
         returns = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Regime conditional: failed to fetch price data for {ticker}: {e}")
         return {"error": "Could not fetch price data"}
 
     return regime_conditional_returns(regime_hist, returns)
@@ -664,13 +724,13 @@ async def optimize_portfolio(request: dict):
     returns_dict = {}
     for t in tickers[:10]:
         try:
-            history = _market_client_for_enrich.get_price_history(t, period="3mo")
+            history = market_client.get_price_history(t, period="3mo")
             if history and len(history) > 20:
                 closes = [b["close"] for b in history]
                 rets = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
                 returns_dict[t] = rets
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Portfolio optimize: failed to fetch {t}: {e}")
 
     cov = compute_ewma_covariance(returns_dict)
 
@@ -797,10 +857,11 @@ class CloseTradeRequest(BaseModel):
 
 
 @app.post("/api/portfolio/trade/{trade_id}/close")
-async def close_trade(trade_id: str, req: CloseTradeRequest):
+async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request = None):
     """Close an open trade with exit price. Computes realized P&L."""
     from db.models import TradeRecord
     from sqlalchemy import update as sql_update
+    user_id = get_user_id(request) if request else None
     async with async_session() as session:
         result = await session.execute(
             select(TradeRecord).where(TradeRecord.id == trade_id)
@@ -808,6 +869,8 @@ async def close_trade(trade_id: str, req: CloseTradeRequest):
         trade = result.scalar_one_or_none()
         if not trade:
             raise HTTPException(status_code=404, detail="Trade not found")
+        if trade.user_id and user_id and trade.user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to close this trade")
         if trade.status != "open":
             raise HTTPException(status_code=400, detail="Trade already closed")
 
@@ -819,7 +882,7 @@ async def close_trade(trade_id: str, req: CloseTradeRequest):
         else:
             pnl_pct = ((entry - req.exit_price) / entry * 100) if entry > 0 else 0
 
-        from datetime import datetime
+        from datetime import datetime, timezone
         await session.execute(
             sql_update(TradeRecord)
             .where(TradeRecord.id == trade_id)
@@ -827,7 +890,7 @@ async def close_trade(trade_id: str, req: CloseTradeRequest):
                 status="closed",
                 exit_price=req.exit_price,
                 realized_pnl=round(pnl_pct, 2),
-                closed_at=datetime.utcnow(),
+                closed_at=datetime.now(timezone.utc),
                 md_notes=(trade.md_notes or "") + f"\nClosed: {req.notes}" if req.notes else trade.md_notes,
             )
         )
@@ -923,20 +986,21 @@ async def backtest_trades():
 
 @app.get("/api/portfolio/risk")
 async def portfolio_risk():
-    """Portfolio-level risk metrics."""
-    return {"beta": 0, "var_95": 0, "sector_exposure": {}}
+    """Portfolio-level risk metrics — delegates to the full quant risk endpoint."""
+    return await portfolio_risk_analysis()
 
 
 # === STREAMING ANALYSIS ===
 
 @app.post("/api/analyze/stream")
-async def analyze_stream(request: AnalyzeRequest):
+async def analyze_stream(request: AnalyzeRequest, req: Request = None):
     """SSE streaming endpoint — sends phase updates as agents complete."""
     from agents.orchestrator import (
         _query_interpreter, _research_analyst, _risk_manager,
         _portfolio_strategist, _cio_synthesizer, _with_timeout,
         IntelligenceMemo,
     )
+    user_id = get_user_id(req) if req else None
 
     query = request.query.strip()
 
@@ -1058,6 +1122,7 @@ async def analyze_stream(request: AnalyzeRequest):
             try:
                 async with async_session() as session:
                     record = IntelligenceMemoRecord(
+                        user_id=user_id,
                         query=memo.query,
                         intent=memo.intent.value if hasattr(memo.intent, "value") else str(memo.intent),
                         title=memo.title,

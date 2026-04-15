@@ -95,9 +95,9 @@ class NewsDataClient:
                 logger.debug(f"Returning cached Finnhub news for {ticker}")
                 return data
 
-        from datetime import datetime, timedelta
-        end = datetime.utcnow().strftime("%Y-%m-%d")
-        start = (datetime.utcnow() - timedelta(days=7)).strftime("%Y-%m-%d")
+        from datetime import datetime, timedelta, timezone
+        end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
 
         url = "https://finnhub.io/api/v1/company-news"
         params = {

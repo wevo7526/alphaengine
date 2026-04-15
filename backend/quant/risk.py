@@ -75,7 +75,7 @@ def compute_portfolio_var(
     cov = np.array(matrix)
 
     # Replace None with 0 in cov
-    cov = np.where(cov == None, 0, cov).astype(float)
+    cov = np.nan_to_num(cov.astype(float), nan=0.0)
 
     port_var = float(w @ cov @ w)
     port_vol = np.sqrt(port_var) if port_var > 0 else 0
@@ -221,7 +221,7 @@ def compute_marginal_var(
         return {"marginal_var_pct": None, "error": "No covariance data"}
 
     cov = np.array(matrix)
-    cov = np.where(cov == None, 0, cov).astype(float)
+    cov = np.nan_to_num(cov.astype(float), nan=0.0)
 
     z_scores = {0.95: 1.645, 0.99: 2.326}
     z = z_scores.get(confidence, 1.645)

@@ -7,7 +7,7 @@ Pipeline: Query Interpreter → Research Analyst → Risk Manager → Portfolio 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional
 from enum import Enum
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 # All schemas use extra="ignore" because LLM outputs frequently include
@@ -167,7 +167,7 @@ class IntelligenceMemo(BaseModel):
 
     """The final CIO-level intelligence memo with trade ideas."""
     query: str = ""
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     title: str = ""
     executive_summary: str = ""
     analysis: str = ""
@@ -200,7 +200,7 @@ class AgentOutput(BaseModel):
 
     """Generic internal agent output for pipeline state."""
     agent_name: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     output: dict = Field(default_factory=dict)
     reasoning: str = ""
     error: Optional[str] = None

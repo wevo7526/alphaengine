@@ -5,7 +5,7 @@ Keeps route handlers thin and quant modules testable.
 
 from sqlalchemy import select, desc, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 import logging
 
 from db.database import async_session
@@ -68,7 +68,7 @@ class TradeRepository:
             await session.execute(
                 update(TradeRecord)
                 .where(TradeRecord.id == trade_id)
-                .values(status="closed", exit_price=exit_price, realized_pnl=pnl, closed_at=datetime.utcnow())
+                .values(status="closed", exit_price=exit_price, realized_pnl=pnl, closed_at=datetime.now(timezone.utc))
             )
             await session.commit()
 

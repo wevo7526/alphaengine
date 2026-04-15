@@ -5,7 +5,7 @@ Checks each open trade's current price vs entry/stop/target and computes P&L.
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from data.market_client import MarketDataClient
 
 logger = logging.getLogger(__name__)
@@ -66,7 +66,7 @@ def evaluate_trade(trade: dict) -> dict:
                 "hit_stop": hit_stop,
                 "hit_target": hit_target,
                 "status": "target_hit" if hit_target else "stopped_out" if hit_stop else "open",
-                "evaluated_at": datetime.utcnow().isoformat(),
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
             },
         }
     except Exception as e:

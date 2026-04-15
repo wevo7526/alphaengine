@@ -9,7 +9,7 @@ Rate limit: 120 requests/minute (generous, but we still cache).
 """
 
 from fredapi import Fred
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 import time
 
@@ -129,7 +129,7 @@ class FREDDataClient:
                 logger.debug(f"Returning cached series {series_id}")
                 return data
 
-        start = datetime.utcnow() - timedelta(days=lookback_days)
+        start = datetime.now(timezone.utc) - timedelta(days=lookback_days)
         series = _retry_fetch(
             lambda: self.fred.get_series(series_id, observation_start=start)
         )

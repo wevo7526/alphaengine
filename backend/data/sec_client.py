@@ -14,7 +14,7 @@ from sec_api import (
     InsiderTradingApi,
     Form13FHoldingsApi,
 )
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 from config import settings
@@ -79,9 +79,9 @@ class SECDataClient:
         or pulling all filings since a catalyst event.
         """
         if end_date is None:
-            end_date = datetime.utcnow().strftime("%Y-%m-%d")
+            end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if start_date is None:
-            start_date = (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%d")
+            start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
 
         query = {
             "query": {
@@ -127,9 +127,9 @@ class SECDataClient:
         P/E and still be hiding a going concern note in the 10-K.
         """
         if end_date is None:
-            end_date = datetime.utcnow().strftime("%Y-%m-%d")
+            end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if start_date is None:
-            start_date = (datetime.utcnow() - timedelta(days=365)).strftime("%Y-%m-%d")
+            start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
 
         search_query = {
             "query": query_text,
@@ -220,9 +220,9 @@ class SECDataClient:
           4. Pattern breaks: insiders who never buy suddenly buying
         """
         if end_date is None:
-            end_date = datetime.utcnow().strftime("%Y-%m-%d")
+            end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if start_date is None:
-            start_date = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
+            start_date = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
 
         query = {
             "query": {
