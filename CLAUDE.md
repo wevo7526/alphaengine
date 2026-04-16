@@ -317,26 +317,45 @@ Replaced all placeholder route stubs in `backend/main.py` with real data client 
 
 **API:** 20+ endpoints covering analysis, data, quant, backtesting, portfolio, risk, regime, factors, optimization.
 
-### Remaining gaps in quant layer:
-- `risk.py`: pre_trade_risk_check() and marginal_var() not yet implemented
-- `backtester.py`: signal replay mode (needs accumulated signal history)
-- `factors.py`: rolling_factor_exposure() and direct Kenneth French data library
-- `regime.py`: regime_conditional_returns()
+### Quant layer status:
+- `risk.py`: pre_trade_risk_check() and marginal_var() — **COMPLETE** (implemented in production hardening)
+- `regime.py`: regime_conditional_returns() — **COMPLETE**
+- `backtester.py`: signal replay mode — **PENDING** (needs accumulated signal history from Desk 6)
+- `factors.py`: Kenneth French data library — **PENDING**
 
 ---
 
-## Phase 5 Roadmap
+## Phase 1 Complete — Phase 2 Architecture Redesign
 
-- **Firecrawl integration** — DONE. `data/firecrawl_client.py` with `search_web()` tool for Research Analyst.
-- Signal replay backtesting (requires signal history accumulation)
-- Pre-trade risk gate (marginal VaR check before every trade)
-- Kenneth French data library integration for proper factor analysis
-- Multi-tenant architecture for licensing
-- Custom agent configuration per user
-- API access for institutional clients
-- Historical signal database for backtesting as a service
-- Mobile alerts (Telegram/SMS for high-conviction signals)
-- Redis caching layer (replace in-memory TTL caches)
-- Background job queue (Celery/ARQ) for backtests
-- API authentication (JWT/API key)
-- Error monitoring (Sentry)
+**Phase 1 (COMPLETE):** 5-agent pipeline, 5 data clients, 8 quant modules, 10 DB models, 20+ endpoints, 6 frontend pages. Production on Railway. Pipeline hardened with retry logic, increased timeouts, CIO fallback, parallel FRED fetching.
+
+**Phase 2 (PLANNED):** Redesign from 5-agent pipeline to 6-desk / 12-agent architecture modeled after how real multi-strategy hedge funds operate. See `ALPHA_ENGINE_TECHNICAL_SPEC.md` v2.0 for full specification.
+
+### Desk Architecture (Phase 2 target)
+
+| Desk | Agent A | Agent B | Status |
+|------|---------|---------|--------|
+| 1. Screening | Universe Scanner | Signal Ranker | **NEW** — finds trades without user input |
+| 2. Research | Data Analyst | Thesis Builder | **REFACTOR** — split from `research_analyst.py` |
+| 3. Risk | Macro Regime Analyst | Position Risk Manager | **REFACTOR** — split from `risk_manager.py`, enforce risk gates |
+| 4. Portfolio Construction | Trade Structurer | Hedge Architect | **REFACTOR** — split from `portfolio_strategist.py` |
+| 5. CIO / Synthesis | Memo Writer | Decision Gate | **REFACTOR** — split from `cio_synthesizer.py`, add go/no-go |
+| 6. Scorecard & P&L | Signal Scorer | Attribution Analyst | **NEW** — feedback loop, IC tracking, P&L decomposition |
+
+### Key design principle changes:
+- Risk desk has **kill authority** — `pre_trade_risk_check()` becomes a mandatory gate, not advisory
+- Every signal is **scored at 1d/5d/20d** — the system learns from its own performance
+- Screening desk runs **nightly without user input** — the fund finds alpha, not the user
+- Desk weights are **adaptive** — high-IC desks get more influence in consensus
+
+### Phase 2 build order:
+1. Split existing agents into desk pairs (same outputs, cleaner separation)
+2. Enforce risk gates in trade execution path
+3. Build Desk 6 (Scorecard) — signal scoring + attribution
+4. Build Desk 1 (Screening) — universe scanning + ranking
+5. Portfolio positions endpoint + live P&L
+6. Scorecard frontend page
+
+### Future phases:
+- Phase 3: FinBERT NLP, adaptive desk weights, nightly cron screening, event triggers
+- Phase 4: Alpaca paper trading, fill tracking, full P&L attribution, signal decay monitoring
