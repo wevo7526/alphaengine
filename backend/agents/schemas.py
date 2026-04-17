@@ -181,6 +181,10 @@ class IntelligenceMemo(BaseModel):
     tickers_analyzed: list[str] = Field(default_factory=list)
     themes: list[str] = Field(default_factory=list)
     intent: QueryIntent = QueryIntent.THEMATIC_RESEARCH
+    # Desk 5B: Decision Gate — programmatic GO/NO-GO
+    decision: str = "WATCH"  # GO | NO-GO | WATCH
+    decision_reason: str = ""
+    decision_confidence: int = 0
 
     @field_validator("intent", mode="before")
     @classmethod

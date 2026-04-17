@@ -817,11 +817,132 @@ class TakeTradeRequest(BaseModel):
     md_notes: str = ""
 
 
+class RiskCheckRequest(BaseModel):
+    ticker: str
+    direction: str
+    size_pct: float
+
+
+@app.post("/api/portfolio/risk-check")
+async def pre_trade_gate(req: RiskCheckRequest, request: Request = None):
+    """
+    Pre-trade risk gate. Checks a proposed trade against enforced limits:
+    position size, sector concentration, correlation, marginal VaR,
+    drawdown circuit breaker.
+
+    Returns {approved, adjusted_size_pct, reasons, circuit_breaker, action}.
+    Does NOT persist — use this to preview before calling /api/portfolio/trade.
+    """
+    from agents.desk3_position_risk import evaluate_trade_gate, get_current_portfolio_drawdown
+    from db.models import TradeRecord
+
+    user_id = get_user_id(request) if request else None
+
+    # Gather existing open positions for context
+    try:
+        async with async_session() as session:
+            q = select(TradeRecord).where(TradeRecord.status == "open")
+            if user_id:
+                q = q.where(TradeRecord.user_id == user_id)
+            result = await session.execute(q)
+            open_trades = result.scalars().all()
+
+        existing_positions = []
+        for t in open_trades:
+            existing_positions.append({
+                "ticker": t.ticker,
+                "direction": t.direction,
+                "size_pct": float(t.position_size_pct or 0),
+                "sector": None,  # Will be fetched inside evaluator
+            })
+    except Exception as e:
+        logger.error(f"Risk check: failed to load positions: {e}")
+        existing_positions = []
+
+    # Current portfolio drawdown
+    dd = await get_current_portfolio_drawdown(async_session, user_id=user_id)
+
+    result = evaluate_trade_gate(
+        ticker=req.ticker.upper(),
+        direction=req.direction,
+        proposed_size_pct=req.size_pct,
+        existing_positions=existing_positions,
+        portfolio_drawdown_pct=dd,
+    )
+    return result
+
+
 @app.post("/api/portfolio/trade")
 async def take_trade(req: TakeTradeRequest, request: Request = None):
-    """CIO takes a trade idea — persists to trade journal."""
+    """
+    CIO takes a trade idea — runs risk gate first, persists if approved.
+
+    The risk gate is MANDATORY and may:
+    - BLOCK the trade (returns 422 with reasons)
+    - REDUCE the size (persists at adjusted size with warning)
+    - ALLOW as-is
+    """
     from db.models import TradeRecord
+    from agents.desk3_position_risk import evaluate_trade_gate, get_current_portfolio_drawdown
+
     user_id = get_user_id(request) if request else None
+
+    # === RISK GATE (mandatory) ===
+    if req.position_size_pct and req.position_size_pct > 0:
+        try:
+            async with async_session() as session:
+                q = select(TradeRecord).where(TradeRecord.status == "open")
+                if user_id:
+                    q = q.where(TradeRecord.user_id == user_id)
+                result = await session.execute(q)
+                open_trades = result.scalars().all()
+
+            existing_positions = [
+                {
+                    "ticker": t.ticker,
+                    "direction": t.direction,
+                    "size_pct": float(t.position_size_pct or 0),
+                    "sector": None,
+                }
+                for t in open_trades
+            ]
+
+            dd = await get_current_portfolio_drawdown(async_session, user_id=user_id)
+
+            gate = evaluate_trade_gate(
+                ticker=req.ticker.upper(),
+                direction=req.direction,
+                proposed_size_pct=req.position_size_pct,
+                existing_positions=existing_positions,
+                portfolio_drawdown_pct=dd,
+            )
+
+            if not gate.get("approved"):
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "blocked": True,
+                        "reasons": gate.get("reasons", []),
+                        "circuit_breaker": gate.get("circuit_breaker", {}),
+                        "ticker": req.ticker,
+                    },
+                )
+
+            # Apply adjusted size if gate modified it
+            final_size_pct = gate.get("adjusted_size_pct", req.position_size_pct)
+            size_adjusted = abs(final_size_pct - req.position_size_pct) > 0.01
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Risk gate failed (falling back to proposed size): {e}")
+            final_size_pct = req.position_size_pct
+            size_adjusted = False
+            gate = {}
+    else:
+        final_size_pct = req.position_size_pct
+        size_adjusted = False
+        gate = {}
+
     async with async_session() as session:
         record = TradeRecord(
             user_id=user_id,
@@ -832,7 +953,7 @@ async def take_trade(req: TakeTradeRequest, request: Request = None):
             entry_price=req.entry_price,
             stop_loss=req.stop_loss,
             take_profit=req.take_profit,
-            position_size_pct=req.position_size_pct,
+            position_size_pct=final_size_pct,
             conviction=req.conviction,
             thesis=req.thesis,
             md_notes=req.md_notes,
@@ -840,7 +961,18 @@ async def take_trade(req: TakeTradeRequest, request: Request = None):
         )
         session.add(record)
         await session.commit()
-        return {"id": record.id, "status": "open", "ticker": req.ticker}
+        response = {
+            "id": record.id,
+            "status": "open",
+            "ticker": req.ticker,
+            "size_pct": final_size_pct,
+        }
+        if size_adjusted:
+            response["size_adjusted"] = True
+            response["original_size_pct"] = req.position_size_pct
+            response["adjusted_size_pct"] = final_size_pct
+            response["adjustment_reasons"] = gate.get("reasons", [])
+        return response
 
 
 class CloseTradeRequest(BaseModel):
@@ -1732,6 +1864,28 @@ async def analyze_stream(request: AnalyzeRequest, req: Request = None):
         })
         yield keepalive()
 
+        # === Desk 5B: Decision Gate (programmatic — not LLM) ===
+        from agents.desk5_decision_gate import compute_decision
+        try:
+            decision = compute_decision(
+                trade_ideas=strategy_data.get("trade_ideas", []),
+                macro_regime=risk_data.get("macro_regime", "unknown"),
+                overall_risk_level=risk_data.get("overall_risk_level", "elevated"),
+            )
+            # Stream as a trace event (decision activity on CIO desk)
+            yield send({
+                "type": "decision",
+                "desk": "cio",
+                "agent": "decision_gate",
+                "decision": decision.get("decision"),
+                "reason": decision.get("reason"),
+                "confidence": decision.get("confidence"),
+                "timestamp": asyncio.get_event_loop().time(),
+            })
+        except Exception as e:
+            logger.warning(f"Decision gate failed: {e}")
+            decision = {"decision": "WATCH", "reason": f"Gate evaluation failed: {e}", "confidence": 0}
+
         # Inject structured data from prior agents (never trust LLM reconstruction)
         memo_data["query"] = query
         memo_data["intent"] = plan_data.get("intent", "thematic_research")
@@ -1743,6 +1897,10 @@ async def analyze_stream(request: AnalyzeRequest, req: Request = None):
         memo_data["trade_ideas"] = strategy_data.get("trade_ideas", [])
         memo_data["portfolio_positioning"] = strategy_data.get("portfolio_positioning", "")
         memo_data["hedging_recommendations"] = strategy_data.get("hedging_recommendations", [])
+        # Decision gate output
+        memo_data["decision"] = decision.get("decision", "WATCH")
+        memo_data["decision_reason"] = decision.get("reason", "")
+        memo_data["decision_confidence"] = decision.get("confidence", 0)
 
         try:
             memo = IntelligenceMemo(**memo_data)

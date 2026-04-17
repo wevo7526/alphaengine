@@ -53,6 +53,10 @@ export interface IntelligenceMemo {
   themes: string[];
   intent: QueryIntent;
   created_at?: string;
+  // Desk 5B Decision Gate
+  decision?: "GO" | "NO-GO" | "WATCH";
+  decision_reason?: string;
+  decision_confidence?: number;
 }
 
 export interface MacroIndicator {

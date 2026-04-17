@@ -212,14 +212,40 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
     }).catch(() => setEnrichLoading(false));
   }, [memo]);
 
+  // Decision badge styling
+  const decision = memo.decision || "WATCH";
+  const decisionColor =
+    decision === "GO"
+      ? "bg-signal-green/10 text-signal-green border-signal-green/30"
+      : decision === "NO-GO"
+        ? "bg-signal-red/10 text-signal-red border-signal-red/30"
+        : "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30";
+
   return (
     <div className="space-y-4" style={{ animation: "fade-in 0.5s ease-out" }}>
-      {/* Title + Executive Summary */}
+      {/* Title + Executive Summary + Decision Badge */}
       <div className="rounded-xl border border-border-primary bg-bg-surface p-6">
         <div className="flex items-start justify-between gap-4 mb-3">
-          <h2 className="text-lg font-semibold text-text-primary leading-snug">
-            {memo.title}
-          </h2>
+          <div className="flex-1">
+            {memo.decision && (
+              <div className="flex items-center gap-2 mb-3">
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold uppercase tracking-wider ${decisionColor}`}>
+                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6 1L2 2.5V6C2 8.5 3.5 10.5 6 11C8.5 10.5 10 8.5 10 6V2.5L6 1Z" />
+                  </svg>
+                  {decision}
+                </span>
+                {memo.decision_confidence !== undefined && memo.decision_confidence > 0 && (
+                  <span className="text-[10px] text-text-quaternary font-mono">
+                    conviction {memo.decision_confidence}
+                  </span>
+                )}
+              </div>
+            )}
+            <h2 className="text-lg font-semibold text-text-primary leading-snug">
+              {memo.title}
+            </h2>
+          </div>
           {memo.id && onDelete && (
             <button
               onClick={handleDelete}
@@ -231,6 +257,11 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
             </button>
           )}
         </div>
+        {memo.decision_reason && (
+          <p className="text-[11px] text-text-tertiary mb-3 italic">
+            {memo.decision_reason}
+          </p>
+        )}
         <p className="text-[13px] text-text-secondary leading-relaxed">
           {memo.executive_summary}
         </p>
