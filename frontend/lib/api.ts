@@ -127,4 +127,20 @@ export const api = {
   latestMemos: (limit = 20) => request(`/api/signals/latest?limit=${limit}`),
   deleteMemo: (id: string) =>
     request(`/api/signals/${id}`, { method: "DELETE" }),
+
+  // Scan / Screening Desk
+  scanLatest: () => request("/api/scan/latest"),
+  scanTrigger: () =>
+    request("/api/scan/trigger", { method: "POST" }),
+  scanStatus: () => request("/api/scan/status"),
+
+  // Watchlist
+  watchlist: () => request("/api/watchlist"),
+  addToWatchlist: (tickers: string[], notes = "") =>
+    request("/api/watchlist", {
+      method: "POST",
+      body: JSON.stringify({ tickers, notes }),
+    }),
+  removeFromWatchlist: (ticker: string) =>
+    request(`/api/watchlist/${ticker}`, { method: "DELETE" }),
 };

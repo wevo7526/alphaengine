@@ -16,7 +16,7 @@ from data.market_client import MarketDataClient
 from data.news_client import NewsDataClient
 from data.sec_client import SECDataClient
 from db.database import init_db, async_session
-from db.models import IntelligenceMemoRecord
+from db.models import IntelligenceMemoRecord, ScanFindingRecord, ScanRunRecord, WatchlistRecord
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -980,6 +980,288 @@ async def backtest_trades():
 async def portfolio_risk():
     """Portfolio-level risk metrics — delegates to the full quant risk endpoint."""
     return await portfolio_risk_analysis()
+
+
+# === SCAN / SCREENING DESK ===
+
+_scan_status: dict[str, dict] = {}  # user_id → {status, started_at, run_id}
+
+
+async def _run_scan_background(user_id: str | None, run_id: str, universe: list[str]):
+    """Execute scan, persist findings, update status."""
+    from agents.scanner import run_scan
+    from datetime import datetime as _dt, timezone as _tz
+
+    try:
+        result = run_scan(universe=universe)
+        findings = result.get("findings", [])
+
+        async with async_session() as session:
+            # Update run record
+            run = await session.get(ScanRunRecord, run_id)
+            if run:
+                run.universe_size = result.get("universe_size", 0)
+                run.findings_count = len(findings)
+                run.status = "completed"
+                run.completed_at = _dt.now(_tz.utc)
+
+            # Persist findings
+            for f in findings:
+                rec = ScanFindingRecord(
+                    user_id=user_id,
+                    scan_run_id=run_id,
+                    ticker=f.get("ticker", ""),
+                    finding_type=f.get("finding_type", "unknown"),
+                    priority=f.get("priority", "low"),
+                    headline=f.get("headline", "")[:200],
+                    detail=f.get("detail", ""),
+                    data_json=f.get("data", {}),
+                )
+                session.add(rec)
+            await session.commit()
+        logger.info(f"Scan {run_id} completed with {len(findings)} findings")
+    except Exception as e:
+        logger.error(f"Scan {run_id} failed: {e}")
+        try:
+            async with async_session() as session:
+                run = await session.get(ScanRunRecord, run_id)
+                if run:
+                    run.status = "failed"
+                    run.error_message = str(e)[:500]
+                    run.completed_at = _dt.now(_tz.utc)
+                    await session.commit()
+        except Exception:
+            pass
+    finally:
+        key = user_id or "_anon"
+        if key in _scan_status:
+            _scan_status[key]["status"] = "idle"
+
+
+@app.get("/api/scan/latest")
+async def scan_latest(req: Request = None):
+    """Get findings from the most recent completed scan for the current user."""
+    user_id = get_user_id(req) if req else None
+    try:
+        async with async_session() as session:
+            # Find most recent completed run
+            runs_q = select(ScanRunRecord).where(
+                ScanRunRecord.status == "completed"
+            ).order_by(desc(ScanRunRecord.completed_at)).limit(1)
+            if user_id:
+                runs_q = select(ScanRunRecord).where(
+                    ScanRunRecord.status == "completed",
+                    (ScanRunRecord.user_id == user_id) | (ScanRunRecord.user_id.is_(None)),
+                ).order_by(desc(ScanRunRecord.completed_at)).limit(1)
+            run_result = await session.execute(runs_q)
+            latest_run = run_result.scalar_one_or_none()
+
+            if not latest_run:
+                return {
+                    "findings": [],
+                    "by_priority": {"high": [], "medium": [], "low": []},
+                    "run_id": None,
+                    "completed_at": None,
+                    "stale": True,
+                }
+
+            # Fetch findings for this run
+            findings_q = select(ScanFindingRecord).where(
+                ScanFindingRecord.scan_run_id == latest_run.id
+            )
+            f_result = await session.execute(findings_q)
+            findings = f_result.scalars().all()
+
+            priority_order = {"high": 0, "medium": 1, "low": 2}
+            serialized = [
+                {
+                    "id": f.id,
+                    "ticker": f.ticker,
+                    "finding_type": f.finding_type,
+                    "priority": f.priority,
+                    "headline": f.headline,
+                    "detail": f.detail or "",
+                    "data": f.data_json or {},
+                    "created_at": f.created_at.isoformat() if f.created_at else None,
+                }
+                for f in findings
+            ]
+            serialized.sort(key=lambda x: (priority_order.get(x["priority"], 2), x["ticker"]))
+
+            by_priority: dict[str, list[dict]] = {"high": [], "medium": [], "low": []}
+            for f in serialized:
+                by_priority.setdefault(f["priority"], []).append(f)
+
+            # Determine staleness (> 6 hours old)
+            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+            stale = False
+            if latest_run.completed_at:
+                age = _dt.now(_tz.utc) - latest_run.completed_at.replace(tzinfo=_tz.utc)
+                stale = age > _td(hours=6)
+
+            return {
+                "findings": serialized,
+                "by_priority": by_priority,
+                "run_id": latest_run.id,
+                "universe_size": latest_run.universe_size,
+                "findings_count": latest_run.findings_count,
+                "completed_at": latest_run.completed_at.isoformat() if latest_run.completed_at else None,
+                "stale": stale,
+            }
+    except Exception as e:
+        logger.error(f"scan_latest failed: {e}")
+        return {"findings": [], "by_priority": {"high": [], "medium": [], "low": []}, "run_id": None, "completed_at": None, "stale": True}
+
+
+@app.post("/api/scan/trigger")
+async def scan_trigger(req: Request = None):
+    """Trigger a new scan in the background. Returns immediately."""
+    user_id = get_user_id(req) if req else None
+    key = user_id or "_anon"
+
+    # Don't allow concurrent scans for the same user
+    current = _scan_status.get(key, {})
+    if current.get("status") == "running":
+        return {"status": "already_running", "run_id": current.get("run_id")}
+
+    # Build universe: default + user watchlist + open trade tickers
+    from agents.universe import DEFAULT_UNIVERSE
+    universe = list(DEFAULT_UNIVERSE)
+    try:
+        async with async_session() as session:
+            # Add watchlist tickers
+            wl_q = select(WatchlistRecord)
+            if user_id:
+                wl_q = wl_q.where(WatchlistRecord.user_id == user_id)
+            wl_result = await session.execute(wl_q)
+            for rec in wl_result.scalars().all():
+                if rec.ticker not in universe:
+                    universe.append(rec.ticker)
+
+            # Create run record
+            from db.models import TradeRecord
+            run = ScanRunRecord(
+                user_id=user_id,
+                universe_size=len(universe),
+                status="running",
+            )
+            session.add(run)
+            await session.commit()
+            run_id = run.id
+    except Exception as e:
+        logger.error(f"scan_trigger setup failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    _scan_status[key] = {"status": "running", "run_id": run_id, "started_at": _time.time()}
+
+    # Fire and forget — run in background task
+    asyncio.create_task(_run_scan_background(user_id, run_id, universe))
+
+    return {"status": "started", "run_id": run_id, "universe_size": len(universe)}
+
+
+@app.get("/api/scan/status")
+async def scan_status(req: Request = None):
+    """Check if a scan is currently running for this user."""
+    user_id = get_user_id(req) if req else None
+    key = user_id or "_anon"
+    current = _scan_status.get(key, {"status": "idle"})
+    return {
+        "status": current.get("status", "idle"),
+        "run_id": current.get("run_id"),
+        "started_at": current.get("started_at"),
+    }
+
+
+# === WATCHLIST ===
+
+class AddWatchlistRequest(BaseModel):
+    tickers: list[str]
+    notes: str = ""
+
+
+@app.get("/api/watchlist")
+async def watchlist_list(req: Request = None):
+    """List the user's watchlist tickers."""
+    user_id = get_user_id(req) if req else None
+    try:
+        async with async_session() as session:
+            q = select(WatchlistRecord)
+            if user_id:
+                q = q.where(WatchlistRecord.user_id == user_id)
+            q = q.order_by(desc(WatchlistRecord.added_at))
+            result = await session.execute(q)
+            items = result.scalars().all()
+            return {
+                "watchlist": [
+                    {
+                        "id": w.id,
+                        "ticker": w.ticker,
+                        "notes": w.notes or "",
+                        "added_at": w.added_at.isoformat() if w.added_at else None,
+                    }
+                    for w in items
+                ],
+                "count": len(items),
+            }
+    except Exception as e:
+        logger.error(f"watchlist_list failed: {e}")
+        return {"watchlist": [], "count": 0}
+
+
+@app.post("/api/watchlist")
+async def watchlist_add(req: AddWatchlistRequest, request: Request = None):
+    """Add one or more tickers to the user's watchlist."""
+    user_id = get_user_id(request) if request else None
+    tickers = [t.strip().upper() for t in req.tickers if t.strip()]
+    if not tickers:
+        raise HTTPException(status_code=400, detail="No tickers provided")
+
+    added = []
+    try:
+        async with async_session() as session:
+            for ticker in tickers:
+                # Skip if already in watchlist
+                existing_q = select(WatchlistRecord).where(
+                    WatchlistRecord.ticker == ticker,
+                )
+                if user_id:
+                    existing_q = existing_q.where(WatchlistRecord.user_id == user_id)
+                existing = (await session.execute(existing_q)).scalar_one_or_none()
+                if existing:
+                    continue
+                rec = WatchlistRecord(user_id=user_id, ticker=ticker, notes=req.notes)
+                session.add(rec)
+                added.append(ticker)
+            await session.commit()
+        return {"added": added, "count": len(added)}
+    except Exception as e:
+        logger.error(f"watchlist_add failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/watchlist/{ticker}")
+async def watchlist_remove(ticker: str, req: Request = None):
+    """Remove a ticker from the user's watchlist."""
+    user_id = get_user_id(req) if req else None
+    ticker = ticker.strip().upper()
+    try:
+        async with async_session() as session:
+            q = select(WatchlistRecord).where(WatchlistRecord.ticker == ticker)
+            if user_id:
+                q = q.where(WatchlistRecord.user_id == user_id)
+            result = await session.execute(q)
+            rec = result.scalar_one_or_none()
+            if not rec:
+                raise HTTPException(status_code=404, detail="Ticker not in watchlist")
+            await session.delete(rec)
+            await session.commit()
+        return {"removed": ticker}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"watchlist_remove failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # === STREAMING ANALYSIS ===

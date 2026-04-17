@@ -195,6 +195,49 @@ class MacroSnapshotRecord(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class ScanFindingRecord(Base):
+    """Individual finding from an overnight/on-demand universe scan."""
+    __tablename__ = "scan_findings"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    scan_run_id = Column(String, nullable=True, index=True)
+    ticker = Column(String(10), nullable=False, index=True)
+    finding_type = Column(String(30), nullable=False)
+    # Types: insider_cluster, earnings_surprise, momentum_break, rsi_extreme,
+    #        volume_spike, sentiment_shift, macro_shift, filing_alert, ma_crossover
+    priority = Column(String(10), nullable=False, index=True)  # high, medium, low
+    headline = Column(String(200), nullable=False)
+    detail = Column(Text)
+    data_json = Column(JSON)  # Raw anomaly data for drill-down
+    created_at = Column(DateTime, server_default=func.now())
+
+
+class ScanRunRecord(Base):
+    """A single execution of the universe scanner."""
+    __tablename__ = "scan_runs"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    universe_size = Column(Integer)
+    findings_count = Column(Integer, default=0)
+    started_at = Column(DateTime, server_default=func.now())
+    completed_at = Column(DateTime)
+    status = Column(String(20), default="running")  # running, completed, failed
+    error_message = Column(Text)
+
+
+class WatchlistRecord(Base):
+    """User's watchlist tickers — included in universe scans."""
+    __tablename__ = "watchlist"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    ticker = Column(String(10), nullable=False)
+    notes = Column(Text)
+    added_at = Column(DateTime, server_default=func.now())
+
+
 class MorningReportRecord(Base):
     """Pre-market morning briefings, one per day."""
     __tablename__ = "morning_reports"

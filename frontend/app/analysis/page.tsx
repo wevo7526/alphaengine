@@ -1,13 +1,27 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useAnalysisContext } from "@/hooks/AnalysisContext";
 import { AnalysisTrace } from "@/components/AnalysisTrace";
 
-export default function AnalysisPage() {
+function AnalysisView() {
   const [input, setInput] = useState("");
   const { runs, activeRun, analyze, removeRun } = useAnalysisContext();
   const scrollRef = useRef<HTMLDivElement>(null);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // Auto-submit when navigated from a scan finding (?q=...)
+  useEffect(() => {
+    const q = searchParams.get("q");
+    if (q && !activeRun) {
+      // Clear the query param, then submit
+      router.replace("/analysis");
+      analyze(q.trim());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -111,5 +125,13 @@ export default function AnalysisPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function AnalysisPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-sm text-text-tertiary">Loading...</div>}>
+      <AnalysisView />
+    </Suspense>
   );
 }

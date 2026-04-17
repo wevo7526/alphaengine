@@ -5,6 +5,7 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { MacroChart } from "@/components/MacroChart";
 import { MemoPanel } from "@/components/MemoPanel";
+import { ScanFindings } from "@/components/ScanFindings";
 import type { MacroIndicator, IntelligenceMemo } from "@/lib/types";
 
 interface MacroSeries {
@@ -127,6 +128,9 @@ export default function HomePage() {
           New Analysis
         </Link>
       </div>
+
+      {/* Overnight Scan — auto-populating findings */}
+      <ScanFindings />
 
       {/* Morning Report */}
       <div className="rounded-xl border border-border-primary bg-bg-surface p-5 mb-6">
