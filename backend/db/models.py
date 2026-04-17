@@ -227,6 +227,37 @@ class ScanRunRecord(Base):
     error_message = Column(Text)
 
 
+class SignalScoreRecord(Base):
+    """Track every past trade idea at 1d/5d/20d intervals to measure signal quality."""
+    __tablename__ = "signal_scores"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    memo_id = Column(String, nullable=True, index=True)  # FK to intelligence_memos
+    ticker = Column(String(10), nullable=False, index=True)
+    direction = Column(String(20))  # from trade idea
+    conviction = Column(Integer)
+    entry_price = Column(Float)          # Price at signal time
+    signal_date = Column(DateTime)        # When the memo was created
+
+    # Forward prices at different intervals
+    price_1d = Column(Float)
+    price_5d = Column(Float)
+    price_20d = Column(Float)
+
+    # Returns (signed — positive means the direction was correct)
+    return_1d = Column(Float)             # % return in predicted direction
+    return_5d = Column(Float)
+    return_20d = Column(Float)
+
+    # Hit flags (was the direction correct?)
+    hit_1d = Column(Boolean)
+    hit_5d = Column(Boolean)
+    hit_20d = Column(Boolean)
+
+    scored_at = Column(DateTime, server_default=func.now())
+
+
 class WatchlistRecord(Base):
     """User's watchlist tickers — included in universe scans."""
     __tablename__ = "watchlist"

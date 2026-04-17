@@ -82,6 +82,42 @@ interface PositionsSummary {
   win_rate: number | null;
 }
 
+interface ScorecardSummary {
+  signals: number;
+  hit_rate_1d: number | null;
+  hit_rate_5d: number | null;
+  hit_rate_20d: number | null;
+  avg_return_1d: number | null;
+  avg_return_5d: number | null;
+  avg_return_20d: number | null;
+  ic_5d: number | null;
+  ic_20d: number | null;
+  by_conviction: Record<string, { count: number; hit_rate_5d?: number | null; avg_return_5d?: number | null }>;
+  top_winners?: { ticker: string; direction: string; conviction: number; return_20d: number; signal_date: string | null }[];
+  top_losers?: { ticker: string; direction: string; conviction: number; return_20d: number; signal_date: string | null }[];
+  error?: string;
+}
+
+interface AttributionData {
+  trade_count: number;
+  unique_tickers?: number;
+  period_return_pct?: number;
+  benchmark_return_pct?: number;
+  decomposition?: {
+    alpha_pct: number | null;
+    beta_contribution_pct: number;
+    residual_pct: number;
+  };
+  factor_loadings?: {
+    alpha: number | null;
+    beta: number | null;
+    r_squared: number | null;
+    residual_vol: number | null;
+  };
+  weights?: Record<string, number>;
+  error?: string;
+}
+
 export default function PortfolioPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [memos, setMemos] = useState<IntelligenceMemo[]>([]);
@@ -94,10 +130,13 @@ export default function PortfolioPage() {
     alpha?: number | null; beta?: number | null; r_squared?: number | null;
     residual_vol?: number | null; factor_betas?: Record<string, number>;
   } | null>(null);
-  const [tab, setTab] = useState<"positions" | "journal" | "analyses" | "backtest" | "factors">("positions");
+  const [tab, setTab] = useState<"positions" | "scorecard" | "attribution" | "journal" | "analyses" | "backtest" | "factors">("positions");
   const [positions, setPositions] = useState<Position[]>([]);
   const [positionsSummary, setPositionsSummary] = useState<PositionsSummary | null>(null);
   const [positionsLoading, setPositionsLoading] = useState(true);
+  const [scorecard, setScorecard] = useState<ScorecardSummary | null>(null);
+  const [scorecardRunning, setScorecardRunning] = useState(false);
+  const [attribution, setAttribution] = useState<AttributionData | null>(null);
 
   const loadPositions = () => {
     setPositionsLoading(true);
@@ -106,6 +145,28 @@ export default function PortfolioPage() {
       setPositions(data.positions || []);
       setPositionsSummary(data.summary || null);
     }).catch(() => {}).finally(() => setPositionsLoading(false));
+  };
+
+  const loadScorecard = () => {
+    api.scorecardSummary().then((d: unknown) => {
+      setScorecard(d as ScorecardSummary);
+    }).catch(() => {});
+  };
+
+  const runScoring = async () => {
+    setScorecardRunning(true);
+    try {
+      await api.scorecardRun();
+      await new Promise((r) => setTimeout(r, 500));
+      loadScorecard();
+    } catch {}
+    setScorecardRunning(false);
+  };
+
+  const loadAttribution = () => {
+    api.attribution().then((d: unknown) => {
+      setAttribution(d as AttributionData);
+    }).catch(() => {});
   };
 
   useEffect(() => {
@@ -119,6 +180,8 @@ export default function PortfolioPage() {
     ]).finally(() => setLoading(false));
 
     loadPositions();
+    loadScorecard();
+    loadAttribution();
   }, []);
 
   const runBacktest = () => {
@@ -158,9 +221,11 @@ export default function PortfolioPage() {
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-2 mb-6">
+      <div className="flex gap-2 mb-6 flex-wrap">
         {[
           { key: "positions" as const, label: "Positions" },
+          { key: "scorecard" as const, label: "Scorecard" },
+          { key: "attribution" as const, label: "Attribution" },
           { key: "journal" as const, label: "Trade Journal" },
           { key: "analyses" as const, label: "Analyses" },
           { key: "backtest" as const, label: "Backtest" },
@@ -298,6 +363,306 @@ export default function PortfolioPage() {
                   </table>
                 </div>
               </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Scorecard Tab */}
+      {tab === "scorecard" && (
+        <>
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-[13px] font-medium text-text-primary mb-0.5">Signal Scorecard</h2>
+              <p className="text-xs text-text-tertiary">
+                How past signals performed at 1d / 5d / 20d intervals.
+              </p>
+            </div>
+            <button
+              onClick={runScoring}
+              disabled={scorecardRunning}
+              className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
+            >
+              {scorecardRunning ? "Scoring..." : "Score Past Signals"}
+            </button>
+          </div>
+
+          {!scorecard || scorecard.signals === 0 ? (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
+              <p className="text-[13px] text-text-secondary mb-2">No scored signals yet</p>
+              <p className="text-xs text-text-tertiary max-w-md mx-auto">
+                Run an analysis, wait at least 24 hours, then click Score Past Signals.
+                Signals are scored at 1, 5, and 20 trading day intervals against realized prices.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Top-line hit rates */}
+              <div className="grid grid-cols-3 gap-3">
+                <StatCard
+                  label="Hit Rate (1d)"
+                  value={scorecard.hit_rate_1d !== null ? `${scorecard.hit_rate_1d}%` : "—"}
+                  color={scorecard.hit_rate_1d !== null && scorecard.hit_rate_1d >= 55 ? "text-signal-green" : scorecard.hit_rate_1d !== null && scorecard.hit_rate_1d < 45 ? "text-signal-red" : undefined}
+                />
+                <StatCard
+                  label="Hit Rate (5d)"
+                  value={scorecard.hit_rate_5d !== null ? `${scorecard.hit_rate_5d}%` : "—"}
+                  color={scorecard.hit_rate_5d !== null && scorecard.hit_rate_5d >= 55 ? "text-signal-green" : scorecard.hit_rate_5d !== null && scorecard.hit_rate_5d < 45 ? "text-signal-red" : undefined}
+                />
+                <StatCard
+                  label="Hit Rate (20d)"
+                  value={scorecard.hit_rate_20d !== null ? `${scorecard.hit_rate_20d}%` : "—"}
+                  color={scorecard.hit_rate_20d !== null && scorecard.hit_rate_20d >= 55 ? "text-signal-green" : scorecard.hit_rate_20d !== null && scorecard.hit_rate_20d < 45 ? "text-signal-red" : undefined}
+                />
+              </div>
+
+              {/* Average returns */}
+              <div className="grid grid-cols-3 gap-3">
+                <StatCard
+                  label="Avg Return (1d)"
+                  value={scorecard.avg_return_1d !== null ? `${scorecard.avg_return_1d >= 0 ? "+" : ""}${scorecard.avg_return_1d}%` : "—"}
+                  color={scorecard.avg_return_1d !== null && scorecard.avg_return_1d >= 0 ? "text-signal-green" : scorecard.avg_return_1d !== null ? "text-signal-red" : undefined}
+                />
+                <StatCard
+                  label="Avg Return (5d)"
+                  value={scorecard.avg_return_5d !== null ? `${scorecard.avg_return_5d >= 0 ? "+" : ""}${scorecard.avg_return_5d}%` : "—"}
+                  color={scorecard.avg_return_5d !== null && scorecard.avg_return_5d >= 0 ? "text-signal-green" : scorecard.avg_return_5d !== null ? "text-signal-red" : undefined}
+                />
+                <StatCard
+                  label="Avg Return (20d)"
+                  value={scorecard.avg_return_20d !== null ? `${scorecard.avg_return_20d >= 0 ? "+" : ""}${scorecard.avg_return_20d}%` : "—"}
+                  color={scorecard.avg_return_20d !== null && scorecard.avg_return_20d >= 0 ? "text-signal-green" : scorecard.avg_return_20d !== null ? "text-signal-red" : undefined}
+                />
+              </div>
+
+              {/* Information Coefficient */}
+              <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+                  Information Coefficient (conviction × direction vs return)
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-[10px] text-text-quaternary mb-0.5">IC (5d)</p>
+                    <p className={`text-lg font-mono font-medium ${
+                      scorecard.ic_5d !== null && scorecard.ic_5d >= 0.05 ? "text-signal-green" :
+                      scorecard.ic_5d !== null && scorecard.ic_5d < 0 ? "text-signal-red" :
+                      "text-text-primary"
+                    }`}>
+                      {scorecard.ic_5d !== null ? scorecard.ic_5d.toFixed(3) : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-text-quaternary mb-0.5">IC (20d)</p>
+                    <p className={`text-lg font-mono font-medium ${
+                      scorecard.ic_20d !== null && scorecard.ic_20d >= 0.05 ? "text-signal-green" :
+                      scorecard.ic_20d !== null && scorecard.ic_20d < 0 ? "text-signal-red" :
+                      "text-text-primary"
+                    }`}>
+                      {scorecard.ic_20d !== null ? scorecard.ic_20d.toFixed(3) : "—"}
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[10px] text-text-quaternary mt-2">
+                  IC &gt; 0.05 = useful · IC &gt; 0.10 = strong · IC &lt; 0 = inverse predictor
+                </p>
+              </div>
+
+              {/* Per-conviction breakdown */}
+              {scorecard.by_conviction && Object.keys(scorecard.by_conviction).length > 0 && (
+                <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                  <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+                    By Conviction Bucket
+                  </h3>
+                  <div className="space-y-2">
+                    {Object.entries(scorecard.by_conviction).map(([bucket, stats]) => (
+                      <div key={bucket} className="flex items-center justify-between text-[12px] py-1.5 border-b border-border-primary last:border-b-0">
+                        <span className="text-text-secondary capitalize">{bucket}</span>
+                        <div className="flex items-center gap-4">
+                          <span className="text-text-quaternary font-mono">{stats.count} signals</span>
+                          {stats.hit_rate_5d !== null && stats.hit_rate_5d !== undefined && (
+                            <span className={`font-mono ${
+                              stats.hit_rate_5d >= 55 ? "text-signal-green" :
+                              stats.hit_rate_5d < 45 ? "text-signal-red" :
+                              "text-text-primary"
+                            }`}>
+                              hit {stats.hit_rate_5d}%
+                            </span>
+                          )}
+                          {stats.avg_return_5d !== null && stats.avg_return_5d !== undefined && (
+                            <span className={`font-mono ${stats.avg_return_5d >= 0 ? "text-signal-green" : "text-signal-red"}`}>
+                              {stats.avg_return_5d >= 0 ? "+" : ""}{stats.avg_return_5d}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Top winners/losers */}
+              {(scorecard.top_winners?.length || scorecard.top_losers?.length) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {scorecard.top_winners && scorecard.top_winners.length > 0 && (
+                    <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                      <h3 className="text-[11px] font-medium text-signal-green uppercase tracking-wider mb-3">
+                        Top Winners (20d)
+                      </h3>
+                      <div className="space-y-1">
+                        {scorecard.top_winners.map((w, i) => (
+                          <div key={i} className="flex items-center justify-between text-[12px]">
+                            <span className="font-mono font-bold text-text-primary">{w.ticker}</span>
+                            <span className="text-text-quaternary text-[10px]">{w.direction} · conv {w.conviction}</span>
+                            <span className="font-mono text-signal-green">+{w.return_20d}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {scorecard.top_losers && scorecard.top_losers.length > 0 && (
+                    <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                      <h3 className="text-[11px] font-medium text-signal-red uppercase tracking-wider mb-3">
+                        Top Losers (20d)
+                      </h3>
+                      <div className="space-y-1">
+                        {scorecard.top_losers.map((l, i) => (
+                          <div key={i} className="flex items-center justify-between text-[12px]">
+                            <span className="font-mono font-bold text-text-primary">{l.ticker}</span>
+                            <span className="text-text-quaternary text-[10px]">{l.direction} · conv {l.conviction}</span>
+                            <span className="font-mono text-signal-red">{l.return_20d}%</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Attribution Tab */}
+      {tab === "attribution" && (
+        <>
+          <div className="mb-4">
+            <h2 className="text-[13px] font-medium text-text-primary mb-0.5">P&L Attribution</h2>
+            <p className="text-xs text-text-tertiary">
+              Decompose portfolio returns into factor exposure (beta) vs alpha (stock-picking skill).
+            </p>
+          </div>
+
+          {!attribution || attribution.error ? (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
+              <p className="text-[13px] text-text-secondary mb-2">
+                {attribution?.error || "No attribution data"}
+              </p>
+              <p className="text-xs text-text-tertiary max-w-sm mx-auto">
+                Attribution requires open trades with sufficient price history (3+ months per ticker).
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Top-line */}
+              <div className="grid grid-cols-3 gap-3">
+                <StatCard
+                  label="Portfolio Return"
+                  value={attribution.period_return_pct !== undefined ? `${attribution.period_return_pct >= 0 ? "+" : ""}${attribution.period_return_pct}%` : "—"}
+                  color={attribution.period_return_pct !== undefined && attribution.period_return_pct >= 0 ? "text-signal-green" : "text-signal-red"}
+                />
+                <StatCard
+                  label="SPY Benchmark"
+                  value={attribution.benchmark_return_pct !== undefined ? `${attribution.benchmark_return_pct >= 0 ? "+" : ""}${attribution.benchmark_return_pct}%` : "—"}
+                />
+                <StatCard
+                  label="R-Squared"
+                  value={attribution.factor_loadings?.r_squared !== null && attribution.factor_loadings?.r_squared !== undefined ? attribution.factor_loadings.r_squared.toFixed(2) : "—"}
+                />
+              </div>
+
+              {/* Decomposition */}
+              {attribution.decomposition && (
+                <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+                  <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-4">
+                    Return Decomposition
+                  </h3>
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] text-text-secondary w-36">Alpha (skill)</span>
+                      <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden relative">
+                        <div
+                          className={`h-full rounded-full ${(attribution.decomposition.alpha_pct ?? 0) >= 0 ? "bg-signal-green" : "bg-signal-red"}`}
+                          style={{ width: `${Math.min(Math.abs(attribution.decomposition.alpha_pct ?? 0) * 5, 100)}%` }}
+                        />
+                      </div>
+                      <span className={`text-xs font-mono w-16 text-right ${(attribution.decomposition.alpha_pct ?? 0) >= 0 ? "text-signal-green" : "text-signal-red"}`}>
+                        {attribution.decomposition.alpha_pct !== null ? `${(attribution.decomposition.alpha_pct ?? 0) >= 0 ? "+" : ""}${attribution.decomposition.alpha_pct}%` : "—"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] text-text-secondary w-36">Beta × Market</span>
+                      <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden relative">
+                        <div
+                          className={`h-full rounded-full ${attribution.decomposition.beta_contribution_pct >= 0 ? "bg-accent" : "bg-signal-red"}`}
+                          style={{ width: `${Math.min(Math.abs(attribution.decomposition.beta_contribution_pct) * 5, 100)}%` }}
+                        />
+                      </div>
+                      <span className={`text-xs font-mono w-16 text-right ${attribution.decomposition.beta_contribution_pct >= 0 ? "text-accent" : "text-signal-red"}`}>
+                        {attribution.decomposition.beta_contribution_pct >= 0 ? "+" : ""}{attribution.decomposition.beta_contribution_pct}%
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] text-text-secondary w-36">Residual (noise)</span>
+                      <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden relative">
+                        <div
+                          className="h-full rounded-full bg-signal-yellow"
+                          style={{ width: `${Math.min(Math.abs(attribution.decomposition.residual_pct) * 5, 100)}%` }}
+                        />
+                      </div>
+                      <span className="text-xs font-mono w-16 text-right text-signal-yellow">
+                        {attribution.decomposition.residual_pct >= 0 ? "+" : ""}{attribution.decomposition.residual_pct}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Factor loadings */}
+              {attribution.factor_loadings && (
+                <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+                  <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+                    Factor Loadings
+                  </h3>
+                  <div className="grid grid-cols-2 gap-3 text-[12px]">
+                    <div>
+                      <p className="text-[10px] text-text-quaternary">Alpha (annualized)</p>
+                      <p className={`font-mono font-medium ${
+                        (attribution.factor_loadings.alpha ?? 0) >= 0 ? "text-signal-green" : "text-signal-red"
+                      }`}>
+                        {attribution.factor_loadings.alpha !== null ? `${(attribution.factor_loadings.alpha ?? 0) >= 0 ? "+" : ""}${attribution.factor_loadings.alpha}%` : "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-text-quaternary">Beta (vs SPY)</p>
+                      <p className="font-mono font-medium text-text-primary">
+                        {attribution.factor_loadings.beta !== null ? attribution.factor_loadings.beta?.toFixed(3) : "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-text-quaternary">R-Squared</p>
+                      <p className="font-mono font-medium text-text-primary">
+                        {attribution.factor_loadings.r_squared !== null ? attribution.factor_loadings.r_squared?.toFixed(3) : "—"}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] text-text-quaternary">Residual Vol</p>
+                      <p className="font-mono font-medium text-text-primary">
+                        {attribution.factor_loadings.residual_vol !== null ? `${attribution.factor_loadings.residual_vol?.toFixed(2)}%` : "—"}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>

@@ -16,7 +16,7 @@ from data.market_client import MarketDataClient
 from data.news_client import NewsDataClient
 from data.sec_client import SECDataClient
 from db.database import init_db, async_session
-from db.models import IntelligenceMemoRecord, ScanFindingRecord, ScanRunRecord, WatchlistRecord
+from db.models import IntelligenceMemoRecord, ScanFindingRecord, ScanRunRecord, WatchlistRecord, SignalScoreRecord
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1114,6 +1114,121 @@ async def portfolio_risk():
     return await portfolio_risk_analysis()
 
 
+@app.get("/api/portfolio/attribution")
+async def portfolio_attribution(req: Request = None):
+    """
+    Desk 6B — Attribution Analyst.
+
+    Decompose portfolio returns into factor returns (beta to SPY, momentum)
+    vs alpha (stock picking skill).
+    """
+    from quant.factors import compute_factor_loadings
+    from db.models import TradeRecord
+
+    user_id = get_user_id(req) if req else None
+
+    try:
+        async with async_session() as session:
+            q = select(TradeRecord)
+            if user_id:
+                q = q.where(TradeRecord.user_id == user_id)
+            result = await session.execute(q)
+            trades = result.scalars().all()
+    except Exception as e:
+        logger.error(f"attribution DB failed: {e}")
+        return {"error": str(e)}
+
+    if not trades:
+        return {"error": "No trades to analyze", "trade_count": 0}
+
+    # Build per-ticker return series weighted by position size
+    ticker_weights: dict[str, float] = {}
+    for t in trades:
+        size = float(t.position_size_pct or 0) / 100.0
+        if size <= 0:
+            continue
+        ticker_weights[t.ticker] = ticker_weights.get(t.ticker, 0) + size
+
+    if not ticker_weights:
+        return {"error": "No sized positions", "trade_count": 0}
+
+    # Normalize weights
+    total_weight = sum(ticker_weights.values())
+    if total_weight == 0:
+        return {"error": "Zero total weight"}
+    ticker_weights = {t: w / total_weight for t, w in ticker_weights.items()}
+
+    # Fetch returns for each ticker + SPY benchmark
+    tickers = list(ticker_weights.keys())[:10]  # Cap at 10 to conserve API
+    returns_dict: dict[str, list[float]] = {}
+    for t in tickers:
+        try:
+            history = market_client.get_price_history(t, period="3mo")
+            if history and len(history) > 20:
+                closes = [b["close"] for b in history]
+                rets = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes))]
+                returns_dict[t] = rets
+        except Exception as e:
+            logger.warning(f"Failed to fetch {t} for attribution: {e}")
+
+    try:
+        spy_history = market_client.get_price_history("SPY", period="3mo")
+        spy_closes = [b["close"] for b in spy_history]
+        benchmark = [(spy_closes[i] - spy_closes[i - 1]) / spy_closes[i - 1] for i in range(1, len(spy_closes))]
+    except Exception as e:
+        logger.warning(f"Failed to fetch SPY benchmark: {e}")
+        return {"error": "Could not fetch SPY benchmark"}
+
+    if not returns_dict or not benchmark:
+        return {"error": "Insufficient data"}
+
+    # Build portfolio return series (weighted by position size)
+    min_len = min(len(r) for r in returns_dict.values())
+    min_len = min(min_len, len(benchmark))
+    port_returns = []
+    for i in range(min_len):
+        daily = sum(
+            ticker_weights.get(t, 0) * returns_dict[t][i]
+            for t in returns_dict
+        )
+        port_returns.append(daily)
+    benchmark = benchmark[:min_len]
+
+    loadings = compute_factor_loadings(port_returns, benchmark)
+
+    # Decompose: total return = alpha + beta*market_return + residual
+    alpha = loadings.get("alpha", 0)
+    beta = loadings.get("beta", 1)
+    r_squared = loadings.get("r_squared", 0)
+    residual_vol = loadings.get("residual_vol", 0)
+
+    # Compute total return in observation window
+    total_port_return = sum(port_returns) * 100  # %
+    total_market_return = sum(benchmark) * 100
+    factor_contribution = beta * total_market_return
+    alpha_contribution = alpha if alpha is not None else 0
+    residual_contribution = total_port_return - factor_contribution - alpha_contribution
+
+    return {
+        "trade_count": len(trades),
+        "unique_tickers": len(ticker_weights),
+        "period_return_pct": round(total_port_return, 2),
+        "benchmark_return_pct": round(total_market_return, 2),
+        "decomposition": {
+            "alpha_pct": round(alpha_contribution, 2) if alpha_contribution is not None else None,
+            "beta_contribution_pct": round(factor_contribution, 2),
+            "residual_pct": round(residual_contribution, 2),
+        },
+        "factor_loadings": {
+            "alpha": alpha,
+            "beta": beta,
+            "r_squared": r_squared,
+            "residual_vol": residual_vol,
+        },
+        "weights": {t: round(w * 100, 2) for t, w in ticker_weights.items()},
+    }
+
+
 @app.get("/api/portfolio/positions")
 async def portfolio_positions(req: Request = None):
     """
@@ -1495,6 +1610,67 @@ async def scan_status(req: Request = None):
         "run_id": current.get("run_id"),
         "started_at": current.get("started_at"),
     }
+
+
+# === SCORECARD (Desk 6) ===
+
+@app.get("/api/scorecard/summary")
+async def scorecard_summary(req: Request = None):
+    """
+    Aggregate signal quality metrics: hit rate, avg return, IC per conviction bucket.
+    """
+    from agents.scorer import get_scorecard_summary
+    user_id = get_user_id(req) if req else None
+    return await get_scorecard_summary(async_session, user_id=user_id)
+
+
+@app.get("/api/scorecard/signals")
+async def scorecard_signals(limit: int = 50, req: Request = None):
+    """List individual signal scores with outcomes."""
+    user_id = get_user_id(req) if req else None
+    try:
+        async with async_session() as session:
+            q = select(SignalScoreRecord).order_by(desc(SignalScoreRecord.signal_date))
+            if user_id:
+                q = q.where(SignalScoreRecord.user_id == user_id)
+            q = q.limit(limit)
+            result = await session.execute(q)
+            scores = result.scalars().all()
+            return {
+                "signals": [
+                    {
+                        "id": s.id,
+                        "memo_id": s.memo_id,
+                        "ticker": s.ticker,
+                        "direction": s.direction,
+                        "conviction": s.conviction,
+                        "entry_price": s.entry_price,
+                        "signal_date": s.signal_date.isoformat() if s.signal_date else None,
+                        "price_1d": s.price_1d,
+                        "price_5d": s.price_5d,
+                        "price_20d": s.price_20d,
+                        "return_1d": s.return_1d,
+                        "return_5d": s.return_5d,
+                        "return_20d": s.return_20d,
+                        "hit_1d": s.hit_1d,
+                        "hit_5d": s.hit_5d,
+                        "hit_20d": s.hit_20d,
+                    }
+                    for s in scores
+                ],
+                "count": len(scores),
+            }
+    except Exception as e:
+        logger.error(f"scorecard_signals failed: {e}")
+        return {"signals": [], "count": 0}
+
+
+@app.post("/api/scorecard/run")
+async def scorecard_run():
+    """Manually trigger signal scoring job."""
+    from agents.scorer import score_pending_signals
+    result = await score_pending_signals(async_session)
+    return result
 
 
 # === WATCHLIST ===

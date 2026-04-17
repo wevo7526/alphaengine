@@ -104,6 +104,19 @@ export const api = {
 
   // Portfolio positions + live P&L
   positions: () => request("/api/portfolio/positions"),
+  attribution: () => request("/api/portfolio/attribution"),
+
+  // Scorecard (Desk 6)
+  scorecardSummary: () => request("/api/scorecard/summary"),
+  scorecardSignals: (limit = 50) => request(`/api/scorecard/signals?limit=${limit}`),
+  scorecardRun: () => request("/api/scorecard/run", { method: "POST" }),
+
+  // Risk gate preview
+  riskCheck: (ticker: string, direction: string, size_pct: number) =>
+    request("/api/portfolio/risk-check", {
+      method: "POST",
+      body: JSON.stringify({ ticker, direction, size_pct }),
+    }),
 
   // Quant infrastructure
   portfolioRisk: () => request("/api/quant/portfolio-risk"),
