@@ -50,6 +50,38 @@ interface BacktestSummary {
   win_rate: number;
 }
 
+interface Position {
+  ticker: string;
+  direction: string;
+  avg_entry_price: number | null;
+  current_price: number | null;
+  total_size_pct: number;
+  unrealized_pnl_pct: number | null;
+  unrealized_pnl_dollars: number | null;
+  cost_basis: number | null;
+  market_value: number | null;
+  avg_stop_loss: number | null;
+  avg_take_profit: number | null;
+  weight_pct: number | null;
+  trade_count: number;
+  opened_at: string | null;
+}
+
+interface PositionsSummary {
+  portfolio_base: number;
+  total_cost_basis: number;
+  total_market_value: number;
+  total_unrealized_pnl: number;
+  total_unrealized_pnl_pct: number;
+  total_realized_pnl: number;
+  total_realized_pnl_pct_avg: number;
+  open_positions: number;
+  closed_trades: number;
+  wins: number;
+  losses: number;
+  win_rate: number | null;
+}
+
 export default function PortfolioPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [memos, setMemos] = useState<IntelligenceMemo[]>([]);
@@ -62,7 +94,19 @@ export default function PortfolioPage() {
     alpha?: number | null; beta?: number | null; r_squared?: number | null;
     residual_vol?: number | null; factor_betas?: Record<string, number>;
   } | null>(null);
-  const [tab, setTab] = useState<"journal" | "analyses" | "backtest" | "factors">("journal");
+  const [tab, setTab] = useState<"positions" | "journal" | "analyses" | "backtest" | "factors">("positions");
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [positionsSummary, setPositionsSummary] = useState<PositionsSummary | null>(null);
+  const [positionsLoading, setPositionsLoading] = useState(true);
+
+  const loadPositions = () => {
+    setPositionsLoading(true);
+    api.positions().then((d: unknown) => {
+      const data = d as { positions: Position[]; summary: PositionsSummary };
+      setPositions(data.positions || []);
+      setPositionsSummary(data.summary || null);
+    }).catch(() => {}).finally(() => setPositionsLoading(false));
+  };
 
   useEffect(() => {
     Promise.all([
@@ -73,6 +117,8 @@ export default function PortfolioPage() {
         setMemos((d as { memos: IntelligenceMemo[] }).memos || []);
       }).catch(() => {}),
     ]).finally(() => setLoading(false));
+
+    loadPositions();
   }, []);
 
   const runBacktest = () => {
@@ -114,6 +160,7 @@ export default function PortfolioPage() {
       {/* Tabs */}
       <div className="flex gap-2 mb-6">
         {[
+          { key: "positions" as const, label: "Positions" },
           { key: "journal" as const, label: "Trade Journal" },
           { key: "analyses" as const, label: "Analyses" },
           { key: "backtest" as const, label: "Backtest" },
@@ -132,6 +179,129 @@ export default function PortfolioPage() {
           </button>
         ))}
       </div>
+
+      {/* Positions Tab */}
+      {tab === "positions" && (
+        <>
+          {positionsLoading ? (
+            <p className="text-sm text-text-quaternary">Loading positions...</p>
+          ) : !positionsSummary || positions.length === 0 ? (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
+              <p className="text-[13px] text-text-secondary mb-2">No open positions</p>
+              <p className="text-xs text-text-tertiary max-w-sm mx-auto">
+                Take a trade from an analysis memo, or import existing trades via the Trade Journal tab.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {/* Summary cards */}
+              <div className="grid grid-cols-4 gap-3">
+                <StatCard
+                  label="Total Value"
+                  value={`$${positionsSummary.total_market_value.toLocaleString()}`}
+                />
+                <StatCard
+                  label="Unrealized P&L"
+                  value={`${positionsSummary.total_unrealized_pnl >= 0 ? "+" : ""}${positionsSummary.total_unrealized_pnl_pct.toFixed(2)}%`}
+                  color={positionsSummary.total_unrealized_pnl >= 0 ? "text-signal-green" : "text-signal-red"}
+                />
+                <StatCard
+                  label="Realized P&L"
+                  value={`${positionsSummary.total_realized_pnl >= 0 ? "+" : ""}$${Math.abs(positionsSummary.total_realized_pnl).toLocaleString()}`}
+                  color={positionsSummary.total_realized_pnl >= 0 ? "text-signal-green" : "text-signal-red"}
+                />
+                <StatCard
+                  label="Win Rate"
+                  value={positionsSummary.win_rate !== null ? `${positionsSummary.win_rate.toFixed(1)}%` : "—"}
+                  color={positionsSummary.win_rate !== null && positionsSummary.win_rate >= 50 ? "text-signal-green" : positionsSummary.win_rate !== null ? "text-signal-red" : undefined}
+                />
+              </div>
+
+              {/* Positions table */}
+              <div className="rounded-xl border border-border-primary bg-bg-surface overflow-hidden">
+                <div className="px-4 py-3 border-b border-border-primary flex items-center justify-between">
+                  <div>
+                    <h2 className="text-[13px] font-medium text-text-primary">Open Positions</h2>
+                    <p className="text-[10px] text-text-quaternary">
+                      {positionsSummary.open_positions} positions · based on ${positionsSummary.portfolio_base.toLocaleString()} portfolio
+                    </p>
+                  </div>
+                  <button
+                    onClick={loadPositions}
+                    className="text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
+                  >
+                    Refresh
+                  </button>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-[10px] text-text-quaternary uppercase tracking-wider border-b border-border-primary">
+                        <th className="px-4 py-2 text-left font-medium">Ticker</th>
+                        <th className="px-4 py-2 text-left font-medium">Dir</th>
+                        <th className="px-4 py-2 text-right font-medium">Entry</th>
+                        <th className="px-4 py-2 text-right font-medium">Current</th>
+                        <th className="px-4 py-2 text-right font-medium">P&L %</th>
+                        <th className="px-4 py-2 text-right font-medium">P&L $</th>
+                        <th className="px-4 py-2 text-right font-medium">Weight</th>
+                        <th className="px-4 py-2 text-right font-medium">Stop/Target</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {positions.map((p, i) => {
+                        const dirLong = p.direction?.includes("bullish");
+                        const pnlColor = (p.unrealized_pnl_pct ?? 0) >= 0 ? "text-signal-green" : "text-signal-red";
+                        return (
+                          <tr
+                            key={`${p.ticker}-${p.direction}-${i}`}
+                            className="border-b border-border-primary last:border-b-0 hover:bg-white/[0.02] transition-colors"
+                          >
+                            <td className="px-4 py-3">
+                              <span className="text-[13px] font-mono font-bold text-text-primary">{p.ticker}</span>
+                              {p.trade_count > 1 && (
+                                <span className="ml-1.5 text-[10px] text-text-quaternary">×{p.trade_count}</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                                dirLong ? "bg-signal-green/10 text-signal-green" : "bg-signal-red/10 text-signal-red"
+                              }`}>
+                                {dirLong ? "LONG" : "SHORT"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-secondary">
+                              {p.avg_entry_price !== null ? `$${p.avg_entry_price.toFixed(2)}` : "—"}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-primary">
+                              {p.current_price !== null ? `$${p.current_price.toFixed(2)}` : "—"}
+                            </td>
+                            <td className={`px-4 py-3 text-right font-mono text-[12px] font-medium ${pnlColor}`}>
+                              {p.unrealized_pnl_pct !== null ? `${p.unrealized_pnl_pct >= 0 ? "+" : ""}${p.unrealized_pnl_pct.toFixed(2)}%` : "—"}
+                            </td>
+                            <td className={`px-4 py-3 text-right font-mono text-[12px] ${pnlColor}`}>
+                              {p.unrealized_pnl_dollars !== null
+                                ? `${p.unrealized_pnl_dollars >= 0 ? "+" : ""}$${Math.abs(p.unrealized_pnl_dollars).toFixed(0)}`
+                                : "—"}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-tertiary">
+                              {p.weight_pct !== null ? `${p.weight_pct.toFixed(1)}%` : `${p.total_size_pct.toFixed(1)}%`}
+                            </td>
+                            <td className="px-4 py-3 text-right font-mono text-[11px] text-text-quaternary">
+                              {p.avg_stop_loss !== null ? `$${p.avg_stop_loss.toFixed(0)}` : "—"}
+                              {" / "}
+                              {p.avg_take_profit !== null ? `$${p.avg_take_profit.toFixed(0)}` : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
       {/* Trade Journal Tab */}
       {tab === "journal" && (

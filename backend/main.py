@@ -982,6 +982,198 @@ async def portfolio_risk():
     return await portfolio_risk_analysis()
 
 
+@app.get("/api/portfolio/positions")
+async def portfolio_positions(req: Request = None):
+    """
+    Aggregated positions with live P&L.
+
+    Groups open trades by ticker, fetches current prices concurrently,
+    computes per-position unrealized P&L, weights, and portfolio summary.
+    """
+    user_id = get_user_id(req) if req else None
+    from db.models import TradeRecord
+    from concurrent.futures import ThreadPoolExecutor
+
+    try:
+        async with async_session() as session:
+            # Open trades for user
+            open_q = select(TradeRecord).where(TradeRecord.status == "open")
+            if user_id:
+                open_q = open_q.where(TradeRecord.user_id == user_id)
+            open_result = await session.execute(open_q)
+            open_trades = open_result.scalars().all()
+
+            # Closed trades for realized P&L
+            closed_q = select(TradeRecord).where(TradeRecord.status != "open")
+            if user_id:
+                closed_q = closed_q.where(TradeRecord.user_id == user_id)
+            closed_result = await session.execute(closed_q)
+            closed_trades = closed_result.scalars().all()
+    except Exception as e:
+        logger.error(f"portfolio_positions DB failed: {e}")
+        return {"positions": [], "summary": {}, "error": str(e)}
+
+    # Aggregate open trades by ticker
+    grouped: dict[str, dict] = {}
+    for t in open_trades:
+        key = (t.ticker, t.direction)
+        g = grouped.setdefault(key, {
+            "ticker": t.ticker,
+            "direction": t.direction,
+            "total_size_pct": 0.0,
+            "trades": [],
+            "entry_prices": [],
+            "weights": [],
+            "stops": [],
+            "targets": [],
+            "earliest_opened": t.opened_at,
+        })
+        g["total_size_pct"] += float(t.position_size_pct or 0)
+        g["trades"].append(t.id)
+        if t.entry_price:
+            g["entry_prices"].append(float(t.entry_price))
+            g["weights"].append(float(t.position_size_pct or 0))
+        if t.stop_loss:
+            g["stops"].append(float(t.stop_loss))
+        if t.take_profit:
+            g["targets"].append(float(t.take_profit))
+        if t.opened_at and (not g.get("earliest_opened") or t.opened_at < g["earliest_opened"]):
+            g["earliest_opened"] = t.opened_at
+
+    # Fetch current prices concurrently
+    tickers = list({g["ticker"] for g in grouped.values()})
+
+    def _fetch_price(tk: str) -> tuple[str, float | None]:
+        try:
+            data = market_client.get_fundamentals(tk)
+            return tk, data.get("current_price")
+        except Exception as e:
+            logger.warning(f"Failed to fetch price for {tk}: {e}")
+            return tk, None
+
+    prices: dict[str, float | None] = {}
+    if tickers:
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for ticker, price in pool.map(_fetch_price, tickers):
+                prices[ticker] = price
+
+    # Compute per-position metrics
+    positions = []
+    portfolio_base = 100000.0  # Default portfolio value for % → $ conversion
+    total_unrealized = 0.0
+    total_cost_basis = 0.0
+    total_market_value = 0.0
+
+    for g in grouped.values():
+        # Weighted average entry price
+        if g["weights"] and sum(g["weights"]) > 0:
+            total_w = sum(g["weights"])
+            avg_entry = sum(p * w for p, w in zip(g["entry_prices"], g["weights"])) / total_w
+        elif g["entry_prices"]:
+            avg_entry = sum(g["entry_prices"]) / len(g["entry_prices"])
+        else:
+            avg_entry = None
+
+        current = prices.get(g["ticker"])
+        is_long = "bullish" in (g["direction"] or "")
+        is_short = "bearish" in (g["direction"] or "")
+
+        pnl_pct = None
+        pnl_dollars = None
+        cost_basis = None
+        market_value = None
+
+        if avg_entry and current and avg_entry > 0:
+            if is_long:
+                pnl_pct = (current - avg_entry) / avg_entry * 100
+            elif is_short:
+                pnl_pct = (avg_entry - current) / avg_entry * 100
+
+            # Dollar P&L based on position size
+            size_fraction = g["total_size_pct"] / 100.0
+            cost_basis = portfolio_base * size_fraction
+            if pnl_pct is not None:
+                pnl_dollars = cost_basis * (pnl_pct / 100.0)
+                market_value = cost_basis + pnl_dollars
+                total_unrealized += pnl_dollars
+                total_cost_basis += cost_basis
+                total_market_value += market_value
+
+        avg_stop = sum(g["stops"]) / len(g["stops"]) if g["stops"] else None
+        avg_target = sum(g["targets"]) / len(g["targets"]) if g["targets"] else None
+
+        positions.append({
+            "ticker": g["ticker"],
+            "direction": g["direction"],
+            "avg_entry_price": round(avg_entry, 2) if avg_entry else None,
+            "current_price": round(current, 2) if current else None,
+            "total_size_pct": round(g["total_size_pct"], 2),
+            "unrealized_pnl_pct": round(pnl_pct, 2) if pnl_pct is not None else None,
+            "unrealized_pnl_dollars": round(pnl_dollars, 2) if pnl_dollars is not None else None,
+            "cost_basis": round(cost_basis, 2) if cost_basis else None,
+            "market_value": round(market_value, 2) if market_value else None,
+            "avg_stop_loss": round(avg_stop, 2) if avg_stop else None,
+            "avg_take_profit": round(avg_target, 2) if avg_target else None,
+            "trade_count": len(g["trades"]),
+            "opened_at": g["earliest_opened"].isoformat() if g["earliest_opened"] else None,
+        })
+
+    # Sort by market value descending
+    positions.sort(key=lambda p: p.get("market_value") or 0, reverse=True)
+
+    # Realized P&L from closed trades
+    realized_pnl_pct_sum = 0.0
+    realized_trades_with_size = []
+    wins = 0
+    losses = 0
+    for t in closed_trades:
+        if t.realized_pnl is not None:
+            realized_pnl_pct_sum += float(t.realized_pnl)
+            realized_trades_with_size.append({
+                "ticker": t.ticker,
+                "pnl_pct": float(t.realized_pnl),
+                "size_pct": float(t.position_size_pct or 0),
+            })
+            if t.realized_pnl > 0:
+                wins += 1
+            elif t.realized_pnl < 0:
+                losses += 1
+
+    # Realized dollars (weighted by position size)
+    realized_dollars = sum(
+        (r["pnl_pct"] / 100.0) * (portfolio_base * r["size_pct"] / 100.0)
+        for r in realized_trades_with_size
+    )
+
+    total_closed = wins + losses
+    win_rate = (wins / total_closed * 100) if total_closed > 0 else None
+
+    # Compute weights (as % of total market value)
+    if total_market_value > 0:
+        for p in positions:
+            if p.get("market_value"):
+                p["weight_pct"] = round(p["market_value"] / total_market_value * 100, 2)
+            else:
+                p["weight_pct"] = None
+
+    summary = {
+        "portfolio_base": portfolio_base,
+        "total_cost_basis": round(total_cost_basis, 2),
+        "total_market_value": round(total_market_value, 2),
+        "total_unrealized_pnl": round(total_unrealized, 2),
+        "total_unrealized_pnl_pct": round(total_unrealized / total_cost_basis * 100, 2) if total_cost_basis > 0 else 0,
+        "total_realized_pnl": round(realized_dollars, 2),
+        "total_realized_pnl_pct_avg": round(realized_pnl_pct_sum / total_closed, 2) if total_closed > 0 else 0,
+        "open_positions": len(positions),
+        "closed_trades": total_closed,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 1) if win_rate is not None else None,
+    }
+
+    return {"positions": positions, "summary": summary}
+
+
 # === SCAN / SCREENING DESK ===
 
 _scan_status: dict[str, dict] = {}  # user_id → {status, started_at, run_id}

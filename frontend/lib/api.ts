@@ -102,6 +102,9 @@ export const api = {
       body: JSON.stringify({ exit_price: exitPrice, notes }),
     }),
 
+  // Portfolio positions + live P&L
+  positions: () => request("/api/portfolio/positions"),
+
   // Quant infrastructure
   portfolioRisk: () => request("/api/quant/portfolio-risk"),
   regime: () => request("/api/quant/regime"),
