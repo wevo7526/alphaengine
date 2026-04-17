@@ -82,15 +82,16 @@ class BaseAgent:
             self._executor = self._build_executor()
         return self._executor
 
-    async def analyze(self, context: dict) -> AgentOutput:
-        """Run analysis given the pipeline context."""
+    async def analyze(self, context: dict, callbacks: list | None = None) -> AgentOutput:
+        """Run analysis given the pipeline context. Optional callbacks stream tool events."""
         executor = self._get_executor()
         input_prompt = self.build_input_prompt(context)
 
         logger.info(f"[{self.agent_name}] Starting analysis")
 
         try:
-            result = await executor.ainvoke({"input": input_prompt})
+            config = {"callbacks": callbacks} if callbacks else {}
+            result = await executor.ainvoke({"input": input_prompt}, config=config)
             output_text = result.get("output", "{}")
             # LangChain may return list of content blocks, dicts, or a plain string
             output_text = self._extract_text(output_text)

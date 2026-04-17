@@ -46,7 +46,7 @@ class CIOSynthesizer:
     def __init__(self):
         self.llm = get_llm()
 
-    async def synthesize(self, context: dict) -> AgentOutput:
+    async def synthesize(self, context: dict, callbacks: list | None = None) -> AgentOutput:
         """Produce the final IntelligenceMemo from all pipeline outputs."""
         logger.info("[cio_synthesizer] Synthesizing intelligence memo")
 
@@ -91,10 +91,11 @@ class CIOSynthesizer:
         )
 
         try:
+            config = {"callbacks": callbacks} if callbacks else {}
             result = await self.llm.ainvoke([
                 SystemMessage(content=SYSTEM_PROMPT + "\n\n" + OUTPUT_INSTRUCTIONS),
                 HumanMessage(content=user_prompt),
-            ])
+            ], config=config)
 
             text = result.content.strip()
             if text.startswith("```"):

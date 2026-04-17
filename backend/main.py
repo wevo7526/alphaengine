@@ -1009,47 +1009,147 @@ async def analyze_stream(request: AnalyzeRequest, req: Request = None):
             """SSE comment to keep the connection alive through proxies."""
             return ": keepalive\n\n"
 
-        # Phase 1: Interpret
-        yield send({"phase": "interpreting", "agent": "query_interpreter"})
+        # Create a queue for live agent activity events
+        from agents.stream_callbacks import DeskStreamCallback
+        event_queue: asyncio.Queue = asyncio.Queue(maxsize=500)
+
+        async def drain_queue():
+            """Yield all queued events, non-blocking."""
+            events = []
+            while not event_queue.empty():
+                try:
+                    events.append(event_queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            return events
+
+        async def run_with_streaming(coro_factory, timeout_s: int, label: str):
+            """
+            Run an agent coroutine as a background task, yielding queue events
+            as they arrive. Returns (output, events_yielded_count).
+            """
+            task = asyncio.create_task(
+                asyncio.wait_for(coro_factory(), timeout=timeout_s)
+            )
+            events_to_yield = []
+            last_keepalive = asyncio.get_event_loop().time()
+
+            while not task.done():
+                try:
+                    # Wait briefly for an event; if none, continue loop
+                    event = await asyncio.wait_for(event_queue.get(), timeout=1.5)
+                    events_to_yield.append(event)
+                except asyncio.TimeoutError:
+                    pass
+
+                # Send keepalive if idle too long
+                now = asyncio.get_event_loop().time()
+                if now - last_keepalive > 10:
+                    events_to_yield.append({"_keepalive": True})
+                    last_keepalive = now
+
+                if events_to_yield:
+                    yield events_to_yield
+                    events_to_yield = []
+
+            # Drain any remaining events
+            remaining = await drain_queue()
+            if remaining:
+                yield remaining
+
+            # Get final result
+            try:
+                result = await task
+                yield ("__result__", result)
+            except asyncio.TimeoutError:
+                logger.error(f"[stream] {label} timed out after {timeout_s}s")
+                yield ("__result__", None)
+            except Exception as e:
+                logger.error(f"[stream] {label} raised: {e}")
+                yield ("__result__", None)
+
+        # === Desk 1 (via current Query Interpreter): Intent parsing ===
+        yield send({"type": "desk_start", "desk": "query", "label": "Query Interpretation", "agent": "query_interpreter"})
+        yield send({"phase": "interpreting", "agent": "query_interpreter"})  # Backward compat
+        qi_cb = DeskStreamCallback(event_queue, desk="query", agent="query_interpreter")
         try:
             plan = await _with_timeout(
-                _query_interpreter.interpret(query), seconds=30, label="QI"
+                _query_interpreter.interpret(query, callbacks=[qi_cb]), seconds=30, label="QI"
             )
             if not plan:
                 yield send({"phase": "error", "error": "Query interpretation timed out"})
                 return
             plan_data = plan.model_dump(mode="json")
+            yield send({
+                "type": "desk_done",
+                "desk": "query",
+                "summary": f"Intent: {plan_data.get('intent', '')} · {len(plan_data.get('tickers', []))} tickers",
+                "tickers": plan_data.get("tickers", []),
+                "intent": plan_data.get("intent", ""),
+            })
             yield send({"phase": "interpreting_done", "tickers": plan_data.get("tickers", []), "intent": plan_data.get("intent", "")})
         except Exception as e:
             logger.error(f"[stream] Query Interpreter failed: {e}")
             yield send({"phase": "error", "error": f"Query interpretation failed: {e}"})
             return
 
-        # Phase 2: Research (longest phase — send keepalives)
-        yield send({"phase": "researching", "agent": "research_analyst"})
+        # === Desk 2: Research ===
+        yield send({"type": "desk_start", "desk": "research", "label": "Research Desk", "agent": "research_analyst"})
+        yield send({"phase": "researching", "agent": "research_analyst"})  # Backward compat
+        research_cb = DeskStreamCallback(event_queue, desk="research", agent="research_analyst")
+        research_start = asyncio.get_event_loop().time()
         try:
-            output = await _with_timeout(
-                _research_analyst.analyze({"plan": plan_data}), seconds=240, label="RA"
-            )
-            research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
+            async for chunk in run_with_streaming(
+                lambda: _research_analyst.analyze({"plan": plan_data}, callbacks=[research_cb]),
+                timeout_s=240, label="RA",
+            ):
+                if isinstance(chunk, tuple) and chunk[0] == "__result__":
+                    output = chunk[1]
+                    research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
+                else:
+                    # chunk is a list of events
+                    for evt in chunk:
+                        if evt.get("_keepalive"):
+                            yield keepalive()
+                        else:
+                            yield send(evt)
         except Exception as e:
             logger.error(f"[stream] Research Analyst failed: {e}")
             research_data = {"data_summary": f"Research failed: {e}"}
-        yield keepalive()
+
+        research_duration = int((asyncio.get_event_loop().time() - research_start) * 1000)
+        ticker_count = len(plan_data.get("tickers", []))
+        yield send({
+            "type": "desk_done",
+            "desk": "research",
+            "summary": f"{ticker_count} tickers researched",
+            "duration_ms": research_duration,
+        })
         yield send({"phase": "researching_done"})
 
-        # Phase 3: Risk
-        yield send({"phase": "risk_assessment", "agent": "risk_manager"})
+        # === Desk 3: Risk ===
+        yield send({"type": "desk_start", "desk": "risk", "label": "Risk Desk", "agent": "risk_manager"})
+        yield send({"phase": "risk_assessment", "agent": "risk_manager"})  # Backward compat
+        risk_cb = DeskStreamCallback(event_queue, desk="risk", agent="risk_manager")
+        risk_start = asyncio.get_event_loop().time()
         try:
-            output = await _with_timeout(
-                _risk_manager.analyze({"plan": plan_data, "research": research_data}),
-                seconds=90, label="RM"
-            )
-            risk_data = output.output if output and not output.error else {
-                "macro_regime": "unknown", "regime_confidence": 0,
-                "risk_factors": [], "overall_risk_level": "elevated",
-                "risk_narrative": "Risk assessment unavailable.",
-            }
+            async for chunk in run_with_streaming(
+                lambda: _risk_manager.analyze({"plan": plan_data, "research": research_data}, callbacks=[risk_cb]),
+                timeout_s=90, label="RM",
+            ):
+                if isinstance(chunk, tuple) and chunk[0] == "__result__":
+                    output = chunk[1]
+                    risk_data = output.output if output and not output.error else {
+                        "macro_regime": "unknown", "regime_confidence": 0,
+                        "risk_factors": [], "overall_risk_level": "elevated",
+                        "risk_narrative": "Risk assessment unavailable.",
+                    }
+                else:
+                    for evt in chunk:
+                        if evt.get("_keepalive"):
+                            yield keepalive()
+                        else:
+                            yield send(evt)
         except Exception as e:
             logger.error(f"[stream] Risk Manager failed: {e}")
             risk_data = {
@@ -1057,40 +1157,80 @@ async def analyze_stream(request: AnalyzeRequest, req: Request = None):
                 "risk_factors": [], "overall_risk_level": "elevated",
                 "risk_narrative": f"Risk assessment failed: {e}",
             }
-        yield keepalive()
+
+        risk_duration = int((asyncio.get_event_loop().time() - risk_start) * 1000)
+        yield send({
+            "type": "desk_done",
+            "desk": "risk",
+            "summary": f"Regime: {risk_data.get('macro_regime', '?')} · Level: {risk_data.get('overall_risk_level', '?')} · {len(risk_data.get('risk_factors', []))} risks",
+            "duration_ms": risk_duration,
+        })
         yield send({"phase": "risk_assessment_done", "macro_regime": risk_data.get("macro_regime", "")})
 
-        # Phase 4: Strategy
-        yield send({"phase": "strategizing", "agent": "portfolio_strategist"})
+        # === Desk 4: Portfolio Construction ===
+        yield send({"type": "desk_start", "desk": "portfolio", "label": "Portfolio Construction", "agent": "portfolio_strategist"})
+        yield send({"phase": "strategizing", "agent": "portfolio_strategist"})  # Backward compat
+        ps_cb = DeskStreamCallback(event_queue, desk="portfolio", agent="portfolio_strategist")
+        ps_start = asyncio.get_event_loop().time()
         try:
-            output = await _with_timeout(
-                _portfolio_strategist.analyze({"plan": plan_data, "research": research_data, "risk": risk_data}),
-                seconds=90, label="PS"
-            )
-            strategy_data = output.output if output and not output.error else {
-                "trade_ideas": [], "portfolio_positioning": "neutral",
-                "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
-            }
+            async for chunk in run_with_streaming(
+                lambda: _portfolio_strategist.analyze(
+                    {"plan": plan_data, "research": research_data, "risk": risk_data}, callbacks=[ps_cb]
+                ),
+                timeout_s=90, label="PS",
+            ):
+                if isinstance(chunk, tuple) and chunk[0] == "__result__":
+                    output = chunk[1]
+                    strategy_data = output.output if output and not output.error else {
+                        "trade_ideas": [], "portfolio_positioning": "neutral",
+                        "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
+                    }
+                else:
+                    for evt in chunk:
+                        if evt.get("_keepalive"):
+                            yield keepalive()
+                        else:
+                            yield send(evt)
         except Exception as e:
             logger.error(f"[stream] Portfolio Strategist failed: {e}")
             strategy_data = {
                 "trade_ideas": [], "portfolio_positioning": "neutral",
                 "hedging_recommendations": [], "strategy_narrative": f"Strategy failed: {e}",
             }
-        yield keepalive()
-        yield send({"phase": "strategizing_done", "trade_count": len(strategy_data.get("trade_ideas", []))})
 
-        # Phase 5: Synthesize
-        yield send({"phase": "synthesizing", "agent": "cio_synthesizer"})
+        ps_duration = int((asyncio.get_event_loop().time() - ps_start) * 1000)
+        trade_count = len(strategy_data.get("trade_ideas", []))
+        yield send({
+            "type": "desk_done",
+            "desk": "portfolio",
+            "summary": f"{trade_count} trade ideas · {len(strategy_data.get('hedging_recommendations', []))} hedges",
+            "duration_ms": ps_duration,
+        })
+        yield send({"phase": "strategizing_done", "trade_count": trade_count})
+
+        # === Desk 5: CIO Synthesis ===
+        yield send({"type": "desk_start", "desk": "cio", "label": "CIO Desk", "agent": "cio_synthesizer"})
+        yield send({"phase": "synthesizing", "agent": "cio_synthesizer"})  # Backward compat
+        cio_cb = DeskStreamCallback(event_queue, desk="cio", agent="cio_synthesizer")
+        cio_start = asyncio.get_event_loop().time()
         try:
             output = await _with_timeout(
-                _cio_synthesizer.synthesize({"plan": plan_data, "research": research_data, "risk": risk_data, "strategy": strategy_data}),
-                seconds=120, label="CIO"
+                _cio_synthesizer.synthesize(
+                    {"plan": plan_data, "research": research_data, "risk": risk_data, "strategy": strategy_data},
+                    callbacks=[cio_cb],
+                ),
+                seconds=120, label="CIO",
             )
             memo_data = output.output if output and not output.error else None
         except Exception as e:
             logger.error(f"[stream] CIO Synthesizer failed: {e}")
             memo_data = None
+
+        # Drain any remaining CIO events
+        for evt in await drain_queue():
+            yield send(evt)
+
+        cio_duration = int((asyncio.get_event_loop().time() - cio_start) * 1000)
 
         # If CIO failed, build a useful memo from prior agent data instead of returning empty
         if not memo_data or not memo_data.get("title"):
@@ -1109,6 +1249,13 @@ async def analyze_stream(request: AnalyzeRequest, req: Request = None):
                 "key_findings": [risk_data.get("risk_narrative", "")[:200]] if risk_data.get("risk_narrative") else [],
             }
 
+        # CIO desk done
+        yield send({
+            "type": "desk_done",
+            "desk": "cio",
+            "summary": f"Memo: {memo_data.get('title', 'untitled')[:60]}",
+            "duration_ms": cio_duration,
+        })
         yield keepalive()
 
         # Inject structured data from prior agents (never trust LLM reconstruction)

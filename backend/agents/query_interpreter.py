@@ -68,14 +68,15 @@ class QueryInterpreter:
     def __init__(self):
         self.llm = get_llm()
 
-    async def interpret(self, query: str) -> AnalysisPlan:
+    async def interpret(self, query: str, callbacks: list | None = None) -> AnalysisPlan:
         """Parse a freeform query into a structured AnalysisPlan."""
         logger.info(f"[query_interpreter] Interpreting: {query}")
 
+        config = {"callbacks": callbacks} if callbacks else {}
         result = await self.llm.ainvoke([
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=f"Query: {query}\n\nProduce the analysis plan as JSON."),
-        ])
+        ], config=config)
 
         text = result.content.strip()
         # Strip markdown fences
