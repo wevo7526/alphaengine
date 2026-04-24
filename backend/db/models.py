@@ -5,7 +5,7 @@ Adapted from the spec's Section 9 schema for the restructured
 hedge fund research desk architecture.
 """
 
-from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, Date, JSON
+from sqlalchemy import Column, String, Integer, Float, Text, Boolean, DateTime, Date, JSON, Index
 from sqlalchemy.sql import func
 import uuid
 
@@ -145,6 +145,12 @@ class IntelligenceMemoRecord(Base):
     themes = Column(JSON, default=list)
     created_at = Column(DateTime, server_default=func.now())
 
+    # /api/signals/latest filters by user_id ordered by created_at desc.
+    # Without this composite, every call scans the whole table.
+    __table_args__ = (
+        Index("ix_memos_user_created", "user_id", "created_at"),
+    )
+
 
 class TradeRecord(Base):
     """Trade journal — CIO decisions on trade ideas."""
@@ -169,6 +175,13 @@ class TradeRecord(Base):
     realized_pnl = Column(Float)
     opened_at = Column(DateTime, server_default=func.now())
     closed_at = Column(DateTime)
+
+    # /api/portfolio/positions filters by user_id + status (open), and memo_id
+    # joins are common. Indexes sized for the actual query shape.
+    __table_args__ = (
+        Index("ix_trades_user_status", "user_id", "status"),
+        Index("ix_trades_memo", "memo_id"),
+    )
 
 
 class PortfolioPosition(Base):
@@ -258,6 +271,11 @@ class SignalScoreRecord(Base):
     hit_20d = Column(Boolean)
 
     scored_at = Column(DateTime, server_default=func.now())
+
+    # Scorecard queries filter by user_id and order by signal_date desc.
+    __table_args__ = (
+        Index("ix_signal_scores_user_date", "user_id", "signal_date"),
+    )
 
 
 class WatchlistRecord(Base):

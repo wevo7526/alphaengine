@@ -3,41 +3,80 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
+import hashlib
 import json
 import asyncio
 import logging
+import os
+import sys
+import time as _time
 
-from config import settings
+from config import settings, validate_startup
 from auth import get_user_id, require_user_id
 from data.fred_client import FREDDataClient
 from data.market_client import MarketDataClient
 from data.news_client import NewsDataClient
 from data.sec_client import SECDataClient
-from db.database import init_db, async_session
+from db.database import init_db, async_session, ping_db, DB_DIALECT
 from db.models import IntelligenceMemoRecord, ScanFindingRecord, ScanRunRecord, WatchlistRecord, SignalScoreRecord
+from infra.logging_ctx import RequestIdMiddleware, install_logging, get_request_id
+from infra.status_store import AnalysisStatusStore
 
+# Install structured-logging filter before any app logging happens.
 logging.basicConfig(level=logging.INFO)
+install_logging()
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database on startup."""
-    import os
-    logger.info(f"Starting Alpha Engine — ENV={settings.ENV}, PORT={os.environ.get('PORT', 'not set')}")
-    logger.info(f"DATABASE_URL={'set' if settings.DATABASE_URL else 'empty'} (prefix: {settings.DATABASE_URL[:25]}...)" if settings.DATABASE_URL else "DATABASE_URL=empty")
+    """
+    Validate configuration, probe the database, surface problems loudly on boot.
+
+    Fatal misconfigurations (missing required secrets in production) log at
+    ERROR level but do not kill the process — we want the /api/health endpoint
+    to stay reachable so orchestrators can route traffic away. Non-fatal
+    issues like a down database are surfaced via health-check "degraded".
+    """
+    logger.info(
+        f"Starting Alpha Engine — ENV={settings.ENV}, "
+        f"PORT={os.environ.get('PORT', 'not set')}, "
+        f"DB_DIALECT={DB_DIALECT}"
+    )
+
+    startup_errors = validate_startup()
+    if startup_errors:
+        for err in startup_errors:
+            logger.error(f"Startup error: {err}")
+        if settings.ENV == "production":
+            logger.error(
+                "Production startup validation FAILED. /api/health will report "
+                "'degraded'. Fix the configuration and redeploy."
+            )
+
     try:
         await init_db()
-        logger.info("Database initialized")
     except Exception as e:
         logger.error(f"Database init failed (non-fatal, app will start): {e}")
+
+    # Probe the database once so startup logs reflect actual state.
+    probe = await ping_db(timeout=3.0)
+    if probe["ok"]:
+        logger.info(f"Database probe OK (dialect={probe['dialect']})")
+    else:
+        logger.error(f"Database probe FAILED: {probe.get('error')}")
+
+    app.state.startup_errors = startup_errors
     yield
 
 
 app = FastAPI(title="Alpha Engine API", version="2.0.0", lifespan=lifespan)
+
+# Request ID first so every subsequent log line is tagged.
+app.add_middleware(RequestIdMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -53,33 +92,62 @@ market_client = MarketDataClient()
 news_client = NewsDataClient()
 sec_client = SECDataClient()
 
-import time as _time
-
-_analysis_status: dict[str, dict] = {}
-_ANALYSIS_STATUS_MAX = 200  # Max entries before cleanup
-_ANALYSIS_STATUS_TTL = 3600  # 1 hour
+# Concurrency-safe replacement for the old global _analysis_status dict.
+analysis_status = AnalysisStatusStore(max_entries=200, ttl_seconds=3600)
 
 
-def _cleanup_analysis_status():
-    """Evict stale entries from _analysis_status to prevent memory leak."""
-    if len(_analysis_status) <= _ANALYSIS_STATUS_MAX:
-        return
-    now = _time.time()
-    stale = [k for k, v in _analysis_status.items() if now - v.get("_ts", 0) > _ANALYSIS_STATUS_TTL]
-    for k in stale:
-        del _analysis_status[k]
-    # If still over limit, remove oldest
-    if len(_analysis_status) > _ANALYSIS_STATUS_MAX:
-        oldest = sorted(_analysis_status, key=lambda k: _analysis_status[k].get("_ts", 0))
-        for k in oldest[:len(_analysis_status) - _ANALYSIS_STATUS_MAX]:
-            del _analysis_status[k]
+def _stable_query_id(query: str, user_id: str) -> str:
+    """
+    Deterministic id keyed on (user, query). Retries from the same user
+    for the same query land on the same entry instead of piling up.
+    """
+    h = hashlib.sha1(f"{user_id}|{query}".encode("utf-8")).hexdigest()
+    return h[:16]
 
 
 # === HEALTH CHECK ===
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "healthy", "env": settings.ENV}
+    """
+    Liveness + dependency probe.
+
+    Returns 200 {status: "healthy"} when all critical dependencies are OK,
+    200 {status: "degraded"} when the app is up but something is wrong
+    (DB down, required config missing). Returning 200 on degraded is
+    intentional — platform orchestrators should rely on /api/ready (below)
+    for traffic-routing decisions, while /api/health tells on-call what
+    is broken. A flat 200 "healthy" on a broken app would be worse.
+    """
+    startup_errors = getattr(app.state, "startup_errors", []) or []
+    db = await ping_db(timeout=2.0)
+
+    checks = {
+        "database": db,
+        "startup_errors": startup_errors,
+        "env": settings.ENV,
+        "request_id": get_request_id(),
+    }
+    degraded = bool(startup_errors) or not db["ok"]
+    return {"status": "degraded" if degraded else "healthy", "checks": checks}
+
+
+@app.get("/api/ready")
+async def readiness_check():
+    """
+    Readiness probe — returns 503 if the app can't serve traffic.
+
+    Use this from Kubernetes/Railway readiness probes. `/api/health` is
+    for humans; `/api/ready` is for orchestrators.
+    """
+    db = await ping_db(timeout=2.0)
+    startup_errors = getattr(app.state, "startup_errors", []) or []
+    if not db["ok"] or (settings.ENV == "production" and startup_errors):
+        return JSONResponse(
+            status_code=503,
+            content={"status": "not_ready", "db": db, "startup_errors": startup_errors},
+        )
+    return {"status": "ready"}
 
 
 # === AUTH ===
@@ -108,15 +176,14 @@ async def analyze(request: AnalyzeRequest, req: Request):
     user_id = require_user_id(req)
 
     query = request.query.strip()
-    query_id = str(hash(query + str(id(request))))
-    _cleanup_analysis_status()
-    _analysis_status[query_id] = {"status": "running", "phase": "interpreting", "_ts": _time.time()}
+    query_id = _stable_query_id(query, user_id)
+    await analysis_status.set(query_id, {"status": "running", "phase": "interpreting"})
 
     try:
         memo = await run_research_desk(query)
         result = memo.model_dump(mode="json")
 
-        # Persist to database — wrap in try/except so DB errors don't kill the response
+        # Persist to database — wrap so DB errors don't kill the response.
         try:
             async with async_session() as session:
                 record = IntelligenceMemoRecord(
@@ -143,12 +210,12 @@ async def analyze(request: AnalyzeRequest, req: Request):
         except Exception as db_err:
             logger.error(f"DB persist failed (non-fatal): {db_err}")
 
-        _analysis_status[query_id] = {"status": "complete", "phase": "done", "_ts": _time.time()}
+        await analysis_status.set(query_id, {"status": "complete", "phase": "done"})
         return result
     except Exception as e:
         tb = traceback.format_exc()
         logger.error(f"Analysis failed: {e}\n{tb}")
-        _analysis_status[query_id] = {"status": "error", "error": str(e), "_ts": _time.time()}
+        await analysis_status.set(query_id, {"status": "error", "error": str(e)})
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -218,13 +285,13 @@ async def delete_memo(memo_id: str, req: Request):
 async def macro_dashboard():
     """Consolidated macro endpoint — snapshot + time series in one call."""
     from quant.computations import get_macro_time_series
-    from concurrent.futures import ThreadPoolExecutor
     try:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            snapshot_future = pool.submit(fred_client.get_macro_snapshot)
-            series_future = pool.submit(get_macro_time_series)
-            snapshot = snapshot_future.result()
-            series = series_future.result()
+        # Run both blocking calls concurrently on the thread pool so neither
+        # blocks the event loop and they finish in ~max(one) instead of sum.
+        snapshot, series = await asyncio.gather(
+            fred_client.aget_macro_snapshot(),
+            asyncio.get_running_loop().run_in_executor(None, get_macro_time_series),
+        )
         return {
             "indicators": snapshot,
             "count": len(snapshot),
@@ -239,7 +306,7 @@ async def macro_dashboard():
 async def macro_snapshot_legacy():
     """Legacy endpoint — use /api/data/macro instead."""
     try:
-        snapshot = fred_client.get_macro_snapshot()
+        snapshot = await fred_client.aget_macro_snapshot()
         return {"indicators": snapshot, "count": len(snapshot)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -250,8 +317,10 @@ async def market_data(ticker: str, period: str = "3mo"):
     """Price history and fundamentals for a ticker."""
     ticker = ticker.upper()
     try:
-        fundamentals = market_client.get_fundamentals(ticker)
-        price_history = market_client.get_price_history(ticker, period=period)
+        fundamentals, price_history = await asyncio.gather(
+            market_client.aget_fundamentals(ticker),
+            market_client.aget_price_history(ticker, period=period),
+        )
         return {
             "ticker": ticker,
             "fundamentals": fundamentals,
@@ -268,7 +337,7 @@ async def options_data(ticker: str, expiry: str | None = None):
     """Options chain for a ticker."""
     ticker = ticker.upper()
     try:
-        chain = market_client.get_options_chain(ticker, expiry=expiry)
+        chain = await market_client.aget_options_chain(ticker, expiry=expiry)
         return {"ticker": ticker, **chain}
     except Exception as e:
         logger.error(f"Options data failed for {ticker}: {e}")
@@ -280,7 +349,7 @@ async def sec_filings(ticker: str, form_type: str = "8-K", limit: int = 5):
     """Recent SEC filings for a ticker."""
     ticker = ticker.upper()
     try:
-        filings = sec_client.get_recent_filings(ticker, form_type=form_type, limit=limit)
+        filings = await sec_client.aget_recent_filings(ticker, form_type=form_type, limit=limit)
         return {"ticker": ticker, "form_type": form_type, "filings": filings}
     except Exception as e:
         logger.error(f"SEC filings failed for {ticker}: {e}")
@@ -292,8 +361,10 @@ async def news_feed(ticker: str):
     """Recent news with sentiment data."""
     ticker = ticker.upper()
     try:
-        articles = news_client.get_ticker_news(ticker, page_size=10)
-        sentiment = news_client.get_market_sentiment_finnhub(ticker)
+        articles, sentiment = await asyncio.gather(
+            news_client.aget_ticker_news(ticker, page_size=10),
+            news_client.aget_market_sentiment_finnhub(ticker),
+        )
         return {
             "ticker": ticker,
             "articles": articles,
@@ -1736,7 +1807,9 @@ async def portfolio_positions(req: Request):
 
 # === SCAN / SCREENING DESK ===
 
-_scan_status: dict[str, dict] = {}  # user_id → {status, started_at, run_id}
+# Concurrency-safe; LRU+TTL eviction prevents unbounded growth when users
+# trigger repeated scans over a long uptime.
+scan_status_store = AnalysisStatusStore(max_entries=1000, ttl_seconds=6 * 3600)
 
 
 async def _run_scan_background(user_id: str | None, run_id: str, universe: list[str]):
@@ -1786,8 +1859,9 @@ async def _run_scan_background(user_id: str | None, run_id: str, universe: list[
             pass
     finally:
         key = user_id or "_anon"
-        if key in _scan_status:
-            _scan_status[key]["status"] = "idle"
+        current = await scan_status_store.get(key)
+        if current:
+            await scan_status_store.set(key, {**{k: v for k, v in current.items() if not k.startswith("_")}, "status": "idle"})
 
 
 @app.get("/api/scan/latest")
@@ -1873,8 +1947,8 @@ async def scan_trigger(req: Request):
     key = user_id
 
     # Don't allow concurrent scans for the same user
-    current = _scan_status.get(key, {})
-    if current.get("status") == "running":
+    current = await scan_status_store.get(key)
+    if current and current.get("status") == "running":
         return {"status": "already_running", "run_id": current.get("run_id")}
 
     # Build universe: default + user watchlist + open trade tickers
@@ -1903,7 +1977,9 @@ async def scan_trigger(req: Request):
         logger.error(f"scan_trigger setup failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-    _scan_status[key] = {"status": "running", "run_id": run_id, "started_at": _time.time()}
+    await scan_status_store.set(key, {
+        "status": "running", "run_id": run_id, "started_at": _time.time(),
+    })
 
     # Fire and forget — run in background task
     asyncio.create_task(_run_scan_background(user_id, run_id, universe))
@@ -1915,7 +1991,7 @@ async def scan_trigger(req: Request):
 async def scan_status(req: Request):
     """Check if a scan is currently running for this user."""
     user_id = require_user_id(req)
-    current = _scan_status.get(user_id, {"status": "idle"})
+    current = await scan_status_store.get(user_id) or {"status": "idle"}
     return {
         "status": current.get("status", "idle"),
         "run_id": current.get("run_id"),
@@ -2092,6 +2168,12 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
 
     query = request.query.strip()
 
+    # Tasks live at the outer scope so the wrapper generator below can cancel
+    # them when the client disconnects. Without this, a disconnected browser
+    # leaves the LLM pipeline running — burning Anthropic quota and leaking
+    # worker memory.
+    active_tasks: list[asyncio.Task] = []
+
     async def event_stream():
         def send(data: dict) -> str:
             try:
@@ -2122,47 +2204,57 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         async def run_with_streaming(coro_factory, timeout_s: int, label: str):
             """
             Run an agent coroutine as a background task, yielding queue events
-            as they arrive. Returns (output, events_yielded_count).
+            as they arrive. Cancels the task on error or caller cancellation.
             """
             task = asyncio.create_task(
                 asyncio.wait_for(coro_factory(), timeout=timeout_s)
             )
-            events_to_yield = []
+            active_tasks.append(task)
+            events_to_yield: list = []
             last_keepalive = asyncio.get_event_loop().time()
 
-            while not task.done():
-                try:
-                    # Wait briefly for an event; if none, continue loop
-                    event = await asyncio.wait_for(event_queue.get(), timeout=1.5)
-                    events_to_yield.append(event)
-                except asyncio.TimeoutError:
-                    pass
-
-                # Send keepalive if idle too long
-                now = asyncio.get_event_loop().time()
-                if now - last_keepalive > 10:
-                    events_to_yield.append({"_keepalive": True})
-                    last_keepalive = now
-
-                if events_to_yield:
-                    yield events_to_yield
-                    events_to_yield = []
-
-            # Drain any remaining events
-            remaining = await drain_queue()
-            if remaining:
-                yield remaining
-
-            # Get final result
             try:
-                result = await task
-                yield ("__result__", result)
-            except asyncio.TimeoutError:
-                logger.error(f"[stream] {label} timed out after {timeout_s}s")
-                yield ("__result__", None)
-            except Exception as e:
-                logger.error(f"[stream] {label} raised: {e}")
-                yield ("__result__", None)
+                while not task.done():
+                    try:
+                        event = await asyncio.wait_for(event_queue.get(), timeout=1.5)
+                        events_to_yield.append(event)
+                    except asyncio.TimeoutError:
+                        pass
+
+                    now = asyncio.get_event_loop().time()
+                    if now - last_keepalive > 10:
+                        events_to_yield.append({"_keepalive": True})
+                        last_keepalive = now
+
+                    if events_to_yield:
+                        yield events_to_yield
+                        events_to_yield = []
+
+                remaining = await drain_queue()
+                if remaining:
+                    yield remaining
+
+                try:
+                    result = await task
+                    yield ("__result__", result)
+                except asyncio.TimeoutError:
+                    logger.error(f"[stream] {label} timed out after {timeout_s}s")
+                    yield ("__result__", None)
+                except asyncio.CancelledError:
+                    # Propagate — outer cleanup will handle it.
+                    raise
+                except Exception as e:
+                    logger.error(f"[stream] {label} raised: {e}")
+                    yield ("__result__", None)
+            except asyncio.CancelledError:
+                # Client disconnected or pipeline aborted. Cancel the task and
+                # re-raise so the outer generator's finally block runs.
+                if not task.done():
+                    task.cancel()
+                raise
+            finally:
+                if task in active_tasks:
+                    active_tasks.remove(task)
 
         # === Desk 1 (via current Query Interpreter): Intent parsing ===
         yield send({"type": "desk_start", "desk": "query", "label": "Query Interpretation", "agent": "query_interpreter"})
@@ -2427,8 +2519,26 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
             logger.error(f"[stream] Memo construction failed: {e}")
             yield send({"phase": "error", "error": f"Memo construction failed: {e}"})
 
+    async def event_stream_with_cleanup():
+        """
+        Outer wrapper: forwards events, but on client disconnect / generator
+        close / cancellation, cancels every agent task still running. Without
+        this, a user hitting Cmd+W leaves 4 agents burning through their
+        timeouts in the background.
+        """
+        try:
+            async for chunk in event_stream():
+                yield chunk
+        finally:
+            for t in active_tasks:
+                if not t.done():
+                    t.cancel()
+            # Give cancelled tasks a brief window to unwind (mostly benign).
+            if active_tasks:
+                await asyncio.sleep(0)
+
     return StreamingResponse(
-        event_stream(),
+        event_stream_with_cleanup(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

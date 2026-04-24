@@ -5,64 +5,74 @@ Provides access to SEC filings, full-text search, section extraction,
 insider trading (Forms 3/4/5), and institutional holdings (13F).
 
 Used primarily by the Fundamental Agent and Sentiment Agent.
+
+Stability notes:
+  - The sec-api SDK is synchronous and makes HTTPS calls. All calls go
+    through `run_sync_with_timeout` when invoked from async paths so
+    one slow filing query can't park an event loop.
+  - Per-call timeouts are capped at 30s — if SEC-API is slow, we surface
+    that to the caller rather than hang.
+  - All catches log with context so "Why is my filing search returning
+    empty?" is answerable from logs, not a post-mortem.
 """
 
-from sec_api import (
-    QueryApi,
-    FullTextSearchApi,
-    ExtractorApi,
-    InsiderTradingApi,
-    Form13FHoldingsApi,
-)
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations
+
 import logging
+from datetime import datetime, timedelta, timezone
+
+from sec_api import (
+    ExtractorApi,
+    Form13FHoldingsApi,
+    FullTextSearchApi,
+    InsiderTradingApi,
+    QueryApi,
+)
 
 from config import settings
+from infra.async_utils import run_sync_with_timeout
 
 logger = logging.getLogger(__name__)
+
+_DEFAULT_TIMEOUT = 30.0
 
 
 class SECDataClient:
     def __init__(self):
-        api_key = settings.SEC_API_KEY
+        api_key = settings.SEC_API_KEY or ""
+        self._configured = bool(api_key)
+        if not self._configured:
+            logger.debug("SEC_API_KEY not set — SECDataClient calls will return empty structures")
+        # Construct APIs even without a key; calls will error but we handle it.
         self.query_api = QueryApi(api_key=api_key)
         self.fulltext_api = FullTextSearchApi(api_key=api_key)
         self.extractor_api = ExtractorApi(api_key=api_key)
         self.insider_api = InsiderTradingApi(api_key=api_key)
         self.holdings_api = Form13FHoldingsApi(api_key=api_key)
 
+    def _empty_filings(self) -> dict:
+        return {"total": {"value": 0, "relation": "eq"}, "filings": []}
+
+    def _empty_insider(self) -> dict:
+        return {"data": []}
+
     # ── Filing Search ────────────────────────────────────────────
 
-    def get_recent_filings(
-        self,
-        ticker: str,
-        form_type: str = "8-K",
-        limit: int = 10,
-    ) -> dict:
-        """
-        Search recent filings by ticker and form type.
-
-        Form types that matter for Alpha Engine:
-          - 8-K:  Material events (earnings, M&A, exec changes, guidance)
-          - 10-K: Annual report (full financials, MD&A, risk factors)
-          - 10-Q: Quarterly report (interim financials, MD&A updates)
-          - SC 13D/G: Activist/institutional stake disclosures
-          - DEF 14A: Proxy statements (exec comp, governance)
-
-        Returns raw sec-api.io response with filing metadata.
-        """
+    def get_recent_filings(self, ticker: str, form_type: str = "8-K", limit: int = 10) -> dict:
+        if not self._configured:
+            return self._empty_filings()
         query = {
-            "query": {
-                "query_string": {
-                    "query": f'ticker:"{ticker}" AND formType:"{form_type}"'
-                }
-            },
+            "query": {"query_string": {"query": f'ticker:"{ticker}" AND formType:"{form_type}"'}},
             "from": "0",
             "size": str(limit),
             "sort": [{"filedAt": {"order": "desc"}}],
         }
         logger.info(f"Fetching {form_type} filings for {ticker} (limit={limit})")
-        return self.query_api.get_filings(query)
+        try:
+            return self.query_api.get_filings(query) or self._empty_filings()
+        except Exception as e:
+            logger.warning(f"sec-api query failed for {ticker}/{form_type}: {e}")
+            return self._empty_filings()
 
     def get_filings_by_date_range(
         self,
@@ -72,17 +82,12 @@ class SECDataClient:
         end_date: str | None = None,
         limit: int = 20,
     ) -> dict:
-        """
-        Search filings within a specific date range.
-
-        Useful for comparing quarter-over-quarter MD&A language,
-        or pulling all filings since a catalyst event.
-        """
+        if not self._configured:
+            return self._empty_filings()
         if end_date is None:
             end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if start_date is None:
             start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
-
         query = {
             "query": {
                 "query_string": {
@@ -96,11 +101,12 @@ class SECDataClient:
             "size": str(limit),
             "sort": [{"filedAt": {"order": "desc"}}],
         }
-        logger.info(
-            f"Fetching {form_type} filings for {ticker} "
-            f"from {start_date} to {end_date}"
-        )
-        return self.query_api.get_filings(query)
+        logger.info(f"Fetching {form_type} filings for {ticker} {start_date}..{end_date}")
+        try:
+            return self.query_api.get_filings(query) or self._empty_filings()
+        except Exception as e:
+            logger.warning(f"sec-api date-range query failed: {e}")
+            return self._empty_filings()
 
     # ── Full-Text Search ─────────────────────────────────────────
 
@@ -111,26 +117,12 @@ class SECDataClient:
         start_date: str | None = None,
         end_date: str | None = None,
     ) -> dict:
-        """
-        Full-text search across all SEC filings.
-
-        This is where the real alpha is in filing analysis. Search for:
-          - "going concern" → companies flagged by auditors as at-risk
-          - "goodwill impairment" → write-downs signal deteriorating assets
-          - "material weakness" → internal control failures
-          - "restatement" → prior financials were wrong
-          - "strategic alternatives" → company may be for sale
-          - "covenant violation" → debt trouble
-
-        The Fundamental Agent uses this to detect red flags that
-        standard financial metrics miss. A company can look fine on
-        P/E and still be hiding a going concern note in the 10-K.
-        """
+        if not self._configured:
+            return self._empty_filings()
         if end_date is None:
             end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if start_date is None:
             start_date = (datetime.now(timezone.utc) - timedelta(days=365)).strftime("%Y-%m-%d")
-
         search_query = {
             "query": query_text,
             "formTypes": form_types or ["10-K", "10-Q", "8-K"],
@@ -138,60 +130,39 @@ class SECDataClient:
             "endDate": end_date,
         }
         logger.info(f"Full-text search: '{query_text}' in {search_query['formTypes']}")
-        return self.fulltext_api.get_filings(search_query)
+        try:
+            return self.fulltext_api.get_filings(search_query) or self._empty_filings()
+        except Exception as e:
+            logger.warning(f"sec-api fulltext search failed: {e}")
+            return self._empty_filings()
 
     # ── Section Extraction ───────────────────────────────────────
 
+    def _extract_section(self, filing_url: str, section: str, label: str) -> str:
+        if not self._configured:
+            return ""
+        try:
+            result = self.extractor_api.get_section(filing_url, section, "text")
+            return result or ""
+        except Exception as e:
+            logger.warning(f"sec-api {label} extract failed for {filing_url}: {e}")
+            return ""
+
     def extract_mda(self, filing_url: str) -> str:
-        """
-        Extract Management Discussion & Analysis (Item 7) from 10-K/10-Q.
-
-        MD&A is where management explains the *why* behind the numbers.
-        Changes in language between quarters are a leading indicator:
-          - New hedging phrases ("challenging environment", "headwinds")
-          - Removed growth language
-          - Tone shifts from confident to cautious
-
-        The Sentiment Agent compares MD&A across quarters to detect
-        narrative shifts before they show up in the stock price.
-        """
         logger.info(f"Extracting MD&A from {filing_url}")
-        return self.extractor_api.get_section(filing_url, "7", "text")
+        return self._extract_section(filing_url, "7", "MD&A")
 
     def extract_risk_factors(self, filing_url: str) -> str:
-        """
-        Extract Risk Factors (Item 1A) from 10-K/10-Q.
-
-        Risk factor changes between filings are material signals:
-          - New risk factors added = emerging threats
-          - Risk factors removed = resolved issues
-          - Language changes within existing factors = shifting severity
-
-        The Fundamental Agent diffs risk factors across quarters.
-        """
         logger.info(f"Extracting Risk Factors from {filing_url}")
-        return self.extractor_api.get_section(filing_url, "1A", "text")
+        return self._extract_section(filing_url, "1A", "Risk Factors")
 
     def extract_financial_statements(self, filing_url: str) -> str:
-        """
-        Extract Financial Statements (Item 8) from 10-K.
-
-        Raw financial statements — income statement, balance sheet,
-        cash flow statement. Used by the Fundamental Agent for
-        ratio analysis and earnings quality assessment.
-        """
         logger.info(f"Extracting Financial Statements from {filing_url}")
-        return self.extractor_api.get_section(filing_url, "8", "text")
+        return self._extract_section(filing_url, "8", "Financial Statements")
 
     def extract_business_description(self, filing_url: str) -> str:
-        """
-        Extract Business Description (Item 1) from 10-K.
-
-        Useful for understanding what the company actually does,
-        its segments, competitive landscape, and revenue drivers.
-        """
         logger.info(f"Extracting Business Description from {filing_url}")
-        return self.extractor_api.get_section(filing_url, "1", "text")
+        return self._extract_section(filing_url, "1", "Business Description")
 
     # ── Insider Trading ──────────────────────────────────────────
 
@@ -202,28 +173,12 @@ class SECDataClient:
         end_date: str | None = None,
         limit: int = 50,
     ) -> dict:
-        """
-        Get insider trading activity (Forms 3, 4, 5) for a ticker.
-
-        Insider trading is one of the most reliable leading indicators:
-          - Cluster buying (3+ insiders buying within 30 days) is strongly
-            bullish — insiders know the business better than any analyst
-          - CEO/CFO buying is weighted more heavily than director buying
-          - Insider selling is noisier (diversification, taxes, etc.) but
-            large programmatic sells outside of 10b5-1 plans are bearish
-          - The $ amount matters more than the number of shares
-
-        The Fundamental Agent looks for:
-          1. Cluster detection: multiple insiders buying in a short window
-          2. Role weighting: C-suite buys > director buys
-          3. Context: buying after a price drop = conviction signal
-          4. Pattern breaks: insiders who never buy suddenly buying
-        """
+        if not self._configured:
+            return self._empty_insider()
         if end_date is None:
             end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         if start_date is None:
             start_date = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
-
         query = {
             "query": {
                 "query_string": {
@@ -238,70 +193,87 @@ class SECDataClient:
             "sort": [{"filedAt": {"order": "desc"}}],
         }
         logger.info(f"Fetching insider trades for {ticker}")
-        return self.insider_api.get_data(query)
+        try:
+            return self.insider_api.get_data(query) or self._empty_insider()
+        except Exception as e:
+            logger.warning(f"sec-api insider query failed: {e}")
+            return self._empty_insider()
 
     # ── 13F Institutional Holdings ───────────────────────────────
 
-    def get_13f_holdings(
-        self,
-        cik: str,
-        date: str | None = None,
-    ) -> dict:
-        """
-        Get 13F institutional holdings for a specific filer (by CIK).
-
-        13F filings reveal what the smart money is doing:
-          - Bridgewater, Berkshire, Renaissance, etc. file quarterly
-          - New positions = institutional conviction in a name
-          - Increased positions = adding on thesis confirmation
-          - Liquidated positions = thesis broken or profit-taking
-          - Concentration changes = portfolio conviction shifts
-
-        The 45-day filing delay means this data is lagged, but it
-        reveals structural positioning that takes quarters to unwind.
-        The Fundamental Agent uses this for:
-          1. "Who owns this?" — institutional quality assessment
-          2. Crowding risk — too many funds in the same name
-          3. Position changes — are smart-money managers adding or cutting?
-        """
+    def get_13f_holdings(self, cik: str, date: str | None = None) -> dict:
+        if not self._configured:
+            return self._empty_insider()
         query = {
-            "query": {
-                "query_string": {
-                    "query": f'cik:"{cik}"'
-                }
-            },
+            "query": {"query_string": {"query": f'cik:"{cik}"'}},
             "from": "0",
             "size": "1",
             "sort": [{"filedAt": {"order": "desc"}}],
         }
         if date:
-            query["query"]["query_string"]["query"] += (
-                f' AND periodOfReport:"{date}"'
-            )
+            query["query"]["query_string"]["query"] += f' AND periodOfReport:"{date}"'
         logger.info(f"Fetching 13F holdings for CIK {cik}")
-        return self.holdings_api.get_data(query)
+        try:
+            return self.holdings_api.get_data(query) or self._empty_insider()
+        except Exception as e:
+            logger.warning(f"sec-api 13F query failed: {e}")
+            return self._empty_insider()
 
-    def search_13f_for_ticker(
-        self,
-        ticker: str,
-        limit: int = 20,
-    ) -> dict:
-        """
-        Find which institutional filers hold a specific ticker.
-
-        Reverse lookup — instead of "what does Bridgewater hold?",
-        this answers "who holds AAPL?" Useful for assessing
-        institutional ownership breadth and crowding.
-        """
+    def search_13f_for_ticker(self, ticker: str, limit: int = 20) -> dict:
+        if not self._configured:
+            return self._empty_insider()
         query = {
-            "query": {
-                "query_string": {
-                    "query": f'holdings.ticker:"{ticker}"'
-                }
-            },
+            "query": {"query_string": {"query": f'holdings.ticker:"{ticker}"'}},
             "from": "0",
             "size": str(limit),
             "sort": [{"filedAt": {"order": "desc"}}],
         }
         logger.info(f"Searching 13F filers holding {ticker}")
-        return self.holdings_api.get_data(query)
+        try:
+            return self.holdings_api.get_data(query) or self._empty_insider()
+        except Exception as e:
+            logger.warning(f"sec-api 13F ticker search failed: {e}")
+            return self._empty_insider()
+
+    # ── Async wrappers ────────────────────────────────────────────
+
+    async def aget_recent_filings(self, ticker: str, form_type: str = "8-K", limit: int = 10) -> dict:
+        try:
+            return await run_sync_with_timeout(
+                self.get_recent_filings, _DEFAULT_TIMEOUT, ticker, form_type, limit,
+            )
+        except TimeoutError:
+            logger.warning(f"sec-api get_recent_filings timed out for {ticker}")
+            return self._empty_filings()
+
+    async def asearch_filings_fulltext(
+        self,
+        query_text: str,
+        form_types: list[str] | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+    ) -> dict:
+        try:
+            return await run_sync_with_timeout(
+                self.search_filings_fulltext, _DEFAULT_TIMEOUT,
+                query_text, form_types, start_date, end_date,
+            )
+        except TimeoutError:
+            logger.warning(f"sec-api fulltext search timed out: {query_text}")
+            return self._empty_filings()
+
+    async def aget_insider_trades(
+        self,
+        ticker: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int = 50,
+    ) -> dict:
+        try:
+            return await run_sync_with_timeout(
+                self.get_insider_trades, _DEFAULT_TIMEOUT,
+                ticker, start_date, end_date, limit,
+            )
+        except TimeoutError:
+            logger.warning(f"sec-api insider trades timed out for {ticker}")
+            return self._empty_insider()

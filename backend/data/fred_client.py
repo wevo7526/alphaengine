@@ -6,34 +6,52 @@ to classify the current environment as expansion, late-cycle, contraction,
 or recovery.
 
 Rate limit: 120 requests/minute (generous, but we still cache).
+
+Stability notes:
+  - fredapi is synchronous and makes HTTPS calls. Sync methods are safe from
+    worker threads; async wrappers dispatch to run_sync so the event loop
+    stays free.
+  - Caches are bounded to prevent unbounded heap growth.
+  - Retry uses async sleep when called from async paths. The sync fallback
+    stays simple because it only runs from thread-pool workers.
 """
 
-from fredapi import Fred
-from datetime import datetime, timedelta, timezone
+from __future__ import annotations
+
 import logging
+import random
 import time
+from datetime import datetime, timedelta, timezone
+
+from fredapi import Fred
 
 from config import settings
+from infra.async_utils import run_sync
+from infra.cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
 
-def _retry_fetch(fn, retries=2, delay=1.0):
-    """Retry a FRED API call — their server is intermittently flaky."""
+def _retry_fetch(fn, retries: int = 2, base_delay: float = 0.8):
+    """Retry a FRED API call with jittered backoff."""
+    last_exc: Exception | None = None
     for attempt in range(retries + 1):
         try:
             result = fn()
             if result is not None:
                 return result
         except Exception as e:
-            if attempt < retries:
-                time.sleep(delay)
-                continue
-            raise e
+            last_exc = e
+            logger.debug(f"FRED retry {attempt + 1}/{retries}: {e}")
+        if attempt < retries:
+            wait = base_delay * (2 ** attempt) + random.uniform(0, 0.3)
+            time.sleep(wait)
+    if last_exc is not None:
+        raise last_exc
     return None
 
+
 # Series IDs mapped to human-readable names.
-# Each of these tells the Macro Agent something specific about the regime.
 MACRO_SERIES = {
     "DFF": "fed_funds_rate",           # Monetary policy stance
     "T10Y2Y": "yield_curve_spread",    # Inversion = recession signal
@@ -52,30 +70,24 @@ MACRO_SERIES = {
 
 
 class FREDDataClient:
+    _SNAPSHOT_TTL = 3600
+    _SERIES_TTL = 3600
+    _SINGLE_TTL = 900
+
     def __init__(self):
         self.fred = Fred(api_key=settings.FRED_API_KEY)
+        # One-slot "cache" for the full snapshot so concurrent requests share.
         self._snapshot_cache: dict | None = None
         self._snapshot_timestamp: float = 0
-        self._series_cache: dict[str, tuple[float, object]] = {}
-
-    # Cache TTL: macro data updates at most daily, so 1 hour is safe
-    _SNAPSHOT_TTL = 3600  # seconds
-    _SERIES_TTL = 3600
+        self._series_cache: TTLCache[list[dict]] = TTLCache(
+            max_entries=256, ttl_seconds=self._SERIES_TTL,
+        )
+        self._single_cache: TTLCache[dict] = TTLCache(
+            max_entries=128, ttl_seconds=self._SINGLE_TTL,
+        )
 
     def get_macro_snapshot(self) -> dict:
-        """
-        Pull latest values for all key macro indicators in a single call.
-
-        Returns a dict of indicator snapshots, each with:
-          - value: most recent observation
-          - previous: prior observation
-          - change: delta between them
-          - date: observation date
-
-        This is the Macro Agent's primary input. One call here replaces
-        what would otherwise be 13 separate API requests, and the result
-        is cached for 1 hour since macro data doesn't update intraday.
-        """
+        """Pull latest values for all key macro indicators."""
         now = time.time()
         if self._snapshot_cache and (now - self._snapshot_timestamp) < self._SNAPSHOT_TTL:
             logger.debug("Returning cached macro snapshot")
@@ -102,14 +114,18 @@ class FREDDataClient:
                 logger.warning(f"Failed to fetch {series_id} ({name}): {e}")
                 return name, None
 
-        snapshot = {}
+        snapshot: dict = {}
         with ThreadPoolExecutor(max_workers=6) as pool:
             futures = {
                 pool.submit(_fetch_one, sid, name): name
                 for sid, name in MACRO_SERIES.items()
             }
             for future in as_completed(futures):
-                name, data = future.result()
+                try:
+                    name, data = future.result(timeout=30)
+                except Exception as e:
+                    logger.warning(f"FRED worker failure: {e}")
+                    continue
                 if data:
                     snapshot[name] = data
 
@@ -118,64 +134,66 @@ class FREDDataClient:
         logger.info(f"Macro snapshot built: {len(snapshot)}/{len(MACRO_SERIES)} indicators")
         return snapshot
 
-    def get_series_history(
-        self,
-        series_id: str,
-        lookback_days: int = 252,
-    ) -> list[dict]:
-        """
-        Pull historical data for a single FRED series.
-
-        Default lookback is 252 trading days (~1 year). Returns a list of
-        {date, value} dicts for easy serialization.
-
-        Used by the Macro Agent for trend analysis — is the yield curve
-        steepening or flattening? Are credit spreads widening or tightening?
-        The direction matters more than the level.
-        """
-        now = time.time()
+    def get_series_history(self, series_id: str, lookback_days: int = 252) -> list[dict]:
         cache_key = f"{series_id}:{lookback_days}"
-        if cache_key in self._series_cache:
-            ts, data = self._series_cache[cache_key]
-            if (now - ts) < self._SERIES_TTL:
-                logger.debug(f"Returning cached series {series_id}")
-                return data
+        cached = self._series_cache.get(cache_key)
+        if cached is not None:
+            logger.debug(f"Returning cached series {series_id}")
+            return cached
 
         start = datetime.now(timezone.utc) - timedelta(days=lookback_days)
-        series = _retry_fetch(
-            lambda: self.fred.get_series(series_id, observation_start=start)
-        )
+        try:
+            series = _retry_fetch(
+                lambda: self.fred.get_series(series_id, observation_start=start)
+            )
+        except Exception as e:
+            logger.warning(f"FRED series {series_id} failed: {e}")
+            return []
         if series is None:
             return []
         series = series.dropna()
-
         result = [
             {"date": str(idx.date()), "value": float(val)}
             for idx, val in series.items()
         ]
-
-        self._series_cache[cache_key] = (now, result)
+        self._series_cache.set(cache_key, result)
         logger.info(f"Fetched {len(result)} observations for {series_id}")
         return result
 
     def get_single_indicator(self, series_id: str) -> dict | None:
-        """
-        Get the latest value for a single indicator.
-
-        Useful when an agent needs just one data point (e.g., current VIX)
-        without pulling the entire macro snapshot.
-        """
+        cached = self._single_cache.get(series_id)
+        if cached is not None:
+            return cached
         try:
-            series = self.fred.get_series(series_id).dropna()
+            series = _retry_fetch(lambda: self.fred.get_series(series_id))
+            if series is None:
+                return None
+            series = series.dropna()
             if len(series) < 2:
                 return None
-            return {
+            data = {
                 "value": float(series.iloc[-1]),
                 "previous": float(series.iloc[-2]),
                 "change": float(series.iloc[-1] - series.iloc[-2]),
                 "date": str(series.index[-1].date()),
                 "series_id": series_id,
             }
+            self._single_cache.set(series_id, data)
+            return data
         except Exception as e:
             logger.warning(f"Failed to fetch {series_id}: {e}")
             return None
+
+    # ── Async wrappers ────────────────────────────────────────────
+    # Snapshot internally uses a ThreadPoolExecutor, so calling it from
+    # within `run_sync` (itself in a thread) is still safe — threads can
+    # spawn threads.
+
+    async def aget_macro_snapshot(self) -> dict:
+        return await run_sync(self.get_macro_snapshot)
+
+    async def aget_series_history(self, series_id: str, lookback_days: int = 252) -> list[dict]:
+        return await run_sync(self.get_series_history, series_id, lookback_days)
+
+    async def aget_single_indicator(self, series_id: str) -> dict | None:
+        return await run_sync(self.get_single_indicator, series_id)

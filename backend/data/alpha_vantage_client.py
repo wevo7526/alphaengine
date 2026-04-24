@@ -6,151 +6,124 @@ Cache TTL is 4 hours — technical indicators on daily bars don't change
 intraday, so there's zero reason to re-fetch.
 
 Used by the Quant Strategist for supplementary technical analysis
-(SMA, EMA, RSI, MACD, Bollinger Bands). The Quant Agent can also
-compute these from raw price data via market_client, so Alpha Vantage
-is a convenience layer, not a hard dependency.
+(SMA, EMA, RSI, MACD, Bollinger Bands). The Quant Agent can also compute
+these from raw price data via market_client, so Alpha Vantage is a
+convenience layer, not a hard dependency.
+
+Stability notes:
+  - All HTTP calls use infra.http with retries and sensible timeouts.
+  - On quota breach (JSON "Note"/"Information" fields), we return {} AND
+    log the message so operators can see when they've hit the daily wall.
 """
 
-import httpx
-import time
+from __future__ import annotations
+
 import logging
 
 from config import settings
+from infra.async_utils import run_sync
+from infra.cache import TTLCache
+from infra.http import HttpError, http_get_json
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://www.alphavantage.co/query"
-
-# 4-hour cache — daily indicators don't change intraday
-_INDICATOR_TTL = 14400
+_INDICATOR_TTL = 14400  # 4h
 
 
 class AlphaVantageClient:
     def __init__(self):
         self.api_key = settings.ALPHA_VANTAGE_KEY
-        self._cache: dict[str, tuple[float, dict]] = {}
+        self._cache: TTLCache[dict] = TTLCache(max_entries=256, ttl_seconds=_INDICATOR_TTL)
 
     def _fetch(self, params: dict) -> dict:
-        """
-        Single fetch method — all Alpha Vantage calls go through here
-        so caching and rate-limit awareness are centralized.
-        """
-        cache_key = "|".join(f"{k}={v}" for k, v in sorted(params.items()) if k != "apikey")
+        if not self.api_key:
+            logger.debug("ALPHA_VANTAGE_KEY not set — skipping")
+            return {}
 
-        now = time.time()
-        if cache_key in self._cache:
-            ts, data = self._cache[cache_key]
-            if (now - ts) < _INDICATOR_TTL:
-                logger.debug(f"Returning cached AV data: {cache_key}")
-                return data
+        cache_key = "|".join(f"{k}={v}" for k, v in sorted(params.items()) if k != "apikey")
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            logger.debug(f"Returning cached AV data: {cache_key}")
+            return cached
 
         params["apikey"] = self.api_key
-
         try:
-            resp = httpx.get(_BASE_URL, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-        except Exception as e:
+            data = http_get_json(
+                _BASE_URL,
+                params=params,
+                read_timeout=15,
+                total_timeout=20,
+                max_retries=2,
+                label=f"alphavantage({params.get('function')})",
+            )
+        except HttpError as e:
             logger.warning(f"Alpha Vantage fetch failed: {e}")
             return {}
 
-        # Alpha Vantage returns error messages in JSON on limit breach
-        if "Note" in data or "Information" in data:
-            msg = data.get("Note") or data.get("Information")
+        if not isinstance(data, dict):
+            logger.warning(f"Alpha Vantage returned non-dict payload: {type(data).__name__}")
+            return {}
+
+        # Alpha Vantage signals quota / errors in JSON body, not HTTP status.
+        if "Note" in data or "Information" in data or "Error Message" in data:
+            msg = data.get("Note") or data.get("Information") or data.get("Error Message")
             logger.warning(f"Alpha Vantage rate limit or error: {msg}")
             return {}
 
-        # Trim time series data to last 20 data points — full history
-        # is thousands of entries and will overflow the LLM context window
+        # Trim time-series payloads to 20 most recent points so we don't
+        # blow the LLM context budget.
         for key in list(data.keys()):
             if key.startswith("Technical Analysis") or key.startswith("Meta"):
                 if isinstance(data[key], dict) and len(data[key]) > 20:
-                    trimmed = dict(list(data[key].items())[:20])
-                    data[key] = trimmed
+                    data[key] = dict(list(data[key].items())[:20])
 
-        self._cache[cache_key] = (now, data)
+        self._cache.set(cache_key, data)
         return data
 
     def get_rsi(self, ticker: str, period: int = 14) -> dict:
-        """
-        Relative Strength Index — momentum oscillator (0-100).
-
-        RSI > 70 = overbought (mean reversion short candidate)
-        RSI < 30 = oversold (mean reversion long candidate)
-        RSI divergence from price = strong reversal signal
-
-        The Quant Agent uses RSI primarily for mean reversion setups
-        and to confirm/deny momentum signals from MACD.
-        """
         return self._fetch({
-            "function": "RSI",
-            "symbol": ticker,
-            "interval": "daily",
-            "time_period": str(period),
-            "series_type": "close",
+            "function": "RSI", "symbol": ticker, "interval": "daily",
+            "time_period": str(period), "series_type": "close",
         })
 
     def get_macd(self, ticker: str) -> dict:
-        """
-        MACD (Moving Average Convergence Divergence).
-
-        Bullish crossover: MACD line crosses above signal line
-        Bearish crossover: MACD line crosses below signal line
-        Histogram expansion: trend strengthening
-        Histogram contraction: trend weakening
-
-        The Quant Agent uses MACD for trend-following signals.
-        """
         return self._fetch({
-            "function": "MACD",
-            "symbol": ticker,
-            "interval": "daily",
+            "function": "MACD", "symbol": ticker, "interval": "daily",
             "series_type": "close",
         })
 
     def get_bollinger_bands(self, ticker: str, period: int = 20) -> dict:
-        """
-        Bollinger Bands — volatility envelope around SMA.
-
-        Price at upper band = stretched (potential reversion or breakout)
-        Price at lower band = compressed (potential bounce or breakdown)
-        Band squeeze (narrow width) = volatility expansion imminent
-
-        The Quant Agent uses bandwidth for volatility regime detection
-        and band touches for mean reversion entries.
-        """
         return self._fetch({
-            "function": "BBANDS",
-            "symbol": ticker,
-            "interval": "daily",
-            "time_period": str(period),
-            "series_type": "close",
+            "function": "BBANDS", "symbol": ticker, "interval": "daily",
+            "time_period": str(period), "series_type": "close",
         })
 
     def get_sma(self, ticker: str, period: int = 50) -> dict:
-        """
-        Simple Moving Average.
-
-        SMA50 vs SMA200 cross = golden cross (bullish) / death cross (bearish).
-        Price vs SMA = trend positioning.
-        """
         return self._fetch({
-            "function": "SMA",
-            "symbol": ticker,
-            "interval": "daily",
-            "time_period": str(period),
-            "series_type": "close",
+            "function": "SMA", "symbol": ticker, "interval": "daily",
+            "time_period": str(period), "series_type": "close",
         })
 
     def get_ema(self, ticker: str, period: int = 20) -> dict:
-        """
-        Exponential Moving Average — reacts faster than SMA.
-        Used for shorter-term trend signals.
-        """
         return self._fetch({
-            "function": "EMA",
-            "symbol": ticker,
-            "interval": "daily",
-            "time_period": str(period),
-            "series_type": "close",
+            "function": "EMA", "symbol": ticker, "interval": "daily",
+            "time_period": str(period), "series_type": "close",
         })
+
+    # ── Async wrappers ────────────────────────────────────────────
+
+    async def aget_rsi(self, ticker: str, period: int = 14) -> dict:
+        return await run_sync(self.get_rsi, ticker, period)
+
+    async def aget_macd(self, ticker: str) -> dict:
+        return await run_sync(self.get_macd, ticker)
+
+    async def aget_bollinger_bands(self, ticker: str, period: int = 20) -> dict:
+        return await run_sync(self.get_bollinger_bands, ticker, period)
+
+    async def aget_sma(self, ticker: str, period: int = 50) -> dict:
+        return await run_sync(self.get_sma, ticker, period)
+
+    async def aget_ema(self, ticker: str, period: int = 20) -> dict:
+        return await run_sync(self.get_ema, ticker, period)

@@ -1,5 +1,8 @@
 from pydantic_settings import BaseSettings
 from pathlib import Path
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Resolve .env from project root (one level above backend/)
 _ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
@@ -42,3 +45,40 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+# Secrets whose absence is only logged (agents degrade gracefully) vs. those
+# that MUST be present in production. Keep this list conservative — a missing
+# ANTHROPIC_API_KEY means the product can't function; a missing NEWS_API_KEY
+# degrades one signal source.
+REQUIRED_IN_PRODUCTION = ("ANTHROPIC_API_KEY", "CLERK_ISSUER")
+RECOMMENDED = (
+    "SEC_API_KEY", "FRED_API_KEY", "NEWS_API_KEY",
+    "FINNHUB_API_KEY", "ALPHA_VANTAGE_KEY", "FIRECRAWL_API_KEY",
+)
+
+
+def validate_startup() -> list[str]:
+    """
+    Inspect required/recommended secrets at startup.
+
+    Returns a list of fatal errors (empty = OK). Recommended-but-missing keys
+    are logged as warnings so operators can see degraded capabilities without
+    the app refusing to boot. Fatal misconfigurations are logged as errors;
+    the caller decides whether to exit (prod) or continue (dev).
+    """
+    errors: list[str] = []
+
+    if settings.ENV == "production":
+        for key in REQUIRED_IN_PRODUCTION:
+            if not getattr(settings, key, ""):
+                errors.append(f"{key} is required in production but is empty")
+
+    for key in RECOMMENDED:
+        if not getattr(settings, key, ""):
+            logger.warning(
+                "Optional secret %s is not set — the dependent data source will be "
+                "skipped and agents will degrade accordingly.", key,
+            )
+
+    return errors
