@@ -30,7 +30,7 @@ def _direction_sign(direction: str) -> int:
     return 0
 
 
-async def score_pending_signals(async_session_factory, max_scores: int = 200) -> dict:
+async def score_pending_signals(async_session_factory, user_id: str | None = None, max_scores: int = 200) -> dict:
     """
     Score all trade ideas that have aged enough but haven't been scored yet.
 
@@ -40,6 +40,8 @@ async def score_pending_signals(async_session_factory, max_scores: int = 200) ->
       - Fetch forward prices (via yfinance history)
       - Compute direction-adjusted returns
       - Upsert SignalScoreRecord
+
+    If user_id is provided, only scores that user's memos.
 
     Returns summary of scoring job.
     """
@@ -58,7 +60,10 @@ async def score_pending_signals(async_session_factory, max_scores: int = 200) ->
             memo_cutoff = now - timedelta(days=60)
             memo_q = select(IntelligenceMemoRecord).where(
                 IntelligenceMemoRecord.created_at >= memo_cutoff
-            ).order_by(desc(IntelligenceMemoRecord.created_at)).limit(max_scores)
+            )
+            if user_id:
+                memo_q = memo_q.where(IntelligenceMemoRecord.user_id == user_id)
+            memo_q = memo_q.order_by(desc(IntelligenceMemoRecord.created_at)).limit(max_scores)
             memo_result = await session.execute(memo_q)
             memos = memo_result.scalars().all()
 

@@ -71,7 +71,8 @@ class PortfolioSnapshotRecord(Base):
     __tablename__ = "portfolio_snapshots"
 
     id = Column(String, primary_key=True, default=gen_uuid)
-    snapshot_date = Column(Date, nullable=False, unique=True)
+    user_id = Column(String, nullable=True, index=True)
+    snapshot_date = Column(Date, nullable=False)
     total_value = Column(Float)
     cash = Column(Float)
     positions_value = Column(Float)
@@ -88,6 +89,7 @@ class FactorExposureRecord(Base):
     __tablename__ = "factor_exposures"
 
     id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
     computation_date = Column(Date, nullable=False)
     market_beta = Column(Float)
     smb_beta = Column(Float)  # Size
@@ -270,12 +272,12 @@ class WatchlistRecord(Base):
 
 
 class MorningReportRecord(Base):
-    """Pre-market morning briefings, one per day."""
+    """Pre-market morning briefings — one per user per day."""
     __tablename__ = "morning_reports"
 
     id = Column(String, primary_key=True, default=gen_uuid)
     user_id = Column(String, nullable=True, index=True)
-    report_date = Column(String(10), nullable=False, unique=True)  # YYYY-MM-DD
+    report_date = Column(String(10), nullable=False)  # YYYY-MM-DD (unique per user — app-level check)
     executive_briefing = Column(Text)
     macro_regime = Column(String(20))
     key_macro_changes = Column(JSON, default=list)

@@ -52,6 +52,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request("/api/health"),
+  authMe: () => request<{ user_id: string; authenticated: boolean }>("/api/auth/me"),
 
   analyze: (query: string) =>
     request("/api/analyze", {

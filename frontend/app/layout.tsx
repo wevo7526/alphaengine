@@ -5,6 +5,7 @@ import "./globals.css";
 import { Sidebar } from "@/components/Sidebar";
 import { MainContent } from "@/components/MainContent";
 import { Providers } from "@/components/Providers";
+import { SessionGuard } from "@/components/SessionGuard";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -101,8 +102,10 @@ export default function RootLayout({
       >
         <body className="h-full flex">
           <Providers>
-            <Sidebar />
-            <MainContent>{children}</MainContent>
+            <SessionGuard>
+              <Sidebar />
+              <MainContent>{children}</MainContent>
+            </SessionGuard>
           </Providers>
         </body>
       </html>

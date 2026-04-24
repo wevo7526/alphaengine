@@ -55,6 +55,9 @@ async def _migrate_columns():
     migrations = [
         ("intelligence_memos", "user_id", "TEXT"),
         ("trades", "user_id", "TEXT"),
+        ("portfolio_snapshots", "user_id", "TEXT"),
+        ("factor_exposures", "user_id", "TEXT"),
+        ("morning_reports", "user_id", "TEXT"),
     ]
     async with engine.begin() as conn:
         for table, column, col_type in migrations:
@@ -67,6 +70,26 @@ async def _migrate_columns():
                 logger.info(f"Migrated: added {table}.{column}")
             except Exception:
                 # Column already exists — ignore
+                pass
+
+        # One-time tag legacy NULL-scoped data so it's excluded from queries.
+        # Any historical row where user_id was never set gets marked with
+        # a sentinel user_id that no real Clerk user will ever match.
+        legacy_sentinel = "__legacy_null__"
+        legacy_tables = [
+            "intelligence_memos", "trades", "portfolio_snapshots",
+            "factor_exposures", "morning_reports", "scan_findings",
+            "scan_runs", "watchlist", "signal_scores",
+        ]
+        for table in legacy_tables:
+            try:
+                await conn.execute(
+                    __import__("sqlalchemy").text(
+                        f"UPDATE {table} SET user_id = '{legacy_sentinel}' WHERE user_id IS NULL"
+                    )
+                )
+            except Exception:
+                # Table may not exist yet or column may be missing — ignore
                 pass
 
 

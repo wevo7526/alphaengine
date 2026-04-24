@@ -10,7 +10,7 @@ import asyncio
 import logging
 
 from config import settings
-from auth import get_user_id
+from auth import get_user_id, require_user_id
 from data.fred_client import FREDDataClient
 from data.market_client import MarketDataClient
 from data.news_client import NewsDataClient
@@ -81,6 +81,18 @@ async def health_check():
     return {"status": "healthy", "env": settings.ENV}
 
 
+# === AUTH ===
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """
+    Session guard. Returns {user_id} if authenticated, 401 otherwise.
+    Frontend uses this on every page load to verify session before rendering.
+    """
+    user_id = require_user_id(request)
+    return {"user_id": user_id, "authenticated": True}
+
+
 # === ANALYSIS ENDPOINTS ===
 
 class AnalyzeRequest(BaseModel):
@@ -88,11 +100,11 @@ class AnalyzeRequest(BaseModel):
 
 
 @app.post("/api/analyze")
-async def analyze(request: AnalyzeRequest, req: Request = None):
+async def analyze(request: AnalyzeRequest, req: Request):
     """Run the full research desk pipeline on a freeform query."""
     import traceback
     from agents.orchestrator import run_research_desk
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
 
     query = request.query.strip()
     query_id = str(hash(query + str(id(request))))
@@ -141,14 +153,16 @@ async def analyze(request: AnalyzeRequest, req: Request = None):
 
 
 @app.get("/api/signals/latest")
-async def latest_signals(limit: int = 20, req: Request = None):
+async def latest_signals(req: Request, limit: int = 20):
     """Get most recent intelligence memos for the current user."""
+    user_id = require_user_id(req)
     try:
-        user_id = get_user_id(req) if req else None
         async with async_session() as session:
-            query = select(IntelligenceMemoRecord).order_by(desc(IntelligenceMemoRecord.created_at))
-            if user_id:
-                query = query.where(IntelligenceMemoRecord.user_id == user_id)
+            query = (
+                select(IntelligenceMemoRecord)
+                .where(IntelligenceMemoRecord.user_id == user_id)
+                .order_by(desc(IntelligenceMemoRecord.created_at))
+            )
             result = await session.execute(query.limit(limit))
             records = result.scalars().all()
             memos = [
@@ -179,19 +193,19 @@ async def latest_signals(limit: int = 20, req: Request = None):
 
 
 @app.delete("/api/signals/{memo_id}")
-async def delete_memo(memo_id: str, req: Request = None):
+async def delete_memo(memo_id: str, req: Request):
     """Delete an intelligence memo by ID. Only the owner can delete."""
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
     async with async_session() as session:
         result = await session.execute(
-            select(IntelligenceMemoRecord).where(IntelligenceMemoRecord.id == memo_id)
+            select(IntelligenceMemoRecord).where(
+                IntelligenceMemoRecord.id == memo_id,
+                IntelligenceMemoRecord.user_id == user_id,
+            )
         )
         record = result.scalar_one_or_none()
         if not record:
             raise HTTPException(status_code=404, detail="Memo not found")
-        # Ownership check: if memo has a user_id, only that user can delete
-        if record.user_id and user_id and record.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized to delete this memo")
         await session.delete(record)
         await session.commit()
     return {"deleted": memo_id}
@@ -739,17 +753,21 @@ async def optimize_portfolio(request: dict):
 # === MORNING REPORT ===
 
 @app.get("/api/morning-report")
-async def morning_report():
-    """Get today's morning report. Generates on first access, caches for the day."""
+async def morning_report(req: Request):
+    """Get today's morning report for the current user. Generates on first access, caches for the day."""
     from db.models import MorningReportRecord
     from datetime import date
 
+    user_id = require_user_id(req)
     today = date.today().isoformat()
 
-    # Check if already generated today
+    # Check if this user already generated it today
     async with async_session() as session:
         result = await session.execute(
-            select(MorningReportRecord).where(MorningReportRecord.report_date == today)
+            select(MorningReportRecord).where(
+                MorningReportRecord.report_date == today,
+                MorningReportRecord.user_id == user_id,
+            )
         )
         existing = result.scalar_one_or_none()
         if existing:
@@ -766,9 +784,10 @@ async def morning_report():
         report_data = memo.model_dump(mode="json")
         report_data["report_date"] = today
 
-        # Persist
+        # Persist scoped to this user
         async with async_session() as session:
             record = MorningReportRecord(
+                user_id=user_id,
                 report_date=today,
                 executive_briefing=memo.executive_summary,
                 macro_regime=memo.macro_regime,
@@ -824,7 +843,7 @@ class RiskCheckRequest(BaseModel):
 
 
 @app.post("/api/portfolio/risk-check")
-async def pre_trade_gate(req: RiskCheckRequest, request: Request = None):
+async def pre_trade_gate(req: RiskCheckRequest, request: Request):
     """
     Pre-trade risk gate. Checks a proposed trade against enforced limits:
     position size, sector concentration, correlation, marginal VaR,
@@ -836,14 +855,15 @@ async def pre_trade_gate(req: RiskCheckRequest, request: Request = None):
     from agents.desk3_position_risk import evaluate_trade_gate, get_current_portfolio_drawdown
     from db.models import TradeRecord
 
-    user_id = get_user_id(request) if request else None
+    user_id = require_user_id(request)
 
     # Gather existing open positions for context
     try:
         async with async_session() as session:
-            q = select(TradeRecord).where(TradeRecord.status == "open")
-            if user_id:
-                q = q.where(TradeRecord.user_id == user_id)
+            q = select(TradeRecord).where(
+                TradeRecord.status == "open",
+                TradeRecord.user_id == user_id,
+            )
             result = await session.execute(q)
             open_trades = result.scalars().all()
 
@@ -873,7 +893,7 @@ async def pre_trade_gate(req: RiskCheckRequest, request: Request = None):
 
 
 @app.post("/api/portfolio/trade")
-async def take_trade(req: TakeTradeRequest, request: Request = None):
+async def take_trade(req: TakeTradeRequest, request: Request):
     """
     CIO takes a trade idea — runs risk gate first, persists if approved.
 
@@ -885,15 +905,16 @@ async def take_trade(req: TakeTradeRequest, request: Request = None):
     from db.models import TradeRecord
     from agents.desk3_position_risk import evaluate_trade_gate, get_current_portfolio_drawdown
 
-    user_id = get_user_id(request) if request else None
+    user_id = require_user_id(request)
 
     # === RISK GATE (mandatory) ===
     if req.position_size_pct and req.position_size_pct > 0:
         try:
             async with async_session() as session:
-                q = select(TradeRecord).where(TradeRecord.status == "open")
-                if user_id:
-                    q = q.where(TradeRecord.user_id == user_id)
+                q = select(TradeRecord).where(
+                    TradeRecord.status == "open",
+                    TradeRecord.user_id == user_id,
+                )
                 result = await session.execute(q)
                 open_trades = result.scalars().all()
 
@@ -981,20 +1002,21 @@ class CloseTradeRequest(BaseModel):
 
 
 @app.post("/api/portfolio/trade/{trade_id}/close")
-async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request = None):
+async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request):
     """Close an open trade with exit price. Computes realized P&L."""
     from db.models import TradeRecord
     from sqlalchemy import update as sql_update
-    user_id = get_user_id(request) if request else None
+    user_id = require_user_id(request)
     async with async_session() as session:
         result = await session.execute(
-            select(TradeRecord).where(TradeRecord.id == trade_id)
+            select(TradeRecord).where(
+                TradeRecord.id == trade_id,
+                TradeRecord.user_id == user_id,
+            )
         )
         trade = result.scalar_one_or_none()
         if not trade:
             raise HTTPException(status_code=404, detail="Trade not found")
-        if trade.user_id and user_id and trade.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized to close this trade")
         if trade.status != "open":
             raise HTTPException(status_code=400, detail="Trade already closed")
 
@@ -1023,15 +1045,17 @@ async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request = 
 
 
 @app.get("/api/portfolio/trades")
-async def list_trades(status: str = "all", req: Request = None):
+async def list_trades(req: Request, status: str = "all"):
     """Get trade journal for current user — open, closed, or all."""
+    user_id = require_user_id(req)
     try:
         from db.models import TradeRecord
-        user_id = get_user_id(req) if req else None
         async with async_session() as session:
-            query = select(TradeRecord).order_by(desc(TradeRecord.opened_at))
-            if user_id:
-                query = query.where(TradeRecord.user_id == user_id)
+            query = (
+                select(TradeRecord)
+                .where(TradeRecord.user_id == user_id)
+                .order_by(desc(TradeRecord.opened_at))
+            )
             if status != "all":
                 query = query.where(TradeRecord.status == status)
             result = await session.execute(query.limit(50))
@@ -1115,7 +1139,7 @@ async def portfolio_risk():
 
 
 @app.get("/api/portfolio/attribution")
-async def portfolio_attribution(req: Request = None):
+async def portfolio_attribution(req: Request):
     """
     Desk 6B — Attribution Analyst.
 
@@ -1125,13 +1149,11 @@ async def portfolio_attribution(req: Request = None):
     from quant.factors import compute_factor_loadings
     from db.models import TradeRecord
 
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
 
     try:
         async with async_session() as session:
-            q = select(TradeRecord)
-            if user_id:
-                q = q.where(TradeRecord.user_id == user_id)
+            q = select(TradeRecord).where(TradeRecord.user_id == user_id)
             result = await session.execute(q)
             trades = result.scalars().all()
     except Exception as e:
@@ -1230,30 +1252,32 @@ async def portfolio_attribution(req: Request = None):
 
 
 @app.get("/api/portfolio/positions")
-async def portfolio_positions(req: Request = None):
+async def portfolio_positions(req: Request):
     """
     Aggregated positions with live P&L.
 
     Groups open trades by ticker, fetches current prices concurrently,
     computes per-position unrealized P&L, weights, and portfolio summary.
     """
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
     from db.models import TradeRecord
     from concurrent.futures import ThreadPoolExecutor
 
     try:
         async with async_session() as session:
             # Open trades for user
-            open_q = select(TradeRecord).where(TradeRecord.status == "open")
-            if user_id:
-                open_q = open_q.where(TradeRecord.user_id == user_id)
+            open_q = select(TradeRecord).where(
+                TradeRecord.status == "open",
+                TradeRecord.user_id == user_id,
+            )
             open_result = await session.execute(open_q)
             open_trades = open_result.scalars().all()
 
             # Closed trades for realized P&L
-            closed_q = select(TradeRecord).where(TradeRecord.status != "open")
-            if user_id:
-                closed_q = closed_q.where(TradeRecord.user_id == user_id)
+            closed_q = select(TradeRecord).where(
+                TradeRecord.status != "open",
+                TradeRecord.user_id == user_id,
+            )
             closed_result = await session.execute(closed_q)
             closed_trades = closed_result.scalars().all()
     except Exception as e:
@@ -1478,20 +1502,21 @@ async def _run_scan_background(user_id: str | None, run_id: str, universe: list[
 
 
 @app.get("/api/scan/latest")
-async def scan_latest(req: Request = None):
+async def scan_latest(req: Request):
     """Get findings from the most recent completed scan for the current user."""
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
     try:
         async with async_session() as session:
-            # Find most recent completed run
-            runs_q = select(ScanRunRecord).where(
-                ScanRunRecord.status == "completed"
-            ).order_by(desc(ScanRunRecord.completed_at)).limit(1)
-            if user_id:
-                runs_q = select(ScanRunRecord).where(
+            # Find most recent completed run scoped strictly to this user
+            runs_q = (
+                select(ScanRunRecord)
+                .where(
                     ScanRunRecord.status == "completed",
-                    (ScanRunRecord.user_id == user_id) | (ScanRunRecord.user_id.is_(None)),
-                ).order_by(desc(ScanRunRecord.completed_at)).limit(1)
+                    ScanRunRecord.user_id == user_id,
+                )
+                .order_by(desc(ScanRunRecord.completed_at))
+                .limit(1)
+            )
             run_result = await session.execute(runs_q)
             latest_run = run_result.scalar_one_or_none()
 
@@ -1553,10 +1578,10 @@ async def scan_latest(req: Request = None):
 
 
 @app.post("/api/scan/trigger")
-async def scan_trigger(req: Request = None):
+async def scan_trigger(req: Request):
     """Trigger a new scan in the background. Returns immediately."""
-    user_id = get_user_id(req) if req else None
-    key = user_id or "_anon"
+    user_id = require_user_id(req)
+    key = user_id
 
     # Don't allow concurrent scans for the same user
     current = _scan_status.get(key, {})
@@ -1568,10 +1593,8 @@ async def scan_trigger(req: Request = None):
     universe = list(DEFAULT_UNIVERSE)
     try:
         async with async_session() as session:
-            # Add watchlist tickers
-            wl_q = select(WatchlistRecord)
-            if user_id:
-                wl_q = wl_q.where(WatchlistRecord.user_id == user_id)
+            # Add watchlist tickers for this user only
+            wl_q = select(WatchlistRecord).where(WatchlistRecord.user_id == user_id)
             wl_result = await session.execute(wl_q)
             for rec in wl_result.scalars().all():
                 if rec.ticker not in universe:
@@ -1600,11 +1623,10 @@ async def scan_trigger(req: Request = None):
 
 
 @app.get("/api/scan/status")
-async def scan_status(req: Request = None):
+async def scan_status(req: Request):
     """Check if a scan is currently running for this user."""
-    user_id = get_user_id(req) if req else None
-    key = user_id or "_anon"
-    current = _scan_status.get(key, {"status": "idle"})
+    user_id = require_user_id(req)
+    current = _scan_status.get(user_id, {"status": "idle"})
     return {
         "status": current.get("status", "idle"),
         "run_id": current.get("run_id"),
@@ -1615,25 +1637,27 @@ async def scan_status(req: Request = None):
 # === SCORECARD (Desk 6) ===
 
 @app.get("/api/scorecard/summary")
-async def scorecard_summary(req: Request = None):
+async def scorecard_summary(req: Request):
     """
     Aggregate signal quality metrics: hit rate, avg return, IC per conviction bucket.
     """
     from agents.scorer import get_scorecard_summary
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
     return await get_scorecard_summary(async_session, user_id=user_id)
 
 
 @app.get("/api/scorecard/signals")
-async def scorecard_signals(limit: int = 50, req: Request = None):
+async def scorecard_signals(req: Request, limit: int = 50):
     """List individual signal scores with outcomes."""
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
     try:
         async with async_session() as session:
-            q = select(SignalScoreRecord).order_by(desc(SignalScoreRecord.signal_date))
-            if user_id:
-                q = q.where(SignalScoreRecord.user_id == user_id)
-            q = q.limit(limit)
+            q = (
+                select(SignalScoreRecord)
+                .where(SignalScoreRecord.user_id == user_id)
+                .order_by(desc(SignalScoreRecord.signal_date))
+                .limit(limit)
+            )
             result = await session.execute(q)
             scores = result.scalars().all()
             return {
@@ -1666,10 +1690,11 @@ async def scorecard_signals(limit: int = 50, req: Request = None):
 
 
 @app.post("/api/scorecard/run")
-async def scorecard_run():
-    """Manually trigger signal scoring job."""
+async def scorecard_run(req: Request):
+    """Manually trigger signal scoring job for the current user's memos."""
     from agents.scorer import score_pending_signals
-    result = await score_pending_signals(async_session)
+    user_id = require_user_id(req)
+    result = await score_pending_signals(async_session, user_id=user_id)
     return result
 
 
@@ -1681,15 +1706,16 @@ class AddWatchlistRequest(BaseModel):
 
 
 @app.get("/api/watchlist")
-async def watchlist_list(req: Request = None):
+async def watchlist_list(req: Request):
     """List the user's watchlist tickers."""
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
     try:
         async with async_session() as session:
-            q = select(WatchlistRecord)
-            if user_id:
-                q = q.where(WatchlistRecord.user_id == user_id)
-            q = q.order_by(desc(WatchlistRecord.added_at))
+            q = (
+                select(WatchlistRecord)
+                .where(WatchlistRecord.user_id == user_id)
+                .order_by(desc(WatchlistRecord.added_at))
+            )
             result = await session.execute(q)
             items = result.scalars().all()
             return {
@@ -1710,9 +1736,9 @@ async def watchlist_list(req: Request = None):
 
 
 @app.post("/api/watchlist")
-async def watchlist_add(req: AddWatchlistRequest, request: Request = None):
+async def watchlist_add(req: AddWatchlistRequest, request: Request):
     """Add one or more tickers to the user's watchlist."""
-    user_id = get_user_id(request) if request else None
+    user_id = require_user_id(request)
     tickers = [t.strip().upper() for t in req.tickers if t.strip()]
     if not tickers:
         raise HTTPException(status_code=400, detail="No tickers provided")
@@ -1721,12 +1747,10 @@ async def watchlist_add(req: AddWatchlistRequest, request: Request = None):
     try:
         async with async_session() as session:
             for ticker in tickers:
-                # Skip if already in watchlist
                 existing_q = select(WatchlistRecord).where(
                     WatchlistRecord.ticker == ticker,
+                    WatchlistRecord.user_id == user_id,
                 )
-                if user_id:
-                    existing_q = existing_q.where(WatchlistRecord.user_id == user_id)
                 existing = (await session.execute(existing_q)).scalar_one_or_none()
                 if existing:
                     continue
@@ -1741,15 +1765,16 @@ async def watchlist_add(req: AddWatchlistRequest, request: Request = None):
 
 
 @app.delete("/api/watchlist/{ticker}")
-async def watchlist_remove(ticker: str, req: Request = None):
+async def watchlist_remove(ticker: str, req: Request):
     """Remove a ticker from the user's watchlist."""
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
     ticker = ticker.strip().upper()
     try:
         async with async_session() as session:
-            q = select(WatchlistRecord).where(WatchlistRecord.ticker == ticker)
-            if user_id:
-                q = q.where(WatchlistRecord.user_id == user_id)
+            q = select(WatchlistRecord).where(
+                WatchlistRecord.ticker == ticker,
+                WatchlistRecord.user_id == user_id,
+            )
             result = await session.execute(q)
             rec = result.scalar_one_or_none()
             if not rec:
@@ -1767,14 +1792,14 @@ async def watchlist_remove(ticker: str, req: Request = None):
 # === STREAMING ANALYSIS ===
 
 @app.post("/api/analyze/stream")
-async def analyze_stream(request: AnalyzeRequest, req: Request = None):
+async def analyze_stream(request: AnalyzeRequest, req: Request):
     """SSE streaming endpoint — sends phase updates as agents complete."""
     from agents.orchestrator import (
         _query_interpreter, _research_analyst, _risk_manager,
         _portfolio_strategist, _cio_synthesizer, _with_timeout,
         IntelligenceMemo,
     )
-    user_id = get_user_id(req) if req else None
+    user_id = require_user_id(req)
 
     query = request.query.strip()
 
