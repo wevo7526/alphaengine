@@ -183,6 +183,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
   const [enrichment, setEnrichment] = useState<EnrichmentData | null>(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const riskColor = RISK_LEVEL_STYLE[memo.overall_risk_level] ?? "text-text-tertiary";
 
   const handleDelete = async () => {
@@ -194,6 +195,19 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
       onDelete?.(id);
     } catch {
       setDeleting(false);
+    }
+  };
+
+  const handleExport = async () => {
+    const id = memo.id;
+    if (!id || exporting) return;
+    setExporting(true);
+    try {
+      await api.downloadPdf(api.exportMemoUrl(id), `alpha-engine-memo-${id.slice(0, 8)}.pdf`);
+    } catch {
+      // ignore
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -246,16 +260,28 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
               {memo.title}
             </h2>
           </div>
-          {memo.id && onDelete && (
-            <button
-              onClick={handleDelete}
-              disabled={deleting}
-              className="shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-text-quaternary hover:text-signal-red hover:bg-signal-red/10 transition-colors disabled:opacity-30"
-              title="Delete this analysis"
-            >
-              {deleting ? "..." : "Delete"}
-            </button>
-          )}
+          <div className="shrink-0 flex items-center gap-1">
+            {memo.id && (
+              <button
+                onClick={handleExport}
+                disabled={exporting}
+                className="px-2 py-1 rounded-lg text-[11px] font-medium text-text-quaternary hover:text-text-primary hover:bg-white/[0.04] transition-colors disabled:opacity-30"
+                title="Export as PDF"
+              >
+                {exporting ? "..." : "Export PDF"}
+              </button>
+            )}
+            {memo.id && onDelete && (
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="px-2 py-1 rounded-lg text-[11px] font-medium text-text-quaternary hover:text-signal-red hover:bg-signal-red/10 transition-colors disabled:opacity-30"
+                title="Delete this analysis"
+              >
+                {deleting ? "..." : "Delete"}
+              </button>
+            )}
+          </div>
         </div>
         {memo.decision_reason && (
           <p className="text-[11px] text-text-tertiary mb-3 italic">

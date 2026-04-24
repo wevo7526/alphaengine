@@ -40,3 +40,7 @@ pyjwt[crypto]
 
 # NLP (Phase 1: VADER, Phase 2: FinBERT via transformers)
 vaderSentiment
+
+# PDF generation — pure Python, no system deps (no Cairo/Pango/WebKit)
+reportlab
+matplotlib

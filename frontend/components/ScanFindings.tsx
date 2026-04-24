@@ -230,14 +230,28 @@ export function ScanFindings() {
             </span>
           )}
         </div>
-        <button
-          onClick={triggerScan}
-          disabled={scanning}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-text-tertiary hover:text-text-secondary hover:bg-white/[0.04] transition-colors disabled:opacity-40"
-        >
-          <IconRefresh spinning={scanning} />
-          {scanning ? "Scanning" : "Refresh"}
-        </button>
+        <div className="flex items-center gap-1">
+          {hasFindings && (
+            <button
+              onClick={async () => {
+                try {
+                  await api.downloadPdf(api.exportScanLatestUrl(), `alpha-engine-scan-${Date.now()}.pdf`);
+                } catch {}
+              }}
+              className="px-2 py-1 rounded-lg text-[11px] text-text-tertiary hover:text-text-secondary hover:bg-white/[0.04] transition-colors"
+            >
+              Export
+            </button>
+          )}
+          <button
+            onClick={triggerScan}
+            disabled={scanning}
+            className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-text-tertiary hover:text-text-secondary hover:bg-white/[0.04] transition-colors disabled:opacity-40"
+          >
+            <IconRefresh spinning={scanning} />
+            {scanning ? "Scanning" : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {/* Empty state */}

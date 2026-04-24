@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -1136,6 +1137,294 @@ async def backtest_trades():
 async def portfolio_risk():
     """Portfolio-level risk metrics — delegates to the full quant risk endpoint."""
     return await portfolio_risk_analysis()
+
+
+# === PDF EXPORT ===
+
+def _pdf_response(pdf_bytes: bytes, filename: str):
+    """Return a streaming PDF download response."""
+    from fastapi.responses import Response
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
+        },
+    )
+
+
+@app.get("/api/export/memo/{memo_id}")
+async def export_memo(memo_id: str, req: Request):
+    """Export a single intelligence memo as PDF."""
+    from exports.pdf_renderer import render_memo
+
+    user_id = require_user_id(req)
+    async with async_session() as session:
+        result = await session.execute(
+            select(IntelligenceMemoRecord).where(
+                IntelligenceMemoRecord.id == memo_id,
+                IntelligenceMemoRecord.user_id == user_id,
+            )
+        )
+        record = result.scalar_one_or_none()
+        if not record:
+            raise HTTPException(status_code=404, detail="Memo not found")
+
+        memo_data = {
+            "id": record.id,
+            "query": record.query,
+            "title": record.title,
+            "executive_summary": record.executive_summary,
+            "analysis": record.analysis,
+            "key_findings": record.key_findings or [],
+            "macro_regime": record.macro_regime,
+            "overall_risk_level": record.overall_risk_level,
+            "risk_factors": record.risk_factors or [],
+            "trade_ideas": record.trade_ideas or [],
+            "portfolio_positioning": record.portfolio_positioning,
+            "hedging_recommendations": record.hedging_recommendations or [],
+            "tickers_analyzed": record.tickers_analyzed or [],
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+        }
+
+    pdf = render_memo(memo_data)
+    filename = f"alpha-engine-memo-{memo_id[:8]}.pdf"
+    return _pdf_response(pdf, filename)
+
+
+@app.get("/api/export/portfolio")
+async def export_portfolio(req: Request):
+    """Export full portfolio report as PDF."""
+    from exports.pdf_renderer import render_portfolio
+
+    user_id = require_user_id(req)
+
+    # Reuse the positions endpoint logic
+    pos_result = await portfolio_positions(req)
+    positions = pos_result.get("positions", [])
+    summary = pos_result.get("summary", {})
+
+    # Attribution (may error if no trades)
+    try:
+        attr_result = await portfolio_attribution(req)
+    except Exception:
+        attr_result = None
+
+    # Scorecard summary
+    try:
+        from agents.scorer import get_scorecard_summary
+        scorecard = await get_scorecard_summary(async_session, user_id=user_id)
+    except Exception:
+        scorecard = None
+
+    pdf = render_portfolio(positions, summary, attr_result, scorecard)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return _pdf_response(pdf, f"alpha-engine-portfolio-{ts}.pdf")
+
+
+@app.get("/api/export/scan/{run_id}")
+async def export_scan(run_id: str, req: Request):
+    """Export a scan digest as PDF."""
+    from exports.pdf_renderer import render_scan
+
+    user_id = require_user_id(req)
+
+    async with async_session() as session:
+        # Validate run ownership
+        run_result = await session.execute(
+            select(ScanRunRecord).where(
+                ScanRunRecord.id == run_id,
+                ScanRunRecord.user_id == user_id,
+            )
+        )
+        run = run_result.scalar_one_or_none()
+        if not run:
+            raise HTTPException(status_code=404, detail="Scan run not found")
+
+        findings_result = await session.execute(
+            select(ScanFindingRecord).where(ScanFindingRecord.scan_run_id == run_id)
+        )
+        findings = findings_result.scalars().all()
+
+    by_priority: dict[str, list[dict]] = {"high": [], "medium": [], "low": []}
+    for f in findings:
+        by_priority.setdefault(f.priority, []).append({
+            "ticker": f.ticker,
+            "finding_type": f.finding_type,
+            "headline": f.headline,
+            "detail": f.detail or "",
+            "priority": f.priority,
+        })
+
+    run_meta = {
+        "universe_size": run.universe_size,
+        "findings_count": run.findings_count,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+    }
+
+    pdf = render_scan(by_priority, run_meta)
+    return _pdf_response(pdf, f"alpha-engine-scan-{run_id[:8]}.pdf")
+
+
+@app.get("/api/export/scan/latest")
+async def export_scan_latest(req: Request):
+    """Export the most recent scan for the user."""
+    user_id = require_user_id(req)
+    async with async_session() as session:
+        result = await session.execute(
+            select(ScanRunRecord).where(
+                ScanRunRecord.user_id == user_id,
+                ScanRunRecord.status == "completed",
+            ).order_by(desc(ScanRunRecord.completed_at)).limit(1)
+        )
+        run = result.scalar_one_or_none()
+    if not run:
+        raise HTTPException(status_code=404, detail="No completed scan found")
+    return await export_scan(run.id, req)
+
+
+@app.get("/api/export/scorecard")
+async def export_scorecard(req: Request):
+    """Export signal scorecard as PDF."""
+    from exports.pdf_renderer import render_scorecard
+    from agents.scorer import get_scorecard_summary
+
+    user_id = require_user_id(req)
+
+    summary = await get_scorecard_summary(async_session, user_id=user_id)
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(SignalScoreRecord)
+            .where(SignalScoreRecord.user_id == user_id)
+            .order_by(desc(SignalScoreRecord.signal_date))
+            .limit(50)
+        )
+        signals = result.scalars().all()
+
+    signals_list = [
+        {
+            "ticker": s.ticker,
+            "direction": s.direction,
+            "conviction": s.conviction,
+            "signal_date": s.signal_date.isoformat() if s.signal_date else None,
+            "return_1d": s.return_1d,
+            "return_5d": s.return_5d,
+            "return_20d": s.return_20d,
+            "hit_1d": s.hit_1d,
+            "hit_5d": s.hit_5d,
+            "hit_20d": s.hit_20d,
+        }
+        for s in signals
+    ]
+
+    pdf = render_scorecard(summary, signals_list)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return _pdf_response(pdf, f"alpha-engine-scorecard-{ts}.pdf")
+
+
+@app.get("/api/export/morning")
+async def export_morning(req: Request):
+    """Export today's morning briefing as PDF."""
+    from exports.pdf_renderer import render_morning_briefing
+    from db.models import MorningReportRecord
+    from datetime import date
+
+    user_id = require_user_id(req)
+    today = date.today().isoformat()
+
+    async with async_session() as session:
+        result = await session.execute(
+            select(MorningReportRecord).where(
+                MorningReportRecord.report_date == today,
+                MorningReportRecord.user_id == user_id,
+            )
+        )
+        record = result.scalar_one_or_none()
+
+    if not record or not record.full_report:
+        raise HTTPException(status_code=404, detail="No morning report for today — generate one first")
+
+    pdf = render_morning_briefing(record.full_report)
+    return _pdf_response(pdf, f"alpha-engine-morning-{today}.pdf")
+
+
+@app.get("/api/export/range")
+async def export_range(req: Request, start: str, end: str):
+    """
+    Export a date-range archive bundle: all memos + trades + portfolio summary
+    for the specified date range. Dates in YYYY-MM-DD format.
+    """
+    from exports.pdf_renderer import render_range_bundle
+    from db.models import TradeRecord
+    from datetime import datetime as _dt
+
+    user_id = require_user_id(req)
+
+    try:
+        start_dt = _dt.fromisoformat(start)
+        end_dt = _dt.fromisoformat(end)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date format — use YYYY-MM-DD")
+
+    async with async_session() as session:
+        memo_q = select(IntelligenceMemoRecord).where(
+            IntelligenceMemoRecord.user_id == user_id,
+            IntelligenceMemoRecord.created_at >= start_dt,
+            IntelligenceMemoRecord.created_at <= end_dt,
+        ).order_by(desc(IntelligenceMemoRecord.created_at))
+        memo_result = await session.execute(memo_q)
+        memos = [
+            {
+                "id": m.id,
+                "title": m.title,
+                "query": m.query,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+                "decision": getattr(m, "decision", "WATCH"),
+            }
+            for m in memo_result.scalars().all()
+        ]
+
+        trade_q = select(TradeRecord).where(
+            TradeRecord.user_id == user_id,
+            TradeRecord.opened_at >= start_dt,
+            TradeRecord.opened_at <= end_dt,
+        ).order_by(desc(TradeRecord.opened_at))
+        trade_result = await session.execute(trade_q)
+        trades = [
+            {
+                "ticker": t.ticker,
+                "action": t.action,
+                "direction": t.direction,
+                "entry_price": t.entry_price,
+                "exit_price": t.exit_price,
+                "position_size_pct": t.position_size_pct,
+                "realized_pnl": t.realized_pnl,
+                "status": t.status,
+                "opened_at": t.opened_at.isoformat() if t.opened_at else None,
+            }
+            for t in trade_result.scalars().all()
+        ]
+
+    # Current positions + summary
+    try:
+        pos_result = await portfolio_positions(req)
+        positions = pos_result.get("positions", [])
+        summary = pos_result.get("summary", {})
+    except Exception:
+        positions = []
+        summary = {}
+
+    # Scorecard
+    try:
+        from agents.scorer import get_scorecard_summary
+        scorecard = await get_scorecard_summary(async_session, user_id=user_id)
+    except Exception:
+        scorecard = None
+
+    pdf = render_range_bundle(start, end, memos, trades, positions, summary, scorecard)
+    return _pdf_response(pdf, f"alpha-engine-archive-{start}-to-{end}.pdf")
 
 
 @app.get("/api/portfolio/attribution")

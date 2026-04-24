@@ -211,13 +211,29 @@ export default function PortfolioPage() {
             Trade journal, position tracking, and performance.
           </p>
         </div>
-        <button
-          onClick={runBacktest}
-          disabled={backtesting}
-          className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
-        >
-          {backtesting ? "Running..." : "Run Backtest"}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={async () => {
+              try {
+                if (tab === "scorecard") {
+                  await api.downloadPdf(api.exportScorecardUrl(), `alpha-engine-scorecard-${Date.now()}.pdf`);
+                } else {
+                  await api.downloadPdf(api.exportPortfolioUrl(), `alpha-engine-portfolio-${Date.now()}.pdf`);
+                }
+              } catch {}
+            }}
+            className="px-3 py-1.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-text-primary hover:bg-white/[0.04] transition-colors"
+          >
+            Export PDF
+          </button>
+          <button
+            onClick={runBacktest}
+            disabled={backtesting}
+            className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
+          >
+            {backtesting ? "Running..." : "Run Backtest"}
+          </button>
+        </div>
       </div>
 
       {/* Tabs */}

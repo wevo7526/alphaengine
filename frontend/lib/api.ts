@@ -119,6 +119,38 @@ export const api = {
       body: JSON.stringify({ ticker, direction, size_pct }),
     }),
 
+  // PDF Export — returns URLs; actual download needs auth headers handled manually
+  exportMemoUrl: (memoId: string) => `${getApiBase()}/api/export/memo/${memoId}`,
+  exportPortfolioUrl: () => `${getApiBase()}/api/export/portfolio`,
+  exportScanLatestUrl: () => `${getApiBase()}/api/export/scan/latest`,
+  exportScorecardUrl: () => `${getApiBase()}/api/export/scorecard`,
+  exportMorningUrl: () => `${getApiBase()}/api/export/morning`,
+  exportRangeUrl: (start: string, end: string) =>
+    `${getApiBase()}/api/export/range?start=${start}&end=${end}`,
+
+  /**
+   * Trigger a PDF download with auth headers attached.
+   * Fetches the PDF blob, then creates a download link.
+   */
+  downloadPdf: async (url: string, filename: string) => {
+    const headers = await getAuthHeaders();
+    // Don't send Content-Type on GET
+    delete (headers as Record<string, string>)["Content-Type"];
+    const res = await fetch(url, { headers });
+    if (!res.ok) {
+      throw new Error(`Export failed: ${res.status}`);
+    }
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  },
+
   // Quant infrastructure
   portfolioRisk: () => request("/api/quant/portfolio-risk"),
   regime: () => request("/api/quant/regime"),
