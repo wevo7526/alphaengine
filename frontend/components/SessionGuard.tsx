@@ -39,7 +39,11 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
         <div className="flex flex-col items-center gap-3 max-w-sm text-center">
           <p className="text-[13px] font-medium text-text-primary">Authentication failed to load</p>
           <p className="text-[11px] text-text-tertiary">
-            The sign-in service is not responding. Check your connection, then reload. If this persists, the Clerk publishable key may be missing in the deployment.
+            Clerk did not finish its handshake. This usually means the deployment is missing
+            <code className="mx-1 px-1 rounded bg-bg-elevated">CLERK_SECRET_KEY</code>
+            (server) or
+            <code className="mx-1 px-1 rounded bg-bg-elevated">NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code>
+            (client). Set both in your environment and redeploy.
           </p>
           <button
             onClick={() => window.location.reload()}
