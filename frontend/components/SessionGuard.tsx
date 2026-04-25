@@ -3,59 +3,45 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
+import { api } from "@/lib/api";
 
-const LOAD_TIMEOUT_MS = 10000;
+type AuthState = "checking" | "authenticated" | "unauthenticated";
 
+/**
+ * Minimal session guard.
+ *
+ * - On auth routes (/sign-in, /sign-up): always render children, no checks.
+ * - Off auth routes: wait for Clerk to load, redirect to /sign-in if not signed in.
+ * - Optimistic — we trust Clerk's isSignedIn and render immediately when true.
+ *   The backend will 401 individual API calls if the token is genuinely bad;
+ *   we don't block the UI on a blocking /api/auth/me gate (that was the loop).
+ */
 export function SessionGuard({ children }: { children: React.ReactNode }) {
   const { isLoaded, isSignedIn } = useUser();
   const router = useRouter();
   const pathname = usePathname();
   const redirectedRef = useRef(false);
-  const [timedOut, setTimedOut] = useState(false);
 
   const isAuthRoute = pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
 
   useEffect(() => {
+    // Auth routes never redirect
     if (isAuthRoute) return;
+
+    // Wait for Clerk
     if (!isLoaded) return;
 
+    // Only redirect once per unmount cycle
     if (!isSignedIn && !redirectedRef.current) {
       redirectedRef.current = true;
       router.replace("/sign-in");
     }
   }, [isLoaded, isSignedIn, isAuthRoute, pathname, router]);
 
-  useEffect(() => {
-    if (isAuthRoute || isLoaded) return;
-    const t = setTimeout(() => setTimedOut(true), LOAD_TIMEOUT_MS);
-    return () => clearTimeout(t);
-  }, [isAuthRoute, isLoaded]);
-
+  // Auth pages render their own content
   if (isAuthRoute) return <>{children}</>;
 
-  if (!isLoaded && timedOut) {
-    return (
-      <div className="fixed inset-0 flex items-center justify-center bg-bg-primary p-6">
-        <div className="flex flex-col items-center gap-3 max-w-sm text-center">
-          <p className="text-[13px] font-medium text-text-primary">Authentication failed to load</p>
-          <p className="text-[11px] text-text-tertiary">
-            Clerk did not finish its handshake. This usually means the deployment is missing
-            <code className="mx-1 px-1 rounded bg-bg-elevated">CLERK_SECRET_KEY</code>
-            (server) or
-            <code className="mx-1 px-1 rounded bg-bg-elevated">NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY</code>
-            (client). Set both in your environment and redeploy.
-          </p>
-          <button
-            onClick={() => window.location.reload()}
-            className="mt-2 px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors"
-          >
-            Reload
-          </button>
-        </div>
-      </div>
-    );
-  }
-
+  // Waiting for Clerk SDK to load
   if (!isLoaded) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
@@ -70,6 +56,7 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // Not signed in — show placeholder while redirect fires
   if (!isSignedIn) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
@@ -78,5 +65,6 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
+  // Signed in — render app. Individual API calls will 401 if token bad.
   return <>{children}</>;
 }
