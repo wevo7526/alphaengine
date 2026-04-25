@@ -189,6 +189,11 @@ export function useAnalysis() {
       setRuns((prev) => [...prev, run]);
       setActiveRun(id);
 
+      const abortController = new AbortController();
+      const STREAM_IDLE_TIMEOUT_MS = 90000;
+      const STREAM_TOTAL_TIMEOUT_MS = 600000;
+      const totalTimeoutId = setTimeout(() => abortController.abort(), STREAM_TOTAL_TIMEOUT_MS);
+
       try {
         const streamUrl = api.analyzeStreamUrl();
         const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -205,6 +210,7 @@ export function useAnalysis() {
           method: "POST",
           headers,
           body: JSON.stringify({ query }),
+          signal: abortController.signal,
         });
 
         if (!response.ok || !response.body) {
@@ -216,7 +222,17 @@ export function useAnalysis() {
         let buffer = "";
 
         while (true) {
-          const { done, value } = await reader.read();
+          const idleTimer = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Stream idle timeout")), STREAM_IDLE_TIMEOUT_MS)
+          );
+          let result: ReadableStreamReadResult<Uint8Array>;
+          try {
+            result = await Promise.race([reader.read(), idleTimer]);
+          } catch {
+            abortController.abort();
+            throw new Error("Stream stalled — no data received");
+          }
+          const { done, value } = result;
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
@@ -291,6 +307,8 @@ export function useAnalysis() {
           const message = fallbackErr instanceof Error ? fallbackErr.message : "Analysis failed";
           updateRun(id, { phase: "error", error: message });
         }
+      } finally {
+        clearTimeout(totalTimeoutId);
       }
 
       setActiveRun(null);

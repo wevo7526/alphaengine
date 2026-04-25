@@ -139,7 +139,7 @@ export function ScanFindings() {
     low: true, // Hide low-priority by default
   });
 
-  const loadFindings = async () => {
+  const loadFindings = async (): Promise<ScanData | null> => {
     try {
       const d = (await api.scanLatest()) as ScanData;
       setData(d);
@@ -149,38 +149,43 @@ export function ScanFindings() {
     }
   };
 
-  const triggerScan = async () => {
+  const triggerScan = async (isCancelled?: () => boolean) => {
     setScanning(true);
     try {
       await api.scanTrigger();
-      // Poll status every 4s until done
       let ticks = 0;
-      const maxTicks = 45; // ~3 minutes max
+      const maxTicks = 45;
       while (ticks < maxTicks) {
+        if (isCancelled?.()) return;
         await new Promise((resolve) => setTimeout(resolve, 4000));
-        const status = (await api.scanStatus()) as { status: string };
-        if (status.status !== "running") break;
+        if (isCancelled?.()) return;
+        try {
+          const status = (await api.scanStatus()) as { status: string };
+          if (status.status !== "running") break;
+        } catch {
+          break;
+        }
         ticks++;
       }
-      await loadFindings();
+      if (!isCancelled?.()) await loadFindings();
     } catch {
       // ignore
     } finally {
-      setScanning(false);
+      if (!isCancelled?.()) setScanning(false);
     }
   };
 
   useEffect(() => {
     let cancelled = false;
+    const isCancelled = () => cancelled;
 
     (async () => {
       const d = await loadFindings();
       if (cancelled) return;
       setLoading(false);
 
-      // Auto-trigger scan if stale or empty
       if (!d || d.stale || d.findings.length === 0) {
-        if (!cancelled) triggerScan();
+        await triggerScan(isCancelled);
       }
     })();
 
@@ -244,7 +249,7 @@ export function ScanFindings() {
             </button>
           )}
           <button
-            onClick={triggerScan}
+            onClick={() => { triggerScan(); }}
             disabled={scanning}
             className="flex items-center gap-1.5 px-2 py-1 rounded-lg text-[11px] text-text-tertiary hover:text-text-secondary hover:bg-white/[0.04] transition-colors disabled:opacity-40"
           >

@@ -36,18 +36,33 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+const DEFAULT_TIMEOUT_MS = 45000;
+
+async function request<T>(path: string, init?: RequestInit & { timeoutMs?: number }): Promise<T> {
   const base = getApiBase();
   const authHeaders = await getAuthHeaders();
-  const res = await fetch(`${base}${path}`, {
-    ...init,
-    headers: { ...authHeaders, ...init?.headers },
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `API ${res.status}`);
+  const controller = new AbortController();
+  const timeoutMs = init?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}${path}`, {
+      ...init,
+      headers: { ...authHeaders, ...init?.headers },
+      signal: init?.signal ?? controller.signal,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: res.statusText }));
+      throw new Error(err.detail || `API ${res.status}`);
+    }
+    return res.json();
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new Error(`Request timed out after ${timeoutMs}ms: ${path}`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return res.json();
 }
 
 export const api = {
