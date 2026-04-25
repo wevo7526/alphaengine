@@ -29,6 +29,12 @@ export default function RootLayout({
 }>) {
   return (
     <ClerkProvider
+      publishableKey={
+        process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ||
+        "pk_test_dW5iaWFzZWQtbWFjYXctODkuY2xlcmsuYWNjb3VudHMuZGV2JA"
+      }
+      signInUrl="/sign-in"
+      signUpUrl="/sign-up"
       afterSignOutUrl="/sign-in"
       appearance={{
         variables: {
