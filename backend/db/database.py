@@ -95,7 +95,12 @@ async def init_db() -> None:
 
 
 async def _migrate_columns() -> None:
-    """Add missing columns to existing tables (works for both SQLite and Postgres)."""
+    """
+    Idempotent DDL migrations. Each statement runs in its own transaction
+    because Postgres aborts the surrounding transaction on the first error
+    (e.g. "column already exists"), and a single shared transaction would
+    poison every subsequent statement with "current transaction is aborted."
+    """
     column_migrations = [
         ("intelligence_memos", "user_id", "TEXT"),
         ("trades", "user_id", "TEXT"),
@@ -103,55 +108,47 @@ async def _migrate_columns() -> None:
         ("factor_exposures", "user_id", "TEXT"),
         ("morning_reports", "user_id", "TEXT"),
     ]
-    async with engine.begin() as conn:
-        for table, column, col_type in column_migrations:
-            try:
+    for table, column, col_type in column_migrations:
+        try:
+            async with engine.begin() as conn:
                 await conn.execute(
                     text(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
                 )
-                logger.info(f"Migrated: added {table}.{column}")
-            except Exception as e:
-                # Column already exists or table is absent — the SQL-level error is
-                # the authority here. Log at debug only; don't bury DDL problems at
-                # WARNING level where they drown in noise.
-                logger.debug(f"Migration skip {table}.{column}: {e}")
+            logger.info(f"Migrated: added {table}.{column}")
+        except Exception as e:
+            logger.debug(f"Migration skip {table}.{column}: {e}")
 
-        # Tag historical NULL-user rows with a sentinel so per-user queries don't
-        # leak them to the first authenticated user.
-        legacy_sentinel = "__legacy_null__"
-        legacy_tables = [
-            "intelligence_memos", "trades", "portfolio_snapshots",
-            "factor_exposures", "morning_reports", "scan_findings",
-            "scan_runs", "watchlist", "signal_scores",
-        ]
-        # Parameter binding — never f-string the sentinel even if it's a constant.
-        for table in legacy_tables:
-            try:
+    legacy_sentinel = "__legacy_null__"
+    legacy_tables = [
+        "intelligence_memos", "trades", "portfolio_snapshots",
+        "factor_exposures", "morning_reports", "scan_findings",
+        "scan_runs", "watchlist", "signal_scores",
+    ]
+    for table in legacy_tables:
+        try:
+            async with engine.begin() as conn:
                 await conn.execute(
                     text(f"UPDATE {table} SET user_id = :sentinel WHERE user_id IS NULL"),
                     {"sentinel": legacy_sentinel},
                 )
-            except Exception as e:
-                logger.debug(f"Sentinel backfill skip {table}: {e}")
+        except Exception as e:
+            logger.debug(f"Sentinel backfill skip {table}: {e}")
 
-        # Composite indexes for hot query paths. create_all() only adds indexes
-        # to NEW tables, so existing production tables need these added
-        # idempotently here. IF NOT EXISTS is supported by both Postgres and
-        # SQLite (post-3.8.x).
-        composite_indexes = [
-            ("ix_memos_user_created", "intelligence_memos", "user_id, created_at"),
-            ("ix_trades_user_status", "trades", "user_id, status"),
-            ("ix_trades_memo", "trades", "memo_id"),
-            ("ix_signal_scores_user_date", "signal_scores", "user_id, signal_date"),
-        ]
-        for name, table, cols in composite_indexes:
-            try:
+    composite_indexes = [
+        ("ix_memos_user_created", "intelligence_memos", "user_id, created_at"),
+        ("ix_trades_user_status", "trades", "user_id, status"),
+        ("ix_trades_memo", "trades", "memo_id"),
+        ("ix_signal_scores_user_date", "signal_scores", "user_id, signal_date"),
+    ]
+    for name, table, cols in composite_indexes:
+        try:
+            async with engine.begin() as conn:
                 await conn.execute(
                     text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({cols})")
                 )
-                logger.debug(f"Index ensured: {name}")
-            except Exception as e:
-                logger.debug(f"Index skip {name}: {e}")
+            logger.debug(f"Index ensured: {name}")
+        except Exception as e:
+            logger.debug(f"Index skip {name}: {e}")
 
 
 async def ping_db(timeout: float = 3.0) -> dict:

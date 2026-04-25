@@ -1,5 +1,6 @@
 from pydantic_settings import BaseSettings
 from pathlib import Path
+import base64
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,10 +21,15 @@ class Settings(BaseSettings):
     ALPHA_VANTAGE_KEY: str = ""
     FIRECRAWL_API_KEY: str = ""
 
-    # Clerk Auth
-    CLERK_ISSUER: str = ""  # e.g. https://your-app.clerk.accounts.dev
+    # Clerk Auth.
+    # CLERK_ISSUER and CLERK_SECRET_KEY are optional — if either CLERK_ISSUER
+    # or CLERK_PUBLISHABLE_KEY (or NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) is set,
+    # we derive the issuer URL and verify JWTs against Clerk's public JWKS.
+    CLERK_ISSUER: str = ""
     CLERK_SECRET_KEY: str = ""
-    CLERK_AUDIENCE: str = ""  # Optional: restrict JWT audience claim
+    CLERK_AUDIENCE: str = ""
+    CLERK_PUBLISHABLE_KEY: str = ""
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: str = ""
 
     # Database
     DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/alphaengine"
@@ -35,7 +41,7 @@ class Settings(BaseSettings):
     BACKEND_URL: str = "http://localhost:8000"
     FRONTEND_URL: str = "http://localhost:3000"
     ENV: str = "development"
-    CORS_ORIGINS: str = ""  # Comma-separated extra origins for production
+    CORS_ORIGINS: str = ""
 
     model_config = {
         "env_file": str(_ENV_FILE),
@@ -44,13 +50,46 @@ class Settings(BaseSettings):
     }
 
 
+def _derive_clerk_issuer(publishable_key: str) -> str:
+    """
+    Clerk publishable keys encode the FAPI hostname:
+        pk_test_<base64(hostname$)>   →  https://<hostname>
+        pk_live_<base64(hostname$)>   →  https://<hostname>
+    Returns "" if the key is empty or malformed.
+    """
+    if not publishable_key:
+        return ""
+    for prefix in ("pk_test_", "pk_live_"):
+        if publishable_key.startswith(prefix):
+            try:
+                encoded = publishable_key[len(prefix):]
+                # Pad to a multiple of 4 for base64
+                padding = (-len(encoded)) % 4
+                decoded = base64.b64decode(encoded + "=" * padding).decode("ascii")
+                host = decoded.rstrip("$").strip()
+                if host:
+                    return f"https://{host}"
+            except Exception as e:
+                logger.warning("Could not decode Clerk publishable key: %s", e)
+            return ""
+    return ""
+
+
 settings = Settings()
 
+# If CLERK_ISSUER isn't explicitly set, derive it from whichever publishable
+# key is available. This mirrors how the frontend resolves its FAPI host.
+if not settings.CLERK_ISSUER:
+    pub_key = (
+        settings.CLERK_PUBLISHABLE_KEY
+        or settings.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+    )
+    derived = _derive_clerk_issuer(pub_key)
+    if derived:
+        settings.CLERK_ISSUER = derived
+        logger.info("Derived CLERK_ISSUER from publishable key: %s", derived)
 
-# Secrets whose absence is only logged (agents degrade gracefully) vs. those
-# that MUST be present in production. Keep this list conservative — a missing
-# ANTHROPIC_API_KEY means the product can't function; a missing NEWS_API_KEY
-# degrades one signal source.
+
 REQUIRED_IN_PRODUCTION = ("ANTHROPIC_API_KEY", "CLERK_ISSUER")
 RECOMMENDED = (
     "SEC_API_KEY", "FRED_API_KEY", "NEWS_API_KEY",
@@ -64,8 +103,7 @@ def validate_startup() -> list[str]:
 
     Returns a list of fatal errors (empty = OK). Recommended-but-missing keys
     are logged as warnings so operators can see degraded capabilities without
-    the app refusing to boot. Fatal misconfigurations are logged as errors;
-    the caller decides whether to exit (prod) or continue (dev).
+    the app refusing to boot.
     """
     errors: list[str] = []
 
