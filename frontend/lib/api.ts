@@ -119,6 +119,12 @@ export const api = {
       body: JSON.stringify({ exit_price: exitPrice, notes }),
     }),
 
+  flushPositions: (scope: "open" | "closed" | "all" = "open") =>
+    request<{ deleted: number; scope: string }>(
+      `/api/portfolio/flush?scope=${scope}`,
+      { method: "POST" }
+    ),
+
   // Portfolio positions + live P&L
   positions: () => request("/api/portfolio/positions"),
   attribution: () => request("/api/portfolio/attribution"),

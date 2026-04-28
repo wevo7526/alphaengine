@@ -1241,6 +1241,35 @@ async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request):
         return {"id": trade_id, "status": "closed", "realized_pnl_pct": round(pnl_pct, 2)}
 
 
+@app.post("/api/portfolio/flush")
+async def flush_positions(req: Request, scope: str = "open"):
+    """
+    Hard-delete this user's trades so they can take a fresh set of ideas.
+
+    Scoped strictly to the authenticated user — cannot affect other users.
+    `scope` can be "open" (default), "closed", or "all". Use sparingly.
+    """
+    from db.models import TradeRecord
+    from sqlalchemy import delete as sql_delete
+
+    user_id = require_user_id(req)
+    if scope not in ("open", "closed", "all"):
+        raise HTTPException(status_code=400, detail="scope must be open|closed|all")
+
+    async with async_session() as session:
+        stmt = sql_delete(TradeRecord).where(TradeRecord.user_id == user_id)
+        if scope == "open":
+            stmt = stmt.where(TradeRecord.status == "open")
+        elif scope == "closed":
+            stmt = stmt.where(TradeRecord.status != "open")
+        result = await session.execute(stmt)
+        await session.commit()
+        deleted = result.rowcount or 0
+
+    logger.info(f"flush_positions: user={user_id} scope={scope} deleted={deleted}")
+    return {"deleted": deleted, "scope": scope}
+
+
 @app.get("/api/portfolio/trades")
 async def list_trades(req: Request, status: str = "all"):
     """Get trade journal for current user — open, closed, or all."""

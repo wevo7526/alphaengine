@@ -206,6 +206,30 @@ export default function PortfolioPage() {
       .catch(() => setBacktesting(false));
   };
 
+  const [flushing, setFlushing] = useState(false);
+  const handleFlush = async () => {
+    if (flushing) return;
+    if (typeof window !== "undefined") {
+      const ok = window.confirm(
+        "Delete all OPEN positions for your account? This cannot be undone."
+      );
+      if (!ok) return;
+    }
+    setFlushing(true);
+    try {
+      const res = await api.flushPositions("open");
+      // Refresh state
+      api.listTrades("all").then((d: unknown) => {
+        setTrades((d as { trades: Trade[] }).trades);
+      }).catch(() => {});
+      loadPositions();
+      setApiError(`Flushed ${res.deleted} open position${res.deleted === 1 ? "" : "s"}`);
+    } catch (e) {
+      recordError("flush positions", e);
+    }
+    setFlushing(false);
+  };
+
   const openTrades = trades.filter((t) => t.status === "open");
   const closedTrades = trades.filter((t) => t.status !== "open");
 
@@ -256,6 +280,14 @@ export default function PortfolioPage() {
             className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
           >
             {backtesting ? "Running..." : "Run Backtest"}
+          </button>
+          <button
+            onClick={handleFlush}
+            disabled={flushing || openTrades.length === 0}
+            title="Hard-delete all open positions for your account"
+            className="px-3 py-1.5 rounded-lg border border-signal-red/30 bg-signal-red/[0.06] text-signal-red text-xs font-medium hover:bg-signal-red/[0.12] transition-colors disabled:opacity-30"
+          >
+            {flushing ? "Flushing..." : `Flush Open (${openTrades.length})`}
           </button>
         </div>
       </div>
