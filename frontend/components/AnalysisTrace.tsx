@@ -304,6 +304,16 @@ export function AnalysisTrace({ run, onDeleteMemo }: { run: AnalysisRun; onDelet
 
   return (
     <div style={{ animation: "fade-in 0.3s ease-out" }}>
+      {/* Plan-confidence note: only surfaces when query was ambiguous */}
+      {run.planConfidence !== undefined && run.planConfidence < 60 && run.phase !== "complete" && (
+        <div className="mb-3 flex items-start gap-2 rounded-lg border border-signal-yellow/25 bg-signal-yellow/[0.04] px-3 py-2">
+          <div className="text-[11px] font-mono text-signal-yellow shrink-0">Plan {run.planConfidence}</div>
+          <p className="text-[11px] text-text-tertiary">
+            {run.planConfidenceReason || "Query was ambiguous; some inferences were made about intent or universe."}
+          </p>
+        </div>
+      )}
+
       {/* Desk timeline */}
       <div className="mb-6">
         {allDesks.map((desk, i) => (

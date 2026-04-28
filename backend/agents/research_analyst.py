@@ -316,7 +316,7 @@ def get_peer_comparison(ticker: str, peers: str | None = None) -> dict:
     else:
         peer_list = [p for p in DEFAULT_PEERS.get(target_sector, []) if p != ticker.upper()]
 
-    peer_list = peer_list[:4]  # cap at 4 peers — API conservation
+    peer_list = peer_list[:3]  # cap at 3 peers — API conservation + token budget
     peer_data = {}
     for p in peer_list:
         try:
@@ -441,14 +441,23 @@ After gathering data, produce a JSON summary with:
 The data_summary is critical — it's what downstream agents (Risk Manager, Portfolio Strategist)
 will primarily read. Make it thorough, quantitative, and specific."""
 
-OUTPUT_INSTRUCTIONS = """You have up to 10 tool calls. Use them efficiently:
-- Call macro_snapshot first (1 call, covers all macro data).
-- Batch ticker research: fundamentals + news per ticker (2 calls each).
-- For 4 tickers: ~9 calls total. Prioritize the top 3-4 tickers.
-- Skip Alpha Vantage unless specifically needed — RSI/MACD can be inferred from price history.
+OUTPUT_INSTRUCTIONS = """TOOL BUDGET: 12 tool calls MAX. Plan a budget per ticker before calling.
 
-After gathering data, produce your JSON response immediately. Your data_summary narrative
-is the most important output — make it 3-4 paragraphs with specific numbers from the data."""
+Suggested allocation for a 3-ticker analysis:
+  1 macro_snapshot (covers all macro)
+  3 fundamentals (one per ticker)
+  3 news (one per ticker — get_ticker_news returns descriptions)
+  1 get_earnings_calendar on the primary ticker (verifies catalyst dates)
+  1 get_analyst_consensus on the primary ticker (target prices, recommendation)
+  1 get_peer_comparison on the primary ticker (relative valuation)
+  1 get_options_analysis on the primary ticker (vol + flow signal)
+  1 buffer for SEC filings or short interest if research demands it
+
+Skip Alpha Vantage unless specifically needed (25/day budget — preserve it).
+Skip get_filing_section unless thesis requires reading actual filing prose.
+
+After 12 tool calls, STOP and emit JSON. Your data_summary is the critical
+output — 3-4 paragraphs, every number sourced from a tool call, no guesses."""
 
 
 class ResearchAnalyst(BaseAgent):
@@ -469,7 +478,7 @@ class ResearchAnalyst(BaseAgent):
         agent = create_tool_calling_agent(self.llm, tools, prompt)
         return AgentExecutor(
             agent=agent, tools=tools, verbose=False,
-            max_iterations=12,
+            max_iterations=13,  # 12 tool calls + final synthesis pass
             handle_parsing_errors=True,
         )
 

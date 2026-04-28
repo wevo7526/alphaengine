@@ -18,6 +18,45 @@ interface RiskData {
   circuit_breaker: { status: string; action: string; color: string };
   correlation_matrix: { tickers: string[]; matrix: number[][] };
   positions_count: number;
+  portfolio_drawdown_pct?: number;
+  // VaR rigor fields (added by backend Q4)
+  cornish_fisher?: {
+    var_pct: number | null;
+    skewness: number | null;
+    excess_kurtosis: number | null;
+    z_adjusted: number | null;
+  };
+  historical?: {
+    var_pct: number | null;
+    ci_95_low_pct: number | null;
+    ci_95_high_pct: number | null;
+    bootstrap_samples: number;
+  };
+  sample_size?: number;
+  low_sample?: boolean;
+  error?: string;
+}
+
+interface StressData {
+  portfolio_base: number;
+  position_count: number;
+  historical: Record<string, {
+    label: string;
+    window: string;
+    spy_return_pct: number;
+    portfolio_pnl_pct: number;
+    portfolio_pnl_dollars: number;
+    vix_peak: number;
+  }>;
+  hypothetical: Array<{
+    shock: { type?: string; size?: number; unit?: string } | Record<string, unknown>;
+    portfolio_pnl_pct: number;
+    portfolio_pnl_dollars: number;
+    components?: Array<{
+      shock: { type?: string; size?: number; unit?: string };
+      portfolio_pnl_pct: number;
+    }>;
+  }>;
   error?: string;
 }
 
@@ -46,6 +85,7 @@ export default function RiskPage() {
   const [riskData, setRiskData] = useState<RiskData | null>(null);
   const [regime, setRegime] = useState<RegimeData | null>(null);
   const [conditionalReturns, setConditionalReturns] = useState<Record<string, Record<string, number>> | null>(null);
+  const [stress, setStress] = useState<StressData | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasPositions, setHasPositions] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -85,6 +125,14 @@ export default function RiskPage() {
         setLoading(false);
       }
     });
+
+    // Stress panel — silently fails when no positions; otherwise populates
+    api.stress().then((d: unknown) => {
+      if (!cancelled) {
+        const data = d as StressData;
+        if (!data.error) setStress(data);
+      }
+    }).catch(() => { /* no positions / unavailable — surface via portfolio-risk error */ });
 
     return () => { cancelled = true; };
   }, []);
@@ -186,12 +234,49 @@ export default function RiskPage() {
         </div>
       ) : hasPositions && riskData ? (
         <>
-          <div className="grid grid-cols-4 gap-3 mb-6">
-            <Stat label="VaR (95%)" value={riskData.var_pct != null ? `${riskData.var_pct}` : null} color="text-signal-red" suffix="%" help="Value at Risk: maximum expected daily loss at 95% confidence" />
+          <div className="grid grid-cols-4 gap-3 mb-3">
+            <Stat label="VaR (95%)" value={riskData.var_pct != null ? `${riskData.var_pct}` : null} color="text-signal-red" suffix="%" help="Parametric Gaussian Value at Risk — daily loss at 95% confidence" />
             <Stat label="CVaR (95%)" value={riskData.cvar_pct != null ? `${riskData.cvar_pct}` : null} color="text-signal-red" suffix="%" help="Expected Shortfall: average loss in worst 5% of days" />
             <Stat label="Annual Vol" value={riskData.portfolio_vol_annual != null ? `${riskData.portfolio_vol_annual}` : null} suffix="%" help="Annualized portfolio volatility" />
             <Stat label="Positions" value={String(riskData.positions_count)} />
           </div>
+
+          {/* VaR rigor: Cornish-Fisher tail correction + historical bootstrap CI */}
+          {(riskData.cornish_fisher || riskData.historical) && (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-4 mb-6">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-[10px] font-medium text-text-quaternary uppercase tracking-wider">VaR Detail</h3>
+                {riskData.low_sample && (
+                  <span className="text-[10px] text-signal-yellow">low sample (n={riskData.sample_size})</span>
+                )}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                {riskData.cornish_fisher && riskData.cornish_fisher.var_pct != null && (
+                  <div className="rounded-lg bg-bg-primary p-3">
+                    <p className="text-[10px] text-text-quaternary uppercase mb-1">Cornish-Fisher (tail-adjusted)</p>
+                    <p className="font-mono text-signal-red">{riskData.cornish_fisher.var_pct}%</p>
+                    <p className="text-[10px] text-text-quaternary mt-1">
+                      skew {riskData.cornish_fisher.skewness} · excess kurtosis {riskData.cornish_fisher.excess_kurtosis} · z* {riskData.cornish_fisher.z_adjusted}
+                    </p>
+                  </div>
+                )}
+                {riskData.historical && riskData.historical.var_pct != null && (
+                  <div className="rounded-lg bg-bg-primary p-3">
+                    <p className="text-[10px] text-text-quaternary uppercase mb-1">Historical (bootstrap)</p>
+                    <p className="font-mono text-signal-red">
+                      {riskData.historical.var_pct}%
+                      <span className="text-[10px] text-text-quaternary ml-1">
+                        [{riskData.historical.ci_95_low_pct}, {riskData.historical.ci_95_high_pct}]
+                      </span>
+                    </p>
+                    <p className="text-[10px] text-text-quaternary mt-1">
+                      95% CI · {riskData.historical.bootstrap_samples} resamples
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Circuit Breaker */}
           {riskData.circuit_breaker && (
@@ -248,6 +333,77 @@ export default function RiskPage() {
           {riskData.correlation_matrix && riskData.correlation_matrix.matrix?.length > 1 && (
             <div className="mb-6">
               <CorrelationHeatmap tickers={riskData.correlation_matrix.tickers} matrix={riskData.correlation_matrix.matrix} />
+            </div>
+          )}
+
+          {/* Stress Test Panel — historical replays + parametric shocks against the current book */}
+          {stress && (Object.keys(stress.historical || {}).length > 0 || (stress.hypothetical?.length ?? 0) > 0) && (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-5 mb-6">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider">Stress Test</h3>
+                  <p className="text-[10px] text-text-quaternary mt-0.5">
+                    Sector-beta replay against your current open book ({stress.position_count} positions, ${(stress.portfolio_base / 1000).toFixed(0)}k base).
+                  </p>
+                </div>
+              </div>
+
+              {/* Historical scenarios table */}
+              {Object.keys(stress.historical || {}).length > 0 && (
+                <div className="space-y-1.5 mb-4">
+                  {Object.entries(stress.historical).map(([key, sc]) => {
+                    const pnl = sc.portfolio_pnl_pct;
+                    const color = pnl >= 0 ? "text-signal-green" : pnl <= -10 ? "text-signal-red" : "text-signal-yellow";
+                    return (
+                      <div key={key} className="flex items-center justify-between text-xs py-1.5 border-b border-border-primary last:border-b-0">
+                        <div className="flex-1 min-w-0">
+                          <span className="text-text-secondary">{sc.label}</span>
+                          <span className="text-[10px] text-text-quaternary ml-2">
+                            SPY {sc.spy_return_pct >= 0 ? "+" : ""}{sc.spy_return_pct}% · VIX peak {sc.vix_peak}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <span className={`font-mono ${color}`}>
+                            {pnl >= 0 ? "+" : ""}{pnl.toFixed(2)}%
+                          </span>
+                          <span className="text-[10px] font-mono text-text-quaternary w-16 text-right">
+                            {pnl >= 0 ? "+" : "−"}${Math.abs(sc.portfolio_pnl_dollars).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Hypothetical shocks as pills */}
+              {stress.hypothetical && stress.hypothetical.length > 0 && (
+                <div>
+                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-2">Hypothetical Shocks</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {stress.hypothetical.map((h, i) => {
+                      const shock = h.shock as { type?: string; size?: number; unit?: string; label?: string };
+                      const label = shock.label
+                        ? shock.label
+                        : shock.type === "vix_spike" ? `VIX +${shock.size}`
+                        : shock.type === "credit_widen" ? `Credit +${shock.size}bp`
+                        : shock.type === "oil_shock" ? `Oil ${(shock.size ?? 0) >= 0 ? "+" : ""}${shock.size}%`
+                        : shock.type ?? "shock";
+                      const pnl = h.portfolio_pnl_pct;
+                      const color = pnl >= 0
+                        ? "border-signal-green/30 bg-signal-green/[0.06] text-signal-green"
+                        : pnl <= -5
+                        ? "border-signal-red/30 bg-signal-red/[0.06] text-signal-red"
+                        : "border-signal-yellow/30 bg-signal-yellow/[0.06] text-signal-yellow";
+                      return (
+                        <div key={i} className={`rounded-lg border px-2.5 py-1 text-[11px] font-mono ${color}`}>
+                          {label}: {pnl >= 0 ? "+" : ""}{pnl.toFixed(2)}%
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </>

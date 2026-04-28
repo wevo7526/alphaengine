@@ -251,13 +251,23 @@ Respond with JSON:
 }}"""
 
 OUTPUT_INSTRUCTIONS = """Respond with a single JSON object matching the schema above.
-Be specific and quantitative in your risk assessments. Cite data from the research."""
+Be specific and quantitative in your risk assessments. Cite data from the research.
+
+TOOL BUDGET: Use AT MOST 4 tool calls total. Prioritize:
+  1. get_realized_correlation (always, when 2+ tickers in plan)
+  2. get_market_breadth (always, once per analysis)
+  3. get_factor_loadings (one ticker only, the most ambiguous one)
+  4. get_macro_snapshot OR get_vix_history (only if research summary lacks the macro number you need)
+After 4 calls, write the JSON. Do not loop."""
 
 
 class RiskManager(BaseAgent):
     agent_name = "risk_manager"
     system_prompt = SYSTEM_PROMPT
     output_instructions = OUTPUT_INSTRUCTIONS
+    # Hard cap. With 5 tools available a runaway agent would otherwise burn
+    # the 90s budget. 5 iterations = up to 4 tool calls + final synthesis.
+    max_iterations = 5
 
     def get_tools(self):
         return [

@@ -60,6 +60,10 @@ export interface AnalysisRun {
   startedAt: number;
   phaseDetail?: string;
   desks: DeskState[];
+  // Surfaced from the interpreting_done SSE event so the UI can flag
+  // ambiguous queries before the user waits 2 minutes for a guess.
+  planConfidence?: number;
+  planConfidenceReason?: string;
 }
 
 const DESK_ORDER = ["query", "research", "risk", "portfolio", "cio"];
@@ -253,7 +257,13 @@ export function useAnalysis() {
               if (event.phase === "interpreting") {
                 updateRun(id, { phase: "interpreting", phaseDetail: undefined });
               } else if (event.phase === "interpreting_done") {
-                updateRun(id, { phase: "researching", phaseDetail: `${event.tickers?.length || 0} tickers → researching` });
+                const pc = typeof event.plan_confidence === "number" ? event.plan_confidence : undefined;
+                updateRun(id, {
+                  phase: "researching",
+                  phaseDetail: `${event.tickers?.length || 0} tickers → researching${pc !== undefined ? ` (plan ${pc})` : ""}`,
+                  planConfidence: pc,
+                  planConfidenceReason: typeof event.plan_confidence_reason === "string" ? event.plan_confidence_reason : undefined,
+                });
               } else if (event.phase === "researching") {
                 updateRun(id, { phase: "researching", phaseDetail: undefined });
               } else if (event.phase === "researching_done") {

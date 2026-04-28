@@ -57,6 +57,15 @@ export interface IntelligenceMemo {
   decision?: "GO" | "NO-GO" | "WATCH";
   decision_reason?: string;
   decision_confidence?: number;
+  // Quality / provenance signals
+  grounding?: {
+    confidence?: "high" | "medium" | "low" | "n/a";
+    numeric_claims?: number;
+    ungrounded_count?: number;
+    desk_count?: number;
+  };
+  plan_confidence?: number;
+  plan_confidence_reason?: string;
 }
 
 export interface MacroIndicator {

@@ -212,31 +212,24 @@ class PortfolioStrategist(BaseAgent):
                 + "factor in sector caps (30%) and net-long balance when sizing.\n"
             )
 
-        # Calibration block: scale conviction based on the user's actual
-        # historical hit rates. If their high-conviction picks have been
-        # hitting <50%, the Strategist should temper its conviction levels.
+        # Calibration block: compact track-record signal. Uses bucket data
+        # to indicate which conviction levels are safe.
         calibration_block = ""
         if scorecard and scorecard.get("signals", 0) >= 10:
             signals_n = int(scorecard.get("signals") or 0)
             hr_5d = scorecard.get("hit_rate_5d")
-            hr_20d = scorecard.get("hit_rate_20d")
             ic_5d = scorecard.get("ic_5d")
             buckets = scorecard.get("by_conviction") or {}
-            bucket_lines = []
+            parts = []
             for k in ("very_high", "high", "medium", "low"):
-                stats = buckets.get(k)
-                if isinstance(stats, dict) and stats.get("count"):
-                    bucket_lines.append(
-                        f"  {k}: hit_5d {stats.get('hit_rate_5d')}%, "
-                        f"avg_ret_5d {stats.get('avg_return_5d')}%, n={stats.get('count')}"
-                    )
+                s = buckets.get(k)
+                if isinstance(s, dict) and s.get("count"):
+                    parts.append(f"{k}={s.get('hit_rate_5d')}%")
             calibration_block = (
-                f"\n=== TRACK RECORD CALIBRATION (n={signals_n}) ===\n"
-                f"Overall: 5d hit rate {hr_5d}% | 20d hit rate {hr_20d}% | IC_5d {ic_5d}\n"
-                + ("By conviction bucket:\n" + "\n".join(bucket_lines) if bucket_lines else "")
-                + "\nUse this when assigning conviction. If a bucket shows weak hit rate "
-                "(<50%), do NOT assign that conviction level unless evidence is overwhelming. "
-                "If a bucket is hitting >55%, you can go higher there with confidence.\n"
+                f"\n=== TRACK RECORD (n={signals_n}) ===\n"
+                f"hit5d={hr_5d}% | IC5d={ic_5d}"
+                + (f" | by conviction: {', '.join(parts)}" if parts else "")
+                + "\nDampen conviction in buckets <50%, reinforce in buckets >55%.\n"
             )
 
         return (

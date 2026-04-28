@@ -81,52 +81,40 @@ class CIOSynthesizer:
         if len(data_summary) > 2000:
             data_summary = data_summary[:2000] + "..."
 
-        # Adaptive calibration: if we have a scorecard from past signals,
-        # surface it so the CIO calibrates conviction based on actual track record.
-        # High-IC conviction buckets earn more confidence; low-IC buckets get dampened.
+        # Adaptive calibration: scorecard track record. Compact one-liner
+        # plus bucket roll-up to keep prompt tight.
         calibration_block = ""
         if scorecard and scorecard.get("signals", 0) >= 5:
             ic_5d = scorecard.get("ic_5d")
-            ic_20d = scorecard.get("ic_20d")
             hr_5d = scorecard.get("hit_rate_5d")
             by_conv = scorecard.get("by_conviction") or {}
-            bucket_lines = []
+            bucket_summary_parts = []
             for bucket, stats in by_conv.items():
                 if isinstance(stats, dict) and stats.get("count", 0) > 0:
-                    bucket_lines.append(
-                        f"  - {bucket}: hit {stats.get('hit_rate_5d', '?')}%, "
-                        f"avg ret {stats.get('avg_return_5d', '?')}%, n={stats.get('count', 0)}"
-                    )
+                    bucket_summary_parts.append(f"{bucket}={stats.get('hit_rate_5d', '?')}%")
             calibration_block = (
-                f"\n=== TRACK RECORD CALIBRATION ===\n"
-                f"Past signals: {scorecard.get('signals', 0)} scored | "
-                f"IC 5d: {ic_5d if ic_5d is not None else '—'} | "
-                f"IC 20d: {ic_20d if ic_20d is not None else '—'} | "
-                f"5d hit rate: {hr_5d if hr_5d is not None else '—'}%\n"
-                + ("By conviction bucket:\n" + "\n".join(bucket_lines) if bucket_lines else "")
-                + "\nUse this to calibrate conviction levels in this memo. Buckets with weak "
-                "track records (hit_rate < 50%, IC < 0.05) should be assigned conservatively. "
-                "Strong buckets (hit_rate > 55%, IC > 0.1) earn higher conviction.\n"
+                f"\n=== TRACK RECORD ===\n"
+                f"n={scorecard.get('signals', 0)} | hit5d={hr_5d}% | IC5d={ic_5d}"
+                + (f" | by conviction: {', '.join(bucket_summary_parts)}" if bucket_summary_parts else "")
+                + "\nCalibrate conviction: dampen weak buckets (<50% hit), reinforce strong (>55%).\n"
             )
 
         # Continuity block: prior memos that overlap with this query's
         # tickers or themes. CIO is instructed to reconcile current view
         # with past view, not just write fresh prose every time.
+        # Cap at 2 memos × 200 chars to keep prompt under control.
         continuity_block = ""
         if prior_memos:
             lines = []
-            for m in prior_memos[:3]:
+            for m in prior_memos[:2]:
                 lines.append(
-                    f"- [{m.get('created_at', '?')[:10]}] '{m.get('title', '')[:120]}'\n"
-                    f"  Regime then: {m.get('macro_regime', '?')}; "
-                    f"Tickers: {', '.join(m.get('tickers', [])[:5])}; "
-                    f"Summary: {m.get('executive_summary', '')[:240]}"
+                    f"- [{(m.get('created_at') or '?')[:10]}] '{(m.get('title') or '')[:100]}': "
+                    f"{(m.get('executive_summary') or '')[:200]}"
                 )
             continuity_block = (
-                "\n=== PRIOR MEMOS (this user, ticker/theme overlap) ===\n"
+                "\n=== PRIOR VIEWS ===\n"
                 + "\n".join(lines)
-                + "\nAcknowledge or reconcile prior view. If thesis has changed, say so explicitly. "
-                + "If thesis is unchanged, note continuity (e.g. 'reaffirming our long view from 2 weeks ago').\n"
+                + "\nReconcile with prior view. If thesis changed, say so. If unchanged, note continuity.\n"
             )
 
         user_prompt = (

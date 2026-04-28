@@ -428,6 +428,30 @@ async def run_research_desk(query: str, user_id: str | None = None) -> Intellige
     memo_data["portfolio_positioning"] = strategy.get("portfolio_positioning", "")
     memo_data["hedging_recommendations"] = strategy.get("hedging_recommendations", [])
 
+    # Plan confidence (from Query Interpreter)
+    memo_data["plan_confidence"] = int(plan.get("plan_confidence", 0) or 0)
+    memo_data["plan_confidence_reason"] = plan.get("plan_confidence_reason", "") or ""
+
+    # Aggregate tool-grounding tripwire results across all desks. The worst
+    # confidence wins (low > medium > high) and counts are summed so the UI
+    # can show one badge that represents the whole memo's provenance quality.
+    rank = {"low": 0, "medium": 1, "high": 2, "n/a": 3}
+    pieces = []
+    for d in (final_state.get("research_data"), risk, strategy):
+        g = (d or {}).get("_grounding") if isinstance(d, dict) else None
+        if g:
+            pieces.append(g)
+    if pieces:
+        worst = min(pieces, key=lambda x: rank.get(x.get("confidence", "n/a"), 3))
+        total_claims = sum(p.get("numeric_claims", 0) or 0 for p in pieces)
+        total_ungrounded = sum(p.get("ungrounded_count", 0) or 0 for p in pieces)
+        memo_data["grounding"] = {
+            "confidence": worst.get("confidence", "n/a"),
+            "numeric_claims": total_claims,
+            "ungrounded_count": total_ungrounded,
+            "desk_count": len(pieces),
+        }
+
     # Run the Decision Gate (programmatic) using the user's scorecard for
     # track-record-adjusted confidence.
     try:

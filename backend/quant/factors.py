@@ -49,7 +49,7 @@ def _numpy_ols(y: np.ndarray, X: np.ndarray) -> dict:
 
 def build_proxy_factor_returns(period: str = "1y") -> dict[str, list[float]] | None:
     """
-    Construct FF5+Mom factor return proxies from liquid ETF returns. Closes
+    Construct FF5 + Momentum factor return proxies from liquid ETF returns. Closes
     the gap from "code exists, no data source" to "live multi-factor model"
     without depending on the Kenneth French data library.
 
@@ -124,7 +124,7 @@ def compute_factor_loadings(
     Simplified factor analysis using market returns as the single factor.
     Returns alpha, beta, R-squared. RFR pulled from FRED if not set.
 
-    For full FF5+Mom, use compute_multi_factor_loadings().
+    For full FF5 + Momentum, use compute_multi_factor_loadings().
     """
     min_len = min(len(portfolio_returns), len(market_returns))
     if min_len < 30:
@@ -218,7 +218,7 @@ def compute_multi_factor_loadings(
             "adj_r_squared": _clean(round(float(model.rsquared_adj), 3)),
             "residual_vol": _clean(round(float(np.std(model.resid) * np.sqrt(252) * 100), 2)),
             "n_observations": int(min_len),
-            "model": "FF5+Mom" if len(factor_names) >= 5 else f"{len(factor_names)}-factor",
+            "model": "FF5 + Momentum" if len(factor_names) >= 5 else f"{len(factor_names)}-factor",
         }
     else:
         result = _numpy_ols(y_excess, X)

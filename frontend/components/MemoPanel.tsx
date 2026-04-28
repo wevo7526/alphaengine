@@ -17,11 +17,29 @@ const ACTION_MAP: Record<string, { label: string; color: string }> = {
   neutral: { label: "NEUTRAL", color: "bg-bg-elevated text-text-tertiary border-border-primary" },
 };
 
+interface TakeTradeResponse {
+  id?: string;
+  status?: string;
+  entry_price?: number;
+  entry_filled_at_market?: boolean;
+  size_adjusted?: boolean;
+  adjustment_reasons?: string[];
+  // Surfaced when the gate decided to size down or warn (success paths only)
+  liquidity?: {
+    pct_of_adv?: number;
+    days_to_liquidate?: number;
+    spread_bps?: number;
+    recommendation?: "ok" | "warn" | "block";
+    reasons?: string[];
+  };
+}
+
 function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; memoId?: string }) {
   const [open, setOpen] = useState(false);
   const [taken, setTaken] = useState(false);
   const [takeError, setTakeError] = useState<string | null>(null);
   const [filledAt, setFilledAt] = useState<number | null>(null);
+  const [tradeMeta, setTradeMeta] = useState<TakeTradeResponse | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const action = ACTION_MAP[idea.direction] ?? ACTION_MAP.neutral;
 
@@ -31,7 +49,7 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
     setSubmitting(true);
     setTakeError(null);
     try {
-      const res = await api.takeTrade({
+      const res = (await api.takeTrade({
         memo_id: memoId,
         ticker: idea.ticker,
         direction: idea.direction,
@@ -42,11 +60,14 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
         position_size_pct: idea.position_size_pct,
         conviction: idea.conviction,
         thesis: idea.thesis,
-      }) as { entry_price?: number; entry_filled_at_market?: boolean };
+      })) as TakeTradeResponse;
       setTaken(true);
+      setTradeMeta(res);
       if (res.entry_price) setFilledAt(res.entry_price);
     } catch (err) {
-      setTakeError(err instanceof Error ? err.message : "Failed");
+      // 422 from the risk gate carries structured detail we want to surface.
+      const msg = err instanceof Error ? err.message : "Failed";
+      setTakeError(msg);
     } finally {
       setSubmitting(false);
     }
@@ -127,7 +148,7 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
               <span className="text-text-secondary">{idea.risks?.join(" · ")}</span>
             </div>
           )}
-          <div className="mt-2 flex items-center gap-3">
+          <div className="mt-2 flex items-center gap-3 flex-wrap">
             <button
               onClick={handleTakeTrade}
               disabled={submitting || taken}
@@ -146,10 +167,36 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
                 Filled @ ${filledAt.toFixed(2)}
               </span>
             )}
+            {tradeMeta?.size_adjusted && (
+              <span className="text-[11px] text-signal-yellow font-mono" title={(tradeMeta.adjustment_reasons || []).join(" · ")}>
+                Size adjusted
+              </span>
+            )}
+            {tradeMeta?.liquidity?.recommendation === "warn" && (
+              <span
+                className="text-[10px] text-signal-yellow border border-signal-yellow/30 bg-signal-yellow/[0.06] rounded px-1.5 py-0.5"
+                title={(tradeMeta.liquidity.reasons || []).join(" · ")}
+              >
+                Liquidity: {tradeMeta.liquidity.pct_of_adv != null ? `${(tradeMeta.liquidity.pct_of_adv * 100).toFixed(1)}% ADV` : "warn"}
+                {tradeMeta.liquidity.days_to_liquidate != null && ` · ${tradeMeta.liquidity.days_to_liquidate}d to exit`}
+              </span>
+            )}
             {takeError && (
-              <span className="text-[11px] text-signal-red">{takeError}</span>
+              <span
+                className="text-[11px] text-signal-red max-w-md break-words"
+                title="Risk gate response"
+              >
+                {takeError}
+              </span>
             )}
           </div>
+          {tradeMeta?.adjustment_reasons && tradeMeta.adjustment_reasons.length > 0 && (
+            <ul className="mt-1.5 text-[10px] text-text-quaternary space-y-0.5">
+              {tradeMeta.adjustment_reasons.slice(0, 3).map((r, i) => (
+                <li key={i}>· {r}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
     </div>
@@ -263,7 +310,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
         <div className="flex items-start justify-between gap-4 mb-3">
           <div className="flex-1">
             {memo.decision && (
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
                 <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold uppercase tracking-wider ${decisionColor}`}>
                   <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M6 1L2 2.5V6C2 8.5 3.5 10.5 6 11C8.5 10.5 10 8.5 10 6V2.5L6 1Z" />
@@ -273,6 +320,34 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                 {memo.decision_confidence !== undefined && memo.decision_confidence > 0 && (
                   <span className="text-[10px] text-text-quaternary font-mono">
                     conviction {memo.decision_confidence}
+                  </span>
+                )}
+                {/* Grounding tripwire: tells the audience whether the LLM cited real numbers */}
+                {memo.grounding && memo.grounding.confidence && memo.grounding.confidence !== "n/a" && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider ${
+                      memo.grounding.confidence === "high"
+                        ? "bg-signal-green/10 text-signal-green border-signal-green/30"
+                        : memo.grounding.confidence === "medium"
+                          ? "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
+                          : "bg-signal-red/10 text-signal-red border-signal-red/30"
+                    }`}
+                    title={`${memo.grounding.numeric_claims ?? 0} numeric claims, ${memo.grounding.ungrounded_count ?? 0} not traced to a tool result`}
+                  >
+                    {memo.grounding.confidence === "high"
+                      ? "Grounded"
+                      : memo.grounding.confidence === "medium"
+                        ? `${memo.grounding.ungrounded_count ?? 0} unverified`
+                        : `${memo.grounding.ungrounded_count ?? 0} unverified`}
+                  </span>
+                )}
+                {/* Plan confidence: only flag when low — keeps the chrome quiet at 70+ */}
+                {memo.plan_confidence !== undefined && memo.plan_confidence > 0 && memo.plan_confidence < 60 && (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
+                    title={memo.plan_confidence_reason || "Query was ambiguous; some inferences were made."}
+                  >
+                    Plan {memo.plan_confidence}
                   </span>
                 )}
               </div>

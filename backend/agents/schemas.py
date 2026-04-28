@@ -189,6 +189,11 @@ class IntelligenceMemo(BaseModel):
     decision: str = "WATCH"  # GO | NO-GO | WATCH
     decision_reason: str = ""
     decision_confidence: int = 0
+    # Provenance / quality signals — surfaced in the UI as small badges,
+    # never persisted to the memo DB record (set in orchestrator post-run).
+    grounding: dict = Field(default_factory=dict)  # {confidence, ungrounded_count, ...}
+    plan_confidence: int = 0
+    plan_confidence_reason: str = ""
 
     @field_validator("intent", mode="before")
     @classmethod

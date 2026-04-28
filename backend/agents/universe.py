@@ -34,7 +34,7 @@ SECTOR_ETFS = [
     "XLB",   # Basic Materials
 ]
 
-# Style / factor ETFs (used for FF5+Mom proxy + style tilts)
+# Style / factor ETFs (used for FF5 + Momentum proxy + style tilts)
 STYLE_ETFS = [
     "MTUM",  # Momentum
     "QUAL",  # Quality

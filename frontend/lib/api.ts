@@ -175,8 +175,9 @@ export const api = {
   // Quant infrastructure
   portfolioRisk: () => request("/api/quant/portfolio-risk"),
   regime: () => request("/api/quant/regime"),
-  factors: (tickers: string[]) =>
-    request(`/api/quant/factors?tickers=${tickers.join(",")}`),
+  factors: (tickers: string[], model: "single" | "ff5_mom" = "single") =>
+    request(`/api/quant/factors?tickers=${tickers.join(",")}&model=${model}`),
+  stress: () => request("/api/quant/stress"),
   preTradeCheck: (ticker: string, sizePct = 3, action = "BUY") =>
     request(`/api/quant/risk-check/${ticker}?size_pct=${sizePct}&action=${action}`),
   regimeConditionalReturns: (ticker = "SPY") =>

@@ -1331,6 +1331,15 @@ async def take_trade(req: TakeTradeRequest, request: Request):
             response["original_size_pct"] = req.position_size_pct
             response["adjusted_size_pct"] = final_size_pct
             response["adjustment_reasons"] = gate.get("reasons", [])
+        # Surface liquidity assessment + regime + drawdown so the UI can show
+        # the why behind any size adjustment, not just that it happened.
+        if isinstance(gate, dict):
+            if gate.get("liquidity"):
+                response["liquidity"] = gate["liquidity"]
+            if gate.get("regime_adjustment"):
+                response["regime_adjustment"] = gate["regime_adjustment"]
+            if gate.get("circuit_breaker"):
+                response["circuit_breaker"] = gate["circuit_breaker"]
         return response
 
 
@@ -2318,7 +2327,13 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                 "tickers": plan_data.get("tickers", []),
                 "intent": plan_data.get("intent", ""),
             })
-            yield send({"phase": "interpreting_done", "tickers": plan_data.get("tickers", []), "intent": plan_data.get("intent", "")})
+            yield send({
+                "phase": "interpreting_done",
+                "tickers": plan_data.get("tickers", []),
+                "intent": plan_data.get("intent", ""),
+                "plan_confidence": plan_data.get("plan_confidence"),
+                "plan_confidence_reason": plan_data.get("plan_confidence_reason"),
+            })
         except Exception as e:
             logger.error(f"[stream] Query Interpreter failed: {e}")
             yield send({"phase": "error", "error": f"Query interpretation failed: {e}"})
@@ -2569,6 +2584,27 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         memo_data["decision"] = decision.get("decision", "WATCH")
         memo_data["decision_reason"] = decision.get("reason", "")
         memo_data["decision_confidence"] = decision.get("confidence", 0)
+
+        # Plan confidence + grounding aggregation (mirrors orchestrator path)
+        memo_data["plan_confidence"] = int(plan_data.get("plan_confidence", 0) or 0)
+        memo_data["plan_confidence_reason"] = plan_data.get("plan_confidence_reason", "") or ""
+        try:
+            rank = {"low": 0, "medium": 1, "high": 2, "n/a": 3}
+            pieces = []
+            for d in (research_data, risk_data, strategy_data):
+                g = (d or {}).get("_grounding") if isinstance(d, dict) else None
+                if g:
+                    pieces.append(g)
+            if pieces:
+                worst = min(pieces, key=lambda x: rank.get(x.get("confidence", "n/a"), 3))
+                memo_data["grounding"] = {
+                    "confidence": worst.get("confidence", "n/a"),
+                    "numeric_claims": sum(p.get("numeric_claims", 0) or 0 for p in pieces),
+                    "ungrounded_count": sum(p.get("ungrounded_count", 0) or 0 for p in pieces),
+                    "desk_count": len(pieces),
+                }
+        except Exception as e:
+            logger.debug(f"[stream] grounding aggregation skipped: {e}")
 
         try:
             memo = IntelligenceMemo(**memo_data)

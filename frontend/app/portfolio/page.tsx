@@ -129,7 +129,28 @@ export default function PortfolioPage() {
   const [factors, setFactors] = useState<{
     alpha?: number | null; beta?: number | null; r_squared?: number | null;
     residual_vol?: number | null; factor_betas?: Record<string, number>;
+    alpha_pvalue?: number | null;
+    alpha_tstat?: number | null;
+    alpha_significant_at_5pct?: boolean;
+    n_observations?: number;
+    risk_free_rate?: number;
+    model?: string;
+    multi_factor?: {
+      alpha?: number | null;
+      alpha_pvalue?: number | null;
+      alpha_significant_at_5pct?: boolean;
+      factor_betas?: Record<string, number>;
+      factor_tstats?: Record<string, number>;
+      r_squared?: number | null;
+      adj_r_squared?: number | null;
+      residual_vol?: number | null;
+      model?: string;
+      n_observations?: number;
+      error?: string;
+    };
   } | null>(null);
+  const [factorModel, setFactorModel] = useState<"single" | "ff5_mom">("single");
+  const [factorLoading, setFactorLoading] = useState(false);
   const [tab, setTab] = useState<"positions" | "scorecard" | "attribution" | "journal" | "analyses" | "backtest" | "factors">("positions");
   const [positions, setPositions] = useState<Position[]>([]);
   const [positionsSummary, setPositionsSummary] = useState<PositionsSummary | null>(null);
@@ -914,75 +935,186 @@ export default function PortfolioPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[13px] font-medium text-text-primary mb-0.5">Factor Exposure Analysis</p>
-                  <p className="text-xs text-text-tertiary">Decompose portfolio returns into market, size, value, and momentum factors.</p>
+                  <p className="text-xs text-text-tertiary">Decompose portfolio returns into market and style factors. FF5 + Momentum uses ETF proxies (IWM, IWD/IWF, QUAL, USMV, MTUM).</p>
                 </div>
-                <button
-                  onClick={() => {
-                    const tickers = [...new Set(trades.map(t => t.ticker))].slice(0, 5);
-                    if (tickers.length === 0) return;
-                    api.factors(tickers).then((d: unknown) => setFactors(d as typeof factors)).catch(() => {});
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors"
-                >
-                  Compute Factors
-                </button>
+                <div className="flex items-center gap-2">
+                  <div className="flex rounded-lg border border-border-primary overflow-hidden">
+                    <button
+                      onClick={() => setFactorModel("single")}
+                      className={`px-2.5 py-1.5 text-[11px] font-medium ${factorModel === "single" ? "bg-white text-bg-primary" : "text-text-tertiary hover:text-text-primary"}`}
+                    >
+                      Single-factor
+                    </button>
+                    <button
+                      onClick={() => setFactorModel("ff5_mom")}
+                      className={`px-2.5 py-1.5 text-[11px] font-medium ${factorModel === "ff5_mom" ? "bg-white text-bg-primary" : "text-text-tertiary hover:text-text-primary"}`}
+                    >
+                      FF5 + Momentum
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const tickers = [...new Set(trades.map(t => t.ticker))].slice(0, 5);
+                      if (tickers.length === 0) return;
+                      setFactorLoading(true);
+                      api.factors(tickers, factorModel)
+                        .then((d: unknown) => setFactors(d as typeof factors))
+                        .catch(() => {})
+                        .finally(() => setFactorLoading(false));
+                    }}
+                    disabled={factorLoading}
+                    className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
+                  >
+                    {factorLoading ? "Computing..." : "Compute Factors"}
+                  </button>
+                </div>
               </div>
             </div>
           ) : (
-            <div className="space-y-4">
-              {/* Alpha & Beta */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">Alpha (ann.)</p>
-                  <p className={`text-lg font-mono font-medium ${
-                    Number(factors.alpha || 0) >= 0 ? "text-signal-green" : "text-signal-red"
-                  }`}>
-                    {factors.alpha != null ? `${Number(factors.alpha) > 0 ? "+" : ""}${factors.alpha}%` : "—"}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">Beta</p>
-                  <p className="text-lg font-mono font-medium text-text-primary">
-                    {factors.beta != null ? String(factors.beta) : "—"}
-                  </p>
-                </div>
-                <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">R-Squared</p>
-                  <p className="text-lg font-mono font-medium text-text-primary">
-                    {factors.r_squared != null ? String(factors.r_squared) : "—"}
-                  </p>
-                </div>
-              </div>
-
-              {/* Factor betas if multi-factor */}
-              {factors.factor_betas ? (
-                <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-                  <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">Factor Exposures</h3>
-                  <div className="space-y-2">
-                    {Object.entries(factors.factor_betas).map(([factor, beta]) => (
-                      <div key={factor} className="flex items-center gap-3">
-                        <span className="text-xs text-text-secondary w-24 capitalize">{factor.replace("_", " ")}</span>
-                        <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
-                          <div
-                            className={`h-full rounded-full ${Number(beta) >= 0 ? "bg-accent" : "bg-signal-red"}`}
-                            style={{ width: `${Math.min(Math.abs(Number(beta)) * 50, 100)}%`, marginLeft: Number(beta) < 0 ? "auto" : 0 }}
-                          />
-                        </div>
-                        <span className="text-xs font-mono text-text-primary w-12 text-right">
-                          {beta != null ? Number(beta).toFixed(3) : "—"}
-                        </span>
+            (() => {
+              const usingMulti = !!factors.multi_factor && !factors.multi_factor.error;
+              const view = usingMulti
+                ? {
+                    alpha: factors.multi_factor!.alpha,
+                    beta: null as number | null,  // not in multi-factor block
+                    r_squared: factors.multi_factor!.r_squared,
+                    factor_betas: factors.multi_factor!.factor_betas,
+                    factor_tstats: factors.multi_factor!.factor_tstats,
+                    residual_vol: factors.multi_factor!.residual_vol,
+                    alpha_pvalue: factors.multi_factor!.alpha_pvalue,
+                    alpha_significant: factors.multi_factor!.alpha_significant_at_5pct,
+                    n_observations: factors.multi_factor!.n_observations,
+                    model_label: factors.multi_factor!.model || "FF5 + Momentum",
+                  }
+                : {
+                    alpha: factors.alpha,
+                    beta: factors.beta,
+                    r_squared: factors.r_squared,
+                    factor_betas: factors.factor_betas,
+                    factor_tstats: undefined as Record<string, number> | undefined,
+                    residual_vol: factors.residual_vol,
+                    alpha_pvalue: factors.alpha_pvalue,
+                    alpha_significant: factors.alpha_significant_at_5pct,
+                    n_observations: factors.n_observations,
+                    model_label: "Single-factor (CAPM)",
+                  };
+              return (
+                <div className="space-y-4">
+                  {/* Header strip with model + significance */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-text-quaternary uppercase tracking-wider">Model</span>
+                      <span className="text-xs font-mono text-text-primary">{view.model_label}</span>
+                      {view.n_observations && (
+                        <span className="text-[10px] text-text-quaternary">n={view.n_observations}</span>
+                      )}
+                    </div>
+                    {view.alpha_pvalue != null && (
+                      <div className={`text-[10px] font-medium px-2 py-0.5 rounded ${
+                        view.alpha_significant
+                          ? "bg-signal-green/10 text-signal-green border border-signal-green/30"
+                          : "bg-signal-yellow/10 text-signal-yellow border border-signal-yellow/30"
+                      }`}>
+                        {view.alpha_significant ? "Alpha significant" : "Alpha not significant"} · p={view.alpha_pvalue}
                       </div>
-                    ))}
+                    )}
+                  </div>
+
+                  {/* Alpha & R² (Beta only meaningful in single-factor) */}
+                  <div className={`grid gap-3 ${usingMulti ? "grid-cols-2" : "grid-cols-3"}`}>
+                    <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                      <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">Alpha (ann.)</p>
+                      <p className={`text-lg font-mono font-medium ${
+                        Number(view.alpha || 0) >= 0 ? "text-signal-green" : "text-signal-red"
+                      }`}>
+                        {view.alpha != null ? `${Number(view.alpha) > 0 ? "+" : ""}${view.alpha}%` : "—"}
+                      </p>
+                      {view.alpha_pvalue != null && !view.alpha_significant && (
+                        <p className="text-[10px] text-text-quaternary mt-1">Not statistically distinguishable from zero.</p>
+                      )}
+                    </div>
+                    {!usingMulti && (
+                      <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                        <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">Beta</p>
+                        <p className="text-lg font-mono font-medium text-text-primary">
+                          {view.beta != null ? String(view.beta) : "—"}
+                        </p>
+                      </div>
+                    )}
+                    <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+                      <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">R-Squared</p>
+                      <p className="text-lg font-mono font-medium text-text-primary">
+                        {view.r_squared != null ? String(view.r_squared) : "—"}
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Factor betas */}
+                  {view.factor_betas ? (
+                    <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+                      <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">Factor Exposures</h3>
+                      <div className="space-y-2">
+                        {Object.entries(view.factor_betas).map(([factor, beta]) => {
+                          const tstat = view.factor_tstats?.[factor];
+                          const sig = tstat != null && Math.abs(tstat) >= 1.96;
+                          return (
+                            <div key={factor} className="flex items-center gap-3">
+                              <span className="text-xs text-text-secondary w-28 capitalize">{factor.replace("_", " ")}</span>
+                              <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${Number(beta) >= 0 ? "bg-accent" : "bg-signal-red"}`}
+                                  style={{ width: `${Math.min(Math.abs(Number(beta)) * 50, 100)}%`, marginLeft: Number(beta) < 0 ? "auto" : 0 }}
+                                />
+                              </div>
+                              <span className="text-xs font-mono text-text-primary w-12 text-right">
+                                {beta != null ? Number(beta).toFixed(3) : "—"}
+                              </span>
+                              {tstat != null && (
+                                <span className={`text-[10px] font-mono w-14 text-right ${sig ? "text-text-tertiary" : "text-text-quaternary"}`}>
+                                  t={tstat.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-text-quaternary mt-3">|t| ≥ 1.96 indicates significance at 5%.</p>
+                    </div>
+                  ) : null}
+
+                  {view.residual_vol != null && (
+                    <p className="text-xs text-text-quaternary">
+                      Residual volatility (idiosyncratic risk): <span className="font-mono text-text-primary">{view.residual_vol}%</span>
+                    </p>
+                  )}
+
+                  {/* If user selected ff5_mom but result fell back, show why */}
+                  {factorModel === "ff5_mom" && factors.multi_factor?.error && (
+                    <p className="text-xs text-signal-yellow">
+                      FF5 + Momentum unavailable: {factors.multi_factor.error}. Showing single-factor view.
+                    </p>
+                  )}
+
+                  <div className="flex justify-end">
+                    <button
+                      onClick={() => {
+                        const tickers = [...new Set(trades.map(t => t.ticker))].slice(0, 5);
+                        if (tickers.length === 0) return;
+                        setFactorLoading(true);
+                        setFactors(null);
+                        api.factors(tickers, factorModel)
+                          .then((d: unknown) => setFactors(d as typeof factors))
+                          .catch(() => {})
+                          .finally(() => setFactorLoading(false));
+                      }}
+                      className="text-[11px] text-text-tertiary hover:text-text-primary transition-colors"
+                    >
+                      Re-compute with {factorModel === "single" ? "FF5 + Momentum" : "single-factor"} →
+                    </button>
                   </div>
                 </div>
-              ) : null}
-
-              {factors.residual_vol != null && (
-                <p className="text-xs text-text-quaternary">
-                  Residual volatility (idiosyncratic risk): <span className="font-mono text-text-primary">{factors.residual_vol}%</span>
-                </p>
-              )}
-            </div>
+              );
+            })()
           )}
         </>
       )}
