@@ -40,6 +40,10 @@ class AnalysisPlan(BaseModel):
     )
     risk_focus: list[str] = Field(default_factory=list)
     time_horizon: str = Field(default="weeks")
+    # Self-reported confidence in the plan classification. <40 means the
+    # query is ambiguous and downstream desks should soften assertions.
+    plan_confidence: int = Field(default=70, ge=0, le=100)
+    plan_confidence_reason: str = Field(default="")
 
 
 # === Research Data ===

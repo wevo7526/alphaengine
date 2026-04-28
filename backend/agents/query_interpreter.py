@@ -27,8 +27,16 @@ Given a user query, produce a JSON object with this exact schema:
     "themes": ["<theme1>", "<theme2>"],
     "data_requests": ["<specific instruction for Research Analyst>", ...],
     "risk_focus": ["<risk dimension>", ...],
-    "time_horizon": "intraday | days | weeks | months"
+    "time_horizon": "intraday | days | weeks | months",
+    "plan_confidence": <0-100 integer, your confidence in this classification>,
+    "plan_confidence_reason": "<one short sentence explaining the score>"
 }
+
+Confidence rubric:
+  90-100: Query explicitly names a ticker, intent, and timeframe.
+  70-89:  Query has clear theme but tickers must be inferred.
+  50-69:  Query is ambiguous on intent OR universe.
+  <50:    Query is so vague that any plan is partly a guess — flag it.
 
 Classification rules:
 

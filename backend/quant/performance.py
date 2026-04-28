@@ -19,12 +19,29 @@ def _clean(val):
     return val
 
 
-def sharpe_ratio(returns: list[float], risk_free_rate: float = 0.04) -> float | None:
-    """(mean_excess_return / std_return) * sqrt(252)"""
+def _resolve_rfr(rfr: float | None) -> float:
+    """
+    Resolve a risk-free rate value. If `rfr` is provided, use it. Otherwise
+    fetch the current 3-month Treasury yield from FRED (cached) so Sharpe
+    et al. reflect actual current rates instead of a stale hardcoded 4%.
+    """
+    if rfr is not None:
+        return float(rfr)
+    try:
+        from data.fred_client import FREDDataClient
+        return FREDDataClient().get_risk_free_rate()
+    except Exception as e:
+        logger.debug(f"_resolve_rfr fallback to 4% (FRED unavailable: {e})")
+        return 0.04
+
+
+def sharpe_ratio(returns: list[float], risk_free_rate: float | None = None) -> float | None:
+    """(mean_excess_return / std_return) * sqrt(252). RFR pulled from FRED if not set."""
     if len(returns) < 30:
         return None
+    rf = _resolve_rfr(risk_free_rate)
     arr = np.array(returns)
-    rf_daily = risk_free_rate / 252
+    rf_daily = rf / 252
     excess = arr - rf_daily
     std = float(np.std(excess, ddof=1))
     if std == 0:
@@ -32,12 +49,13 @@ def sharpe_ratio(returns: list[float], risk_free_rate: float = 0.04) -> float | 
     return _clean(round(float(np.mean(excess) / std * np.sqrt(252)), 3))
 
 
-def sortino_ratio(returns: list[float], risk_free_rate: float = 0.04) -> float | None:
-    """(mean_excess_return / downside_std) * sqrt(252)"""
+def sortino_ratio(returns: list[float], risk_free_rate: float | None = None) -> float | None:
+    """(mean_excess_return / downside_std) * sqrt(252). RFR pulled from FRED if not set."""
     if len(returns) < 30:
         return None
+    rf = _resolve_rfr(risk_free_rate)
     arr = np.array(returns)
-    rf_daily = risk_free_rate / 252
+    rf_daily = rf / 252
     excess = arr - rf_daily
     downside = excess[excess < 0]
     if len(downside) < 5:
@@ -146,14 +164,15 @@ def compute_beta(returns: list[float], benchmark_returns: list[float]) -> float 
 
 
 def alpha_jensen(
-    returns: list[float], benchmark_returns: list[float], risk_free_rate: float = 0.04
+    returns: list[float], benchmark_returns: list[float], risk_free_rate: float | None = None
 ) -> float | None:
-    """Annualized Jensen's alpha."""
+    """Annualized Jensen's alpha. RFR pulled from FRED if not set."""
     beta = compute_beta(returns, benchmark_returns)
     if beta is None:
         return None
+    rf = _resolve_rfr(risk_free_rate)
     min_len = min(len(returns), len(benchmark_returns))
-    rf_daily = risk_free_rate / 252
+    rf_daily = rf / 252
     mean_p = float(np.mean(returns[-min_len:]))
     mean_b = float(np.mean(benchmark_returns[-min_len:]))
     alpha_daily = mean_p - rf_daily - beta * (mean_b - rf_daily)
@@ -179,12 +198,13 @@ def conditional_var(returns: list[float], confidence: float = 0.95) -> float | N
     return _clean(round(float(np.mean(tail)) * 100, 2))
 
 
-def rolling_sharpe(returns: list[float], window: int = 63, risk_free_rate: float = 0.04) -> list[dict]:
-    """63-day rolling Sharpe for visualization."""
+def rolling_sharpe(returns: list[float], window: int = 63, risk_free_rate: float | None = None) -> list[dict]:
+    """63-day rolling Sharpe for visualization. RFR pulled from FRED if not set."""
     if len(returns) < window:
         return []
+    rf = _resolve_rfr(risk_free_rate)
     arr = np.array(returns)
-    rf_daily = risk_free_rate / 252
+    rf_daily = rf / 252
     result = []
     for i in range(window, len(arr)):
         chunk = arr[i - window:i] - rf_daily
@@ -199,14 +219,16 @@ def full_performance_report(
     returns: list[float],
     trades: list[dict],
     benchmark_returns: list[float] | None = None,
-    risk_free_rate: float = 0.04,
+    risk_free_rate: float | None = None,
 ) -> dict:
-    """Compute all metrics in one call."""
+    """Compute all metrics in one call. RFR pulled from FRED if not set."""
+    rf = _resolve_rfr(risk_free_rate)
     dd = max_drawdown(equity_curve)
 
     report = {
-        "sharpe_ratio": sharpe_ratio(returns, risk_free_rate),
-        "sortino_ratio": sortino_ratio(returns, risk_free_rate),
+        "risk_free_rate": round(rf, 4),
+        "sharpe_ratio": sharpe_ratio(returns, rf),
+        "sortino_ratio": sortino_ratio(returns, rf),
         "calmar_ratio": calmar_ratio(returns, dd["max_dd_pct"]) if dd["max_dd_pct"] else None,
         "max_drawdown_pct": dd["max_dd_pct"],
         "max_drawdown_duration_days": dd["duration_days"],
@@ -221,7 +243,7 @@ def full_performance_report(
 
     if benchmark_returns:
         report["beta"] = compute_beta(returns, benchmark_returns)
-        report["alpha"] = alpha_jensen(returns, benchmark_returns, risk_free_rate)
+        report["alpha"] = alpha_jensen(returns, benchmark_returns, rf)
         report["information_ratio"] = information_ratio(returns, benchmark_returns)
 
     return report

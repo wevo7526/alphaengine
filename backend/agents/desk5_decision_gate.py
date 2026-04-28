@@ -33,6 +33,7 @@ def compute_decision(
     overall_risk_level: str,
     min_conviction_go: int = 75,
     min_conviction_watch: int = 50,
+    scorecard: dict | None = None,
 ) -> dict:
     """
     Evaluate whether to GO, WATCH, or NO-GO on the overall recommendation.
@@ -41,6 +42,17 @@ def compute_decision(
         trade_ideas: list of trade idea dicts with direction + conviction
         macro_regime: expansion | late_cycle | contraction | recovery | unknown
         overall_risk_level: low | moderate | elevated | high | extreme
+        scorecard: optional, the user's own track record summary (from
+            scorer.get_scorecard_summary). When provided with >=10 scored
+            signals, the gate computes a track-record multiplier:
+              - 5d hit rate >= 60% with >=20 signals: +1.10x confidence
+              - 5d hit rate <= 45% with >=20 signals: -0.85x confidence
+              - by_conviction shows monotonic hit rate (high>med>low):
+                +0.05x bonus (calibrated picker)
+              - by_conviction shows inverted curve: -0.10x penalty
+                (overconfidence — high-conviction is actually worse)
+            Bucket data lets the gate punish a desk-style that historically
+            underperforms instead of treating all conviction levels the same.
 
     Returns:
         {
@@ -49,6 +61,7 @@ def compute_decision(
           confidence: int (0-100),
           top_conviction: int,
           regime_aligned: bool,
+          track_record_adjustment: dict | None,
         }
     """
     if not trade_ideas:
@@ -110,11 +123,58 @@ def compute_decision(
         reasons.append(f"Conviction {top_conviction} above GO threshold, risk {risk_lower}, regime aligned")
 
     # Confidence = top_conviction weighted by regime alignment + risk factor
-    confidence = top_conviction
+    confidence = float(top_conviction)
     if not regime_aligned:
-        confidence = int(confidence * 0.8)
+        confidence *= 0.8
     if risk_high:
-        confidence = int(confidence * 0.85)
+        confidence *= 0.85
+
+    # Track-record adjustment from the user's actual scorecard.
+    track_record_adjustment: dict | None = None
+    if scorecard and scorecard.get("signals", 0) >= 10:
+        signals_n = int(scorecard.get("signals") or 0)
+        hr_5d = scorecard.get("hit_rate_5d")
+        by_conv = scorecard.get("by_conviction") or {}
+        multiplier = 1.0
+        notes: list[str] = []
+
+        if signals_n >= 20 and hr_5d is not None:
+            if hr_5d >= 60:
+                multiplier *= 1.10
+                notes.append(f"5d hit rate {hr_5d}% (n={signals_n}) — strong track record, +10%")
+            elif hr_5d <= 45:
+                multiplier *= 0.85
+                notes.append(f"5d hit rate {hr_5d}% (n={signals_n}) — weak track record, -15%")
+
+        # Calibration check: is high-conviction actually winning more?
+        bucket_hits = []
+        for bucket_label in ["low", "medium", "high", "very_high"]:
+            stats = by_conv.get(bucket_label)
+            if isinstance(stats, dict) and stats.get("count", 0) >= 5 and stats.get("hit_rate_5d") is not None:
+                bucket_hits.append((bucket_label, stats["hit_rate_5d"], stats["count"]))
+        if len(bucket_hits) >= 2:
+            rates = [b[1] for b in bucket_hits]
+            monotonic_up = all(rates[i] <= rates[i + 1] for i in range(len(rates) - 1))
+            monotonic_down = all(rates[i] >= rates[i + 1] for i in range(len(rates) - 1))
+            spread = max(rates) - min(rates)
+            if monotonic_up and spread >= 5:
+                multiplier *= 1.05
+                notes.append("Conviction is well-calibrated (monotonic hit rate), +5%")
+            elif monotonic_down and spread >= 5:
+                multiplier *= 0.90
+                notes.append("Conviction is INVERSELY calibrated (high-conviction worst), -10%")
+
+        if multiplier != 1.0:
+            confidence *= multiplier
+            track_record_adjustment = {
+                "multiplier": round(multiplier, 3),
+                "signals_evaluated": signals_n,
+                "hit_rate_5d": hr_5d,
+                "notes": notes,
+            }
+            reasons.append(f"Track record multiplier: ×{multiplier:.2f}")
+
+    confidence = int(max(0, min(100, confidence)))
 
     return {
         "decision": decision,
@@ -124,4 +184,5 @@ def compute_decision(
         "regime_aligned": regime_aligned,
         "regime": regime_key,
         "risk_level": risk_lower,
+        "track_record_adjustment": track_record_adjustment,
     }

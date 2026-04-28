@@ -164,6 +164,53 @@ def analyze_options(ticker: str) -> dict:
     put_iv = atm_put.get("impliedVolatility", 0) if atm_put else 0
     iv_skew = round((put_iv - call_iv) * 100, 2) if call_iv > 0 else 0
 
+    # === Vol term structure ===
+    # Pull ATM IV at the nearest 3 expiries; backwardation (front IV > back IV)
+    # signals event-driven near-term stress, contango (back > front) is normal.
+    term_structure: list[dict] = []
+    backwardation = None
+    try:
+        all_exps = chain.get("all_expirations", []) or []
+        for exp in all_exps[:3]:
+            sub = _market.get_options_chain(ticker, expiry=exp) if exp != expiration else chain
+            sub_calls = sub.get("calls", []) if sub else []
+            sub_puts = sub.get("puts", []) if sub else []
+            if not sub_calls:
+                continue
+            sub_strikes = [c.get("strike", 0) for c in sub_calls]
+            sub_atm = min(sub_strikes, key=lambda x: abs(x - current_price))
+            sub_call = next((c for c in sub_calls if c.get("strike") == sub_atm), None)
+            sub_put = next((p for p in sub_puts if p.get("strike") == sub_atm), None)
+            ivs = []
+            if sub_call:
+                ivs.append(sub_call.get("impliedVolatility", 0) or 0)
+            if sub_put:
+                ivs.append(sub_put.get("impliedVolatility", 0) or 0)
+            avg_iv = float(sum(ivs) / len(ivs)) if ivs else 0
+            term_structure.append({
+                "expiration": exp,
+                "atm_strike": sub_atm,
+                "atm_iv_pct": round(avg_iv * 100, 2),
+            })
+        if len(term_structure) >= 2:
+            front = term_structure[0]["atm_iv_pct"]
+            back = term_structure[-1]["atm_iv_pct"]
+            backwardation = bool(front > back + 1.0)  # >1pp inversion
+    except Exception as e:
+        logger.debug(f"term structure fetch failed for {ticker}: {e}")
+
+    # === Flow imbalance ===
+    # Imbalance = (call_vol - put_vol) / total_vol. Range [-1, +1].
+    # +0.5+ = aggressive call buying; -0.5- = aggressive put buying.
+    total_vol = total_call_vol + total_put_vol
+    flow_imbalance = round((total_call_vol - total_put_vol) / total_vol, 3) if total_vol > 0 else 0
+    if flow_imbalance > 0.4:
+        flow_signal = "aggressive_call_buying"
+    elif flow_imbalance < -0.4:
+        flow_signal = "aggressive_put_buying"
+    else:
+        flow_signal = "balanced"
+
     return _clean_dict({
         "ticker": ticker,
         "current_price": current_price,
@@ -180,4 +227,8 @@ def analyze_options(ticker: str) -> dict:
         "total_call_volume": total_call_vol,
         "total_put_volume": total_put_vol,
         "pc_ratio_signal": "bearish" if pc_ratio > 1.5 else "bullish" if pc_ratio < 0.5 else "neutral",
+        "term_structure": term_structure,
+        "vol_backwardation": backwardation,
+        "flow_imbalance": flow_imbalance,
+        "flow_signal": flow_signal,
     })

@@ -9,8 +9,14 @@ Pure math — zero LLM calls, reproducible, auditable.
 import numpy as np
 import logging
 import time
+import threading
 
 logger = logging.getLogger(__name__)
+
+# Guards mutation of _fitted_model / _fitted_scaler / _fitted_labels and
+# the hysteresis state. Acquired briefly for atomic swaps; never held
+# during HMM prediction or fitting (those operate on local refs).
+_state_lock = threading.RLock()
 
 # Lazy imports for heavy ML libraries — saves ~1.2s on cold start
 _GaussianHMM = None
@@ -41,6 +47,19 @@ _fitted_scaler = None
 _fitted_labels: dict = dict(_DEFAULT_REGIME_LABELS)
 _fit_timestamp = 0
 _FIT_TTL = 86400  # Refit daily
+
+# Hysteresis state — last classified regime + how many days we've been in it.
+# Prevents single-day flips on ambiguous data: a new regime must beat the
+# current one by `_REGIME_FLIP_MARGIN` for `_MIN_REGIME_DAYS` consecutive
+# observations before we accept it. This is the real-world equivalent of
+# a "Schmitt trigger" on the classifier — the same trick risk officers use
+# to keep a noisy regime call from churning the trade book.
+_last_regime: str | None = None
+_last_regime_streak: int = 0
+_pending_regime: str | None = None
+_pending_regime_streak: int = 0
+_MIN_REGIME_DAYS = 5
+_REGIME_FLIP_MARGIN = 0.10  # new regime prob must exceed current by 10pp
 
 
 def _rule_based_regime(vix: float, credit_spread: float, yield_curve: float) -> dict:
@@ -111,11 +130,13 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
             int(sorted_indices[2]): "risk_off",
         }
 
-        # Atomic swap — assign all at once to avoid partial state
-        _fitted_model = model
-        _fitted_scaler = scaler
-        _fitted_labels = new_labels
-        _fit_timestamp = time.time()
+        # Atomic swap under lock — concurrent readers see either the old
+        # complete state or the new complete state, never a half-mutated mix.
+        with _state_lock:
+            _fitted_model = model
+            _fitted_scaler = scaler
+            _fitted_labels = new_labels
+            _fit_timestamp = time.time()
         logger.info("HMM regime model fitted successfully")
         return True
     except Exception as e:
@@ -123,38 +144,154 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
         return False
 
 
-def classify_regime(vix: float, credit_spread: float, yield_curve: float) -> dict:
+def _apply_hysteresis(raw_regime: str, prob_dict: dict) -> tuple[str, dict]:
+    """
+    Smooth single-day regime flips. Returns (final_regime, hysteresis_info).
+
+    Rules:
+      - First call: accept whatever the model says, start a streak.
+      - Subsequent calls: if the raw regime differs from the current,
+        require the new regime's probability to exceed the current's by
+        `_REGIME_FLIP_MARGIN` for `_MIN_REGIME_DAYS` consecutive obs
+        before flipping. Otherwise hold the current regime.
+
+    The classifier's *probabilities* still reflect the raw signal so the
+    user can see what the model thinks; only the headline regime label
+    is sticky.
+    """
+    global _last_regime, _last_regime_streak, _pending_regime, _pending_regime_streak
+
+    with _state_lock:
+        info = {"applied": False, "streak_days": 0, "pending": None, "pending_days": 0}
+
+        if _last_regime is None:
+            _last_regime = raw_regime
+            _last_regime_streak = 1
+            info.update({"streak_days": 1})
+            return raw_regime, info
+
+        if raw_regime == _last_regime:
+            _last_regime_streak += 1
+            # Reset any pending counter — current regime reaffirmed
+            _pending_regime = None
+            _pending_regime_streak = 0
+            info.update({"streak_days": _last_regime_streak})
+            return _last_regime, info
+
+        # raw_regime != _last_regime. Check flip margin.
+        current_prob = float(prob_dict.get(_last_regime, 0.0))
+        new_prob = float(prob_dict.get(raw_regime, 0.0))
+        margin_ok = new_prob >= current_prob + _REGIME_FLIP_MARGIN
+
+        if not margin_ok:
+            # Margin too thin — hold current, reset pending
+            _pending_regime = None
+            _pending_regime_streak = 0
+            info.update({
+                "applied": True,
+                "streak_days": _last_regime_streak,
+                "pending": raw_regime,
+                "pending_days": 0,
+                "reason": (
+                    f"Held regime '{_last_regime}': new '{raw_regime}' prob "
+                    f"({new_prob:.2f}) within {_REGIME_FLIP_MARGIN:.2f} of current ({current_prob:.2f})"
+                ),
+            })
+            return _last_regime, info
+
+        # Margin OK — start or continue a pending flip
+        if _pending_regime == raw_regime:
+            _pending_regime_streak += 1
+        else:
+            _pending_regime = raw_regime
+            _pending_regime_streak = 1
+
+        if _pending_regime_streak >= _MIN_REGIME_DAYS:
+            # Confirmed flip
+            _last_regime = raw_regime
+            _last_regime_streak = _pending_regime_streak
+            _pending_regime = None
+            _pending_regime_streak = 0
+            info.update({
+                "applied": True,
+                "streak_days": _last_regime_streak,
+                "reason": f"Flip confirmed after {_MIN_REGIME_DAYS} consecutive days",
+            })
+            return raw_regime, info
+
+        # Pending but not yet confirmed
+        info.update({
+            "applied": True,
+            "streak_days": _last_regime_streak,
+            "pending": raw_regime,
+            "pending_days": _pending_regime_streak,
+            "reason": (
+                f"Pending flip to '{raw_regime}' on day {_pending_regime_streak}/{_MIN_REGIME_DAYS}"
+            ),
+        })
+        return _last_regime, info
+
+
+def classify_regime(
+    vix: float,
+    credit_spread: float,
+    yield_curve: float,
+    apply_hysteresis: bool = True,
+) -> dict:
     """
     Classify current regime using fitted HMM or rule-based fallback.
-    Returns regime label, probabilities, and confidence.
+
+    `apply_hysteresis=True` (default) smooths single-day flips so the
+    headline regime doesn't churn on ambiguous data. Set False for
+    backtesting where you want raw daily classifications.
     """
     global _fitted_model, _fitted_scaler
 
     if not _fitted_model or not _fitted_scaler:
-        return _rule_based_regime(vix, credit_spread, yield_curve)
+        rb = _rule_based_regime(vix, credit_spread, yield_curve)
+        if apply_hysteresis:
+            final_regime, hyst = _apply_hysteresis(rb["current_regime"], rb["probabilities"])
+            rb["raw_regime"] = rb["current_regime"]
+            rb["current_regime"] = final_regime
+            rb["hysteresis"] = hyst
+        return rb
 
     try:
         X = _fitted_scaler.transform([[vix, credit_spread, yield_curve]])
         state = int(_fitted_model.predict(X)[0])
         probs = _fitted_model.predict_proba(X)[0]
 
-        regime = _fitted_labels.get(state, "transition")
+        raw_regime = _fitted_labels.get(state, "transition")
         prob_dict = {_fitted_labels.get(i, f"state_{i}"): round(float(p), 3) for i, p in enumerate(probs)}
 
         # Transition matrix
         trans = _fitted_model.transmat_
         trans_list = [[round(float(trans[i, j]), 3) for j in range(3)] for i in range(3)]
 
-        return {
-            "current_regime": regime,
+        result = {
+            "current_regime": raw_regime,
+            "raw_regime": raw_regime,
             "probabilities": prob_dict,
             "transition_matrix": trans_list,
             "method": "hmm",
             "confidence": round(float(max(probs)), 3),
         }
+
+        if apply_hysteresis:
+            final_regime, hyst = _apply_hysteresis(raw_regime, prob_dict)
+            result["current_regime"] = final_regime
+            result["hysteresis"] = hyst
+
+        return result
     except Exception as e:
         logger.warning(f"HMM prediction failed, using rule-based: {e}")
-        return _rule_based_regime(vix, credit_spread, yield_curve)
+        rb = _rule_based_regime(vix, credit_spread, yield_curve)
+        if apply_hysteresis:
+            final_regime, hyst = _apply_hysteresis(rb["current_regime"], rb["probabilities"])
+            rb["raw_regime"] = rb["current_regime"]
+            rb["current_regime"] = final_regime
+            rb["hysteresis"] = hyst
+        return rb
 
 
 def get_regime_history(macro_history: list[dict]) -> list[dict]:
@@ -187,6 +324,55 @@ def get_regime_history(macro_history: list[dict]) -> list[dict]:
         return []
 
 
+def regime_size_multiplier(regime: str | None, confidence: float | None = None) -> dict:
+    """
+    Convert a regime classification into a position-size multiplier.
+
+    Risk-on:     1.0  (full sizing)
+    Transition:  0.75 (lean back 25%)
+    Risk-off:    0.5  (half sizing)
+    Unknown:     1.0  (don't penalize when we don't know)
+
+    Confidence-blended: low-confidence regime calls have less effect. If
+    confidence is 0.4 (uncertain), a risk_off classification will only
+    move the multiplier 40% of the way from 1.0 toward 0.5. This avoids
+    over-reacting to noisy single-day flips.
+
+    Returns {"multiplier": float, "regime": str, "confidence": float|None,
+             "reason": str} for transparent surfacing in the risk gate UI.
+    """
+    base_map = {
+        "risk_on": 1.0,
+        "transition": 0.75,
+        "risk_off": 0.5,
+    }
+    target = base_map.get((regime or "").lower(), 1.0)
+
+    # Default to full confidence if not provided
+    conf = float(confidence) if confidence is not None else 1.0
+    conf = max(0.0, min(1.0, conf))
+
+    # Blend: from baseline 1.0 toward target by `conf` weight
+    multiplier = 1.0 + conf * (target - 1.0)
+    multiplier = max(0.0, min(1.0, multiplier))
+
+    if regime == "risk_off":
+        reason = f"Regime risk_off (conf {conf:.0%}): sizing {int((1 - multiplier) * 100)}% lower"
+    elif regime == "transition":
+        reason = f"Regime transition (conf {conf:.0%}): sizing {int((1 - multiplier) * 100)}% lower"
+    elif regime == "risk_on":
+        reason = "Regime risk_on: full sizing allowed"
+    else:
+        reason = f"Regime unknown ('{regime}'): no adjustment"
+
+    return {
+        "multiplier": round(multiplier, 4),
+        "regime": regime or "unknown",
+        "confidence": round(conf, 3),
+        "reason": reason,
+    }
+
+
 def regime_conditional_returns(
     regime_history: list[dict],
     asset_returns: list[float],
@@ -211,12 +397,35 @@ def regime_conditional_returns(
     result = {}
     for regime, returns in regime_returns.items():
         arr = np.array(returns)
+        n = len(arr)
+        mean_daily = float(np.mean(arr))
+        std_daily = float(np.std(arr, ddof=1)) if n > 1 else 0.0
+        # t-stat for "is the mean return significantly different from zero?"
+        # Standard error of the mean = std / sqrt(n)
+        se = std_daily / np.sqrt(n) if n > 0 else 0.0
+        t_stat = mean_daily / se if se > 0 else 0.0
+        # Two-sided p-value approximation via normal CDF (large-sample) —
+        # for n>=30 this is within 1% of the true t distribution and avoids
+        # pulling scipy.stats just for a p-value.
+        # p ≈ 2 * (1 - Phi(|t|))   where Phi is the standard normal CDF
+        from math import erf, sqrt
+        p_value = 2.0 * (1.0 - 0.5 * (1.0 + erf(abs(t_stat) / sqrt(2.0)))) if t_stat != 0 else 1.0
+
+        # Low-sample flag: <30 obs is not enough for reliable inference
+        low_sample = n < 30
+        # Significant at 5% only if both sample is adequate AND p < 0.05
+        significant = (not low_sample) and (p_value < 0.05)
+
         result[regime] = {
-            "avg_daily_return_pct": round(float(np.mean(arr) * 100), 4),
-            "annualized_return_pct": round(float(np.mean(arr) * 252 * 100), 2),
-            "volatility_pct": round(float(np.std(arr) * np.sqrt(252) * 100), 2),
-            "observations": len(returns),
-            "positive_pct": round(sum(1 for r in returns if r > 0) / len(returns) * 100, 1),
+            "avg_daily_return_pct": round(mean_daily * 100, 4),
+            "annualized_return_pct": round(mean_daily * 252 * 100, 2),
+            "volatility_pct": round(std_daily * np.sqrt(252) * 100, 2),
+            "observations": n,
+            "positive_pct": round(sum(1 for r in returns if r > 0) / n * 100, 1) if n else None,
+            "t_stat": round(float(t_stat), 3),
+            "p_value": round(float(p_value), 4),
+            "low_sample": bool(low_sample),
+            "significant_at_5pct": bool(significant),
         }
 
     return result

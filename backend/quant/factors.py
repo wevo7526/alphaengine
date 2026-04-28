@@ -47,14 +47,82 @@ def _numpy_ols(y: np.ndarray, X: np.ndarray) -> dict:
         return {"betas": [0] * (X.shape[1] + 1), "r_squared": 0, "residuals": np.zeros(len(y))}
 
 
+def build_proxy_factor_returns(period: str = "1y") -> dict[str, list[float]] | None:
+    """
+    Construct FF5+Mom factor return proxies from liquid ETF returns. Closes
+    the gap from "code exists, no data source" to "live multi-factor model"
+    without depending on the Kenneth French data library.
+
+    Factor proxies (long-short or single-leg where the long leg dominates):
+        market = SPY excess return
+        size   = IWM - SPY               (small minus big)
+        value  = IWD - IWF               (Russell value minus Russell growth)
+        profitability = QUAL - SPY       (MSCI Quality factor minus market)
+        investment    = USMV - SPY       (low-vol minus market — proxy for CMA)
+        momentum      = MTUM - SPY       (MSCI Momentum minus market)
+
+    Returns None when not enough data — caller falls back to single-factor.
+    """
+    from data.market_client import MarketDataClient
+    mc = MarketDataClient()
+    tickers = ["SPY", "IWM", "IWD", "IWF", "QUAL", "USMV", "MTUM"]
+    series: dict[str, list[float]] = {}
+    for tk in tickers:
+        try:
+            bars = mc.get_price_history(tk, period=period)
+            if not bars or len(bars) < 30:
+                continue
+            closes = [b["close"] for b in bars if b.get("close")]
+            rets = [(closes[i] - closes[i-1]) / closes[i-1] for i in range(1, len(closes))]
+            series[tk] = rets
+        except Exception as e:
+            logger.debug(f"build_proxy_factor_returns: {tk} fetch failed ({e})")
+
+    if "SPY" not in series:
+        return None
+
+    n = min(len(v) for v in series.values())
+    spy = np.array(series["SPY"][-n:])
+
+    def _diff(a: str, b: str) -> list[float] | None:
+        if a not in series or b not in series:
+            return None
+        return list(np.array(series[a][-n:]) - np.array(series[b][-n:]))
+
+    factors: dict[str, list[float]] = {"market": list(spy)}
+    if "IWM" in series:
+        factors["size"] = list(np.array(series["IWM"][-n:]) - spy)
+    val = _diff("IWD", "IWF")
+    if val is not None:
+        factors["value"] = val
+    if "QUAL" in series:
+        factors["profitability"] = list(np.array(series["QUAL"][-n:]) - spy)
+    if "USMV" in series:
+        factors["investment"] = list(np.array(series["USMV"][-n:]) - spy)
+    if "MTUM" in series:
+        factors["momentum"] = list(np.array(series["MTUM"][-n:]) - spy)
+    return factors
+
+
+def _resolve_rfr(rfr: float | None) -> float:
+    """RFR fetched from FRED 3-month yield (cached). Hardcoded 4% fallback."""
+    if rfr is not None:
+        return float(rfr)
+    try:
+        from data.fred_client import FREDDataClient
+        return FREDDataClient().get_risk_free_rate()
+    except Exception:
+        return 0.04
+
+
 def compute_factor_loadings(
     portfolio_returns: list[float],
     market_returns: list[float],
-    risk_free_rate: float = 0.04,
+    risk_free_rate: float | None = None,
 ) -> dict:
     """
     Simplified factor analysis using market returns as the single factor.
-    Returns alpha, beta, R-squared.
+    Returns alpha, beta, R-squared. RFR pulled from FRED if not set.
 
     For full FF5+Mom, use compute_multi_factor_loadings().
     """
@@ -62,31 +130,52 @@ def compute_factor_loadings(
     if min_len < 30:
         return {"error": "Need 30+ observations", "alpha": None, "beta": None}
 
+    rfr = _resolve_rfr(risk_free_rate)
     y = np.array(portfolio_returns[-min_len:])
     x = np.array(market_returns[-min_len:])
-    rf_daily = risk_free_rate / 252
+    rf_daily = rfr / 252
 
     # Excess returns
     y_excess = y - rf_daily
     x_excess = x - rf_daily
 
-    result = _numpy_ols(y_excess, x_excess.reshape(-1, 1))
-    alpha_daily = result["betas"][0]
-    beta = result["betas"][1]
+    if STATSMODELS_AVAILABLE:
+        X_const = sm.add_constant(x_excess)
+        model = sm.OLS(y_excess, X_const).fit(cov_type="HAC", cov_kwds={"maxlags": 5})
+        alpha_daily = float(model.params[0])
+        beta = float(model.params[1])
+        alpha_pvalue = float(model.pvalues[0])
+        alpha_tstat = float(model.tvalues[0])
+        residual_vol = float(np.std(model.resid) * np.sqrt(252) * 100)
+        r_sq = float(model.rsquared)
+    else:
+        result = _numpy_ols(y_excess, x_excess.reshape(-1, 1))
+        alpha_daily = float(result["betas"][0])
+        beta = float(result["betas"][1])
+        alpha_pvalue = None
+        alpha_tstat = None
+        residual_vol = float(np.std(result["residuals"]) * np.sqrt(252) * 100)
+        r_sq = float(result["r_squared"])
 
     return {
-        "alpha": _clean(round(float(alpha_daily * 252 * 100), 2)),  # Annualized %
-        "alpha_daily": _clean(round(float(alpha_daily), 6)),
-        "beta": _clean(round(float(beta), 3)),
-        "r_squared": _clean(round(float(result["r_squared"]), 3)),
-        "residual_vol": _clean(round(float(np.std(result["residuals"]) * np.sqrt(252) * 100), 2)),
+        "alpha": _clean(round(alpha_daily * 252 * 100, 2)),  # Annualized %
+        "alpha_daily": _clean(round(alpha_daily, 6)),
+        "alpha_pvalue": _clean(round(alpha_pvalue, 4)) if alpha_pvalue is not None else None,
+        "alpha_tstat": _clean(round(alpha_tstat, 2)) if alpha_tstat is not None else None,
+        # 5% significance: only TRUE if statsmodels is available AND p < 0.05
+        "alpha_significant_at_5pct": bool(alpha_pvalue is not None and alpha_pvalue < 0.05),
+        "beta": _clean(round(beta, 3)),
+        "r_squared": _clean(round(r_sq, 3)),
+        "residual_vol": _clean(round(residual_vol, 2)),
+        "n_observations": min_len,
+        "risk_free_rate": round(rfr, 4),
     }
 
 
 def compute_multi_factor_loadings(
     portfolio_returns: list[float],
     factor_returns: dict[str, list[float]],
-    risk_free_rate: float = 0.04,
+    risk_free_rate: float | None = None,
 ) -> dict:
     """
     Multi-factor regression (FF5 + Momentum style).
@@ -100,8 +189,9 @@ def compute_multi_factor_loadings(
     if min_len < 30:
         return {"error": "Need 30+ observations"}
 
+    rfr = _resolve_rfr(risk_free_rate)
     y = np.array(portfolio_returns[-min_len:])
-    rf_daily = risk_free_rate / 252
+    rf_daily = rfr / 252
     y_excess = y - rf_daily
 
     X = np.column_stack([np.array(factor_returns[f][-min_len:]) for f in factor_names])
@@ -116,15 +206,19 @@ def compute_multi_factor_loadings(
             betas[name] = _clean(round(float(model.params[i + 1]), 4))
             tstats[name] = _clean(round(float(model.tvalues[i + 1]), 2))
 
+        alpha_pvalue = float(model.pvalues[0])
         return {
             "alpha": _clean(round(float(model.params[0] * 252 * 100), 2)),
             "alpha_tstat": _clean(round(float(model.tvalues[0]), 2)),
-            "alpha_pvalue": _clean(round(float(model.pvalues[0]), 4)),
+            "alpha_pvalue": _clean(round(alpha_pvalue, 4)),
+            "alpha_significant_at_5pct": bool(alpha_pvalue < 0.05),
             "factor_betas": betas,
             "factor_tstats": tstats,
             "r_squared": _clean(round(float(model.rsquared), 3)),
             "adj_r_squared": _clean(round(float(model.rsquared_adj), 3)),
             "residual_vol": _clean(round(float(np.std(model.resid) * np.sqrt(252) * 100), 2)),
+            "n_observations": int(min_len),
+            "model": "FF5+Mom" if len(factor_names) >= 5 else f"{len(factor_names)}-factor",
         }
     else:
         result = _numpy_ols(y_excess, X)
@@ -175,7 +269,7 @@ def compute_rolling_factor_exposure(
     portfolio_returns: list[float],
     market_returns: list[float],
     window: int = 60,
-    risk_free_rate: float = 0.04,
+    risk_free_rate: float | None = None,
 ) -> list[dict]:
     """
     Rolling factor betas over a sliding window.
@@ -186,9 +280,10 @@ def compute_rolling_factor_exposure(
     if min_len < window + 10:
         return []
 
+    rfr = _resolve_rfr(risk_free_rate)
     y = np.array(portfolio_returns[-min_len:])
     x = np.array(market_returns[-min_len:])
-    rf_daily = risk_free_rate / 252
+    rf_daily = rfr / 252
 
     results = []
     for i in range(window, min_len):

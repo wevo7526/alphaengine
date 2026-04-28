@@ -55,6 +55,7 @@ class CIOSynthesizer:
         risk = context.get("risk", {})
         strategy = context.get("strategy", {})
         scorecard = context.get("scorecard") or {}
+        prior_memos = context.get("prior_memos") or []
 
         # Compress risk factors to one-liners instead of full JSON
         risk_factors = risk.get("risk_factors", [])
@@ -108,6 +109,26 @@ class CIOSynthesizer:
                 "Strong buckets (hit_rate > 55%, IC > 0.1) earn higher conviction.\n"
             )
 
+        # Continuity block: prior memos that overlap with this query's
+        # tickers or themes. CIO is instructed to reconcile current view
+        # with past view, not just write fresh prose every time.
+        continuity_block = ""
+        if prior_memos:
+            lines = []
+            for m in prior_memos[:3]:
+                lines.append(
+                    f"- [{m.get('created_at', '?')[:10]}] '{m.get('title', '')[:120]}'\n"
+                    f"  Regime then: {m.get('macro_regime', '?')}; "
+                    f"Tickers: {', '.join(m.get('tickers', [])[:5])}; "
+                    f"Summary: {m.get('executive_summary', '')[:240]}"
+                )
+            continuity_block = (
+                "\n=== PRIOR MEMOS (this user, ticker/theme overlap) ===\n"
+                + "\n".join(lines)
+                + "\nAcknowledge or reconcile prior view. If thesis has changed, say so explicitly. "
+                + "If thesis is unchanged, note continuity (e.g. 'reaffirming our long view from 2 weeks ago').\n"
+            )
+
         user_prompt = (
             f"Query: {plan.get('query', '')}\n"
             f"Intent: {plan.get('intent', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Themes: {', '.join(plan.get('themes', []))}\n\n"
@@ -116,7 +137,8 @@ class CIOSynthesizer:
             f"{risk.get('risk_narrative', '')[:500]}\n{risk_lines}\n\n"
             f"=== TRADE IDEAS ===\nPositioning: {strategy.get('portfolio_positioning', 'neutral')}\n"
             f"{trade_lines}\n\nHedges:\n{hedge_lines}\n"
-            f"{calibration_block}\n"
+            f"{calibration_block}"
+            f"{continuity_block}\n"
             f"Produce the final intelligence memo as JSON. Include the trade ideas and risk factors as structured objects in your output."
         )
 

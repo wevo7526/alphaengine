@@ -157,8 +157,13 @@ async def system_info():
     """
     Live system info for Settings page: dependency keys configured, risk
     parameters in effect, app metadata. No secrets — only presence flags.
+    Risk thresholds are read from quant.limits at request time so changes
+    via env vars surface immediately without code edits.
     """
+    from quant import limits as _limits
     db = await ping_db(timeout=2.0)
+    L = _limits.as_dict()
+
     return {
         "app": {
             "version": app.version,
@@ -184,14 +189,17 @@ async def system_info():
             "issuer_configured": bool(settings.CLERK_ISSUER),
         },
         "risk_parameters": [
-            {"label": "Max position size", "value": "5%", "description": "Maximum allocation to a single position"},
-            {"label": "Max sector concentration", "value": "30%", "description": "Maximum allocation to one sector"},
-            {"label": "Sizing method", "value": "Half-Kelly", "description": "Position sizing algorithm"},
-            {"label": "BUY/SELL threshold", "value": "75 conviction", "description": "Minimum conviction to recommend action"},
-            {"label": "WATCH threshold", "value": "50 conviction", "description": "Minimum conviction for watchlist"},
-            {"label": "Circuit breaker", "value": "10% drawdown", "description": "Portfolio drawdown that pauses new trades"},
-            {"label": "Stop loss default", "value": "Quant agent metadata", "description": "Per-trade stop level from technical analysis"},
-            {"label": "VaR confidence", "value": "95%", "description": "Daily Value-at-Risk confidence interval"},
+            {"label": "Max position size", "value": f"{L['max_position_pct']}%", "description": "Hard cap per single position (risk gate + optimizer)"},
+            {"label": "Max sector concentration", "value": f"{L['max_sector_pct']}%", "description": "Maximum allocation to one sector"},
+            {"label": "Min position size", "value": f"{L['min_position_pct']}%", "description": "Below this, trade is rejected as noise"},
+            {"label": "VaR confidence", "value": f"{int(L['var_confidence']*100)}%", "description": "Parametric + Cornish-Fisher + bootstrap CI"},
+            {"label": "Marginal VaR block threshold", "value": f"{L['marginal_var_block_pct']}%", "description": "Trade rejected if it adds more than this to portfolio VaR"},
+            {"label": "Silent-squeeze guard", "value": f"{int(L['silent_squeeze_threshold']*100)}%", "description": "Refuse fill if size shrinks below this fraction of requested"},
+            {"label": "DD circuit breaker (caution / warn / critical)", "value": f"{L['drawdown_caution_pct']}% / {L['drawdown_warn_pct']}% / {L['drawdown_critical_pct']}%", "description": "Tiered drawdown response on real book P&L"},
+            {"label": "Liquidity max %ADV / block %ADV", "value": f"{int(L['liquidity_max_pct_of_adv']*100)}% / {int(L['liquidity_block_pct_of_adv']*100)}%", "description": "Position-vs-average-daily-volume gate"},
+            {"label": "Optimizer turnover cost", "value": f"{L['optimizer_tx_cost_bps']} bp", "description": "Penalty deducted in mean-variance objective"},
+            {"label": "BUY/SELL conviction threshold", "value": "75", "description": "Minimum CIO conviction for GO"},
+            {"label": "WATCH conviction threshold", "value": "50", "description": "Minimum conviction for WATCH"},
         ],
     }
 
@@ -591,24 +599,31 @@ async def portfolio_risk_analysis(req: Request):
     if len(returns_dict) < 1:
         return {"error": "Could not fetch price data"}
 
-    # Compute
-    cov = compute_ewma_covariance(returns_dict)
-    var_result = compute_portfolio_var(weights, cov, portfolio_value=100000)
-
-    # Portfolio returns for CVaR
+    # Portfolio returns series (used for CVaR + VaR bootstrap CI)
     port_returns = []
     min_len = min(len(r) for r in returns_dict.values()) if returns_dict else 0
     for i in range(min_len):
         daily = sum(weights.get(t, 0) * returns_dict[t][i] for t in returns_dict)
         port_returns.append(daily)
+
+    # Compute (covariance with Ledoit-Wolf shrinkage; VaR with bootstrap CI + Cornish-Fisher)
+    cov = compute_ewma_covariance(returns_dict)
+    var_result = compute_portfolio_var(
+        weights, cov, portfolio_value=100000, portfolio_returns=port_returns,
+    )
     cvar_result = compute_portfolio_cvar(port_returns)
 
-    # Sector check
+    # Sector check (uses GICS fallback for tickers Yahoo returns "Unknown" for)
+    from data.sector_map import resolve_sector as _resolve_sector
+    for tk, info in sectors.items():
+        resolved, _ = _resolve_sector(tk, info.get("sector"))
+        info["sector"] = resolved
     sector_result = check_sector_limits(sectors)
 
-    # Drawdown
-    dd = compute_drawdown("SPY", "3mo")  # Use SPY as portfolio proxy for now
-    circuit = drawdown_circuit_breaker(abs(dd.get("current_drawdown", 0)))
+    # Drawdown — real book (open + closed P&L), not SPY proxy
+    from agents.desk3_position_risk import get_current_portfolio_drawdown
+    real_dd = await get_current_portfolio_drawdown(async_session, user_id=user_id)
+    circuit = drawdown_circuit_breaker(real_dd)
 
     return {
         **var_result,
@@ -617,7 +632,60 @@ async def portfolio_risk_analysis(req: Request):
         "circuit_breaker": circuit,
         "correlation_matrix": cov,
         "positions_count": len(tickers),
+        "portfolio_drawdown_pct": round(float(real_dd), 2),
     }
+
+
+@app.get("/api/quant/stress")
+async def stress_panel(req: Request):
+    """
+    Run the full stress panel on the authenticated user's open book.
+
+    Returns historical scenarios (GFC 2008, COVID 2020, rate shock 2022,
+    dot-com 2000) and parametric hypothetical shocks (VIX +15/+30, credit
+    +200/+500bp, oil +50/-30%, plus a combined risk-off cocktail).
+    """
+    from db.models import TradeRecord
+    from quant.stress import run_full_stress_panel
+    from data.sector_map import resolve_sector
+
+    user_id = require_user_id(req)
+
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(TradeRecord).where(
+                    TradeRecord.status == "open",
+                    TradeRecord.user_id == user_id,
+                )
+            )
+            trades = result.scalars().all()
+    except Exception as e:
+        logger.error(f"stress_panel: failed to load trades: {e}")
+        return {"error": str(e), "historical": {}, "hypothetical": []}
+
+    if not trades:
+        return {"error": "No open positions", "historical": {}, "hypothetical": []}
+
+    # Resolve sectors for each position via GICS fallback so stress math
+    # never falls into "Unknown" silently.
+    positions = []
+    for t in trades:
+        yahoo_sector = None
+        try:
+            fund = market_client.get_fundamentals(t.ticker)
+            yahoo_sector = (fund or {}).get("sector")
+        except Exception:
+            pass
+        sector, _ = resolve_sector(t.ticker, yahoo_sector)
+        positions.append({
+            "ticker": t.ticker,
+            "sector": sector,
+            "size_pct": float(t.position_size_pct or 0),
+            "direction": t.direction or "bullish",
+        })
+
+    return run_full_stress_panel(positions, portfolio_base=100000)
 
 
 # Helper for internal use
@@ -632,6 +700,25 @@ async def list_trades_internal(status: str = "open") -> list[dict]:
             {c.name: getattr(r, c.name) for c in r.__table__.columns}
             for r in result.scalars().all()
         ]
+
+
+def _current_regime_for_gate() -> tuple[str | None, float | None]:
+    """
+    Best-effort fetch of current macro regime so the trade gate can apply
+    a regime-based size multiplier. Never raises — falls back to (None, None)
+    so the gate just skips the multiplier instead of crashing.
+    """
+    try:
+        from quant.regime import classify_regime
+        snapshot = fred_client.get_macro_snapshot()
+        vix = snapshot.get("vix", {}).get("value", 20)
+        credit = snapshot.get("credit_spreads", {}).get("value", 3)
+        yc = snapshot.get("yield_curve_spread", {}).get("value", 0.5)
+        regime_data = classify_regime(vix, credit, yc)
+        return regime_data.get("current_regime"), regime_data.get("confidence")
+    except Exception as e:
+        logger.debug(f"regime fetch failed (non-fatal): {e}")
+        return None, None
 
 
 # === REGIME DETECTION ===
@@ -770,9 +857,23 @@ async def get_backtest_results(run_id: str, req: Request):
 # === FACTOR ANALYSIS ===
 
 @app.get("/api/quant/factors")
-async def factor_analysis(tickers: str = "SPY"):
-    """Factor loadings and attribution for given tickers."""
-    from quant.factors import compute_factor_loadings
+async def factor_analysis(tickers: str = "SPY", model: str = "single"):
+    """
+    Factor loadings and attribution for given tickers.
+
+    `model` selects:
+      "single"   — CAPM single-factor (market). Fast.
+      "ff5_mom"  — FF5+Momentum, computed from ETF proxies (SPY, IWM, IWD/IWF,
+                   QUAL, USMV, MTUM). Slower (1 extra ETF data fetch) but
+                   surfaces size/value/profitability/investment/momentum exposure.
+                   Returns alpha p-value with `alpha_significant_at_5pct` flag.
+    """
+    from quant.factors import (
+        compute_factor_loadings,
+        compute_multi_factor_loadings,
+        compute_rolling_factor_exposure,
+        build_proxy_factor_returns,
+    )
     ticker_list = [t.strip().upper() for t in tickers.split(",")]
 
     # Get per-ticker return series
@@ -799,23 +900,42 @@ async def factor_analysis(tickers: str = "SPY"):
     if not ticker_returns or not benchmark:
         return {"error": "Insufficient data for factor analysis"}
 
-    # Build equal-weighted portfolio return series aligned to shortest length
+    # Equal-weighted portfolio aligned to shortest length
     min_len = min(len(r) for r in ticker_returns.values())
     min_len = min(min_len, len(benchmark))
     n_tickers = len(ticker_returns)
-    port_returns = []
-    for i in range(min_len):
-        daily = sum(ticker_returns[t][i] for t in ticker_returns) / n_tickers
-        port_returns.append(daily)
+    port_returns = [
+        sum(ticker_returns[t][i] for t in ticker_returns) / n_tickers
+        for i in range(min_len)
+    ]
     benchmark = benchmark[:min_len]
 
-    loadings = compute_factor_loadings(port_returns, benchmark)
-
-    # Rolling exposures
-    from quant.factors import compute_rolling_factor_exposure
+    # Single-factor (always computed, used for rolling viz)
+    single = compute_factor_loadings(port_returns, benchmark)
     rolling = compute_rolling_factor_exposure(port_returns, benchmark, window=30)
 
-    return {"tickers": ticker_list, **loadings, "rolling_exposures": rolling}
+    response: dict = {
+        "tickers": ticker_list,
+        "model": "single",
+        **single,
+        "rolling_exposures": rolling,
+    }
+
+    if model == "ff5_mom":
+        proxies = build_proxy_factor_returns(period="6mo")
+        if proxies:
+            # Align all factor series to portfolio length
+            aligned = {k: v[-min_len:] for k, v in proxies.items() if len(v) >= min_len}
+            if "market" in aligned and len(aligned) >= 2:
+                multi = compute_multi_factor_loadings(port_returns, aligned)
+                response["multi_factor"] = multi
+                response["model"] = multi.get("model", "ff5_mom")
+            else:
+                response["multi_factor"] = {"error": "Could not align factor proxies"}
+        else:
+            response["multi_factor"] = {"error": "Factor proxy ETFs unavailable"}
+
+    return response
 
 
 @app.get("/api/quant/risk-check/{ticker}")
@@ -1064,12 +1184,17 @@ async def pre_trade_gate(req: RiskCheckRequest, request: Request):
     # Current portfolio drawdown
     dd = await get_current_portfolio_drawdown(async_session, user_id=user_id)
 
+    # Regime-aware sizing
+    regime, regime_conf = _current_regime_for_gate()
+
     result = evaluate_trade_gate(
         ticker=req.ticker.upper(),
         direction=req.direction,
         proposed_size_pct=req.size_pct,
         existing_positions=existing_positions,
         portfolio_drawdown_pct=dd,
+        regime=regime,
+        regime_confidence=regime_conf,
     )
     return result
 
@@ -1111,6 +1236,7 @@ async def take_trade(req: TakeTradeRequest, request: Request):
             ]
 
             dd = await get_current_portfolio_drawdown(async_session, user_id=user_id)
+            regime, regime_conf = _current_regime_for_gate()
 
             gate = evaluate_trade_gate(
                 ticker=req.ticker.upper(),
@@ -1118,6 +1244,8 @@ async def take_trade(req: TakeTradeRequest, request: Request):
                 proposed_size_pct=req.position_size_pct,
                 existing_positions=existing_positions,
                 portfolio_drawdown_pct=dd,
+                regime=regime,
+                regime_confidence=regime_conf,
             )
 
             if not gate.get("approved"):
@@ -1137,14 +1265,26 @@ async def take_trade(req: TakeTradeRequest, request: Request):
         except HTTPException:
             raise
         except Exception as e:
-            logger.warning(f"Risk gate failed (falling back to proposed size): {e}")
-            final_size_pct = req.position_size_pct
-            size_adjusted = False
-            gate = {}
+            # Fail closed: a broken risk gate cannot be a free pass. Refuse the
+            # trade with 503 and surface the error so the user knows why.
+            logger.error(f"Risk gate raised unexpected error for {req.ticker}: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "blocked": True,
+                    "reasons": [
+                        "Risk gate failed to evaluate this trade — refusing rather than skipping the check.",
+                        f"Error: {str(e)[:200]}",
+                    ],
+                    "ticker": req.ticker,
+                },
+            )
     else:
+        # Zero-size or missing size: still let it through (the gate has nothing
+        # to check), but mark gate as not-run so downstream knows.
         final_size_pct = req.position_size_pct
         size_adjusted = False
-        gate = {}
+        gate = {"approved": True, "skipped": True, "reason": "no position size specified"}
 
     # If no entry_price provided, mark at current market — turns "Take Trade"
     # into a one-click paper-trading entry without requiring users to look up a price.
@@ -2263,10 +2403,28 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         yield send({"phase": "strategizing", "agent": "portfolio_strategist"})  # Backward compat
         ps_cb = DeskStreamCallback(event_queue, desk="portfolio", agent="portfolio_strategist")
         ps_start = asyncio.get_event_loop().time()
+
+        # Pull live portfolio so Strategist sizes ideas against the real book,
+        # and pull the scorecard so it calibrates conviction by past hit rate.
+        portfolio_for_strategy = None
+        scorecard_for_strategy = None
+        try:
+            from agents.orchestrator import _fetch_portfolio_snapshot, _fetch_scorecard_for_calibration
+            portfolio_for_strategy = await _fetch_portfolio_snapshot(user_id)
+            scorecard_for_strategy = await _fetch_scorecard_for_calibration(user_id)
+        except Exception as e:
+            logger.debug(f"[stream] Portfolio/scorecard prefetch skipped: {e}")
+
         try:
             async for chunk in run_with_streaming(
                 lambda: _portfolio_strategist.analyze(
-                    {"plan": plan_data, "research": research_data, "risk": risk_data}, callbacks=[ps_cb]
+                    {
+                        "plan": plan_data,
+                        "research": research_data,
+                        "risk": risk_data,
+                        "portfolio": portfolio_for_strategy,
+                        "scorecard": scorecard_for_strategy,
+                    }, callbacks=[ps_cb]
                 ),
                 timeout_s=90, label="PS",
             ):
@@ -2305,14 +2463,21 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         cio_cb = DeskStreamCallback(event_queue, desk="cio", agent="cio_synthesizer")
         cio_start = asyncio.get_event_loop().time()
 
-        # Adaptive calibration: pull this user's track record so the CIO
-        # tunes conviction against actual hit rates / IC, not just the LLM's prior.
-        scorecard_for_cio = None
+        # Adaptive calibration: reuse the scorecard fetched for Strategist so
+        # CIO + Decision Gate see the same numbers and we don't double-fetch.
+        scorecard_for_cio = scorecard_for_strategy
+
+        # Continuity context: pull prior memos for ticker/theme overlap.
+        prior_memos_for_cio: list[dict] = []
         try:
-            from agents.orchestrator import _fetch_scorecard_for_calibration
-            scorecard_for_cio = await _fetch_scorecard_for_calibration(user_id)
+            from agents.orchestrator import _fetch_prior_memos
+            prior_memos_for_cio = await _fetch_prior_memos(
+                user_id,
+                plan_data.get("tickers") or [],
+                plan_data.get("themes") or [],
+            )
         except Exception as e:
-            logger.debug(f"[stream] Scorecard calibration skipped: {e}")
+            logger.debug(f"[stream] Prior memos fetch skipped: {e}")
 
         try:
             output = await _with_timeout(
@@ -2323,6 +2488,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "risk": risk_data,
                         "strategy": strategy_data,
                         "scorecard": scorecard_for_cio,
+                        "prior_memos": prior_memos_for_cio,
                     },
                     callbacks=[cio_cb],
                 ),
@@ -2372,6 +2538,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                 trade_ideas=strategy_data.get("trade_ideas", []),
                 macro_regime=risk_data.get("macro_regime", "unknown"),
                 overall_risk_level=risk_data.get("overall_risk_level", "elevated"),
+                scorecard=scorecard_for_cio,  # track-record-aware confidence
             )
             # Stream as a trace event (decision activity on CIO desk)
             yield send({

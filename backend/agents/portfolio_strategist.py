@@ -107,11 +107,25 @@ Respond with JSON:
             "risks": ["China trade tensions", "Macro slowdown"]
         }}
     ],
+    # Existing portfolio context will be injected into your prompt under
+    # "EXISTING PORTFOLIO" — use it. Don't recommend trades that duplicate
+    # exposure already on the book or breach the 30% sector cap.
     "portfolio_positioning": "risk_on | risk_off | neutral | rotational",
+    # Hedge palette — DIVERSIFY across asset classes. A vanilla "SPY puts +
+    # VIX calls" combo is correlated to itself. Pick from at least 3 of:
+    #   - Equity index puts/spreads (SPY, QQQ, IWM)
+    #   - Vol products (VIX calls, VXX, UVXY)
+    #   - Rates/duration (TLT, IEF, TLT puts if expecting rate spike)
+    #   - Credit (HYG/JNK shorts, IG-vs-HY pairs)
+    #   - FX (DXY long via UUP if dollar haven, EUO/YCS for asymmetric bets)
+    #   - Sector pair trades (XLF/XLU, XLY/XLP for cyclicals vs defensives)
+    #   - Single-name hedges (short specific issuer with high beta to thesis)
     "hedging_recommendations": [
         "Buy SPY May 520 puts ($4.20) — portfolio beta hedge, protects against 5% drawdown",
         "Long VIX June 30 calls ($1.80) — tail risk insurance if vol spikes",
-        "..."
+        "Long TLT (duration) — flight-to-quality hedge if equities crack",
+        "Short HYG / long LQD pair — credit-stress hedge",
+        "Long XLP / short XLY — defensive-vs-cyclical pair",
     ],
     "strategy_narrative": "<1-2 paragraph strategy explanation>"
 }}"""
@@ -133,6 +147,8 @@ class PortfolioStrategist(BaseAgent):
         plan = context.get("plan", {})
         research = context.get("research", {})
         risk = context.get("risk", {})
+        portfolio = context.get("portfolio") or {}
+        scorecard = context.get("scorecard") or {}
 
         summary = research.get("data_summary", "No research data.")
         if len(summary) > 2000:
@@ -141,10 +157,95 @@ class PortfolioStrategist(BaseAgent):
         if len(risk_narrative) > 500:
             risk_narrative = risk_narrative[:500] + "..."
 
+        # Structured ticker_data — fundamentals + sentiment + options keyed by
+        # ticker. Strategist uses these to set entry/stop/target precisely
+        # (current price, options-implied move, IV) instead of guessing.
+        ticker_data = research.get("ticker_data") or {}
+        ticker_block = ""
+        if ticker_data:
+            tlines = []
+            for tk, td in list(ticker_data.items())[:6]:
+                if not isinstance(td, dict):
+                    continue
+                fund = td.get("fundamentals") or {}
+                opt = td.get("options") or {}
+                price = fund.get("current_price")
+                pe = fund.get("pe_ratio")
+                hi52 = fund.get("52w_high")
+                lo52 = fund.get("52w_low")
+                im = opt.get("implied_move_pct")
+                iv = opt.get("atm_iv")
+                tlines.append(
+                    f"  {tk}: price={price} P/E={pe} 52w=[{lo52},{hi52}] "
+                    f"impl_move={im}% atm_iv={iv}"
+                )
+            if tlines:
+                ticker_block = "\n=== STRUCTURED TICKER DATA ===\n" + "\n".join(tlines) + "\n"
+
+        # Existing portfolio context — Strategist must size new ideas
+        # against current book (not in a vacuum). Sector and net-exposure
+        # awareness come straight from open trades.
+        portfolio_block = ""
+        positions = portfolio.get("open_positions") or []
+        if positions:
+            lines = []
+            sector_totals: dict[str, float] = {}
+            net_long = 0.0
+            for p in positions[:15]:
+                tk = p.get("ticker", "?")
+                d = p.get("direction", "?")
+                sz = float(p.get("size_pct") or 0)
+                sec = p.get("sector") or "Unknown"
+                sector_totals[sec] = sector_totals.get(sec, 0.0) + sz
+                signed = sz if "bullish" in d else -sz
+                net_long += signed
+                lines.append(f"  - {tk} {d} {sz:.2f}% (sector: {sec})")
+            sector_summary = ", ".join(
+                f"{s}: {v:.1f}%" for s, v in sorted(sector_totals.items(), key=lambda kv: -kv[1])[:6]
+            )
+            portfolio_block = (
+                f"\n=== EXISTING PORTFOLIO ({len(positions)} positions, "
+                f"net long: {net_long:+.1f}%) ===\n"
+                + "\n".join(lines)
+                + f"\nSector exposure: {sector_summary}\n"
+                + "Constraints: do not duplicate exposure already on the book; "
+                + "factor in sector caps (30%) and net-long balance when sizing.\n"
+            )
+
+        # Calibration block: scale conviction based on the user's actual
+        # historical hit rates. If their high-conviction picks have been
+        # hitting <50%, the Strategist should temper its conviction levels.
+        calibration_block = ""
+        if scorecard and scorecard.get("signals", 0) >= 10:
+            signals_n = int(scorecard.get("signals") or 0)
+            hr_5d = scorecard.get("hit_rate_5d")
+            hr_20d = scorecard.get("hit_rate_20d")
+            ic_5d = scorecard.get("ic_5d")
+            buckets = scorecard.get("by_conviction") or {}
+            bucket_lines = []
+            for k in ("very_high", "high", "medium", "low"):
+                stats = buckets.get(k)
+                if isinstance(stats, dict) and stats.get("count"):
+                    bucket_lines.append(
+                        f"  {k}: hit_5d {stats.get('hit_rate_5d')}%, "
+                        f"avg_ret_5d {stats.get('avg_return_5d')}%, n={stats.get('count')}"
+                    )
+            calibration_block = (
+                f"\n=== TRACK RECORD CALIBRATION (n={signals_n}) ===\n"
+                f"Overall: 5d hit rate {hr_5d}% | 20d hit rate {hr_20d}% | IC_5d {ic_5d}\n"
+                + ("By conviction bucket:\n" + "\n".join(bucket_lines) if bucket_lines else "")
+                + "\nUse this when assigning conviction. If a bucket shows weak hit rate "
+                "(<50%), do NOT assign that conviction level unless evidence is overwhelming. "
+                "If a bucket is hitting >55%, you can go higher there with confidence.\n"
+            )
+
         return (
             f"Query: {plan.get('query', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Horizon: {plan.get('time_horizon', 'weeks')}\n"
             f"Regime: {risk.get('macro_regime', '?')} | Risk: {risk.get('overall_risk_level', '?')}\n\n"
-            f"Research:\n{summary}\n\n"
-            f"Risk:\n{risk_narrative}\n\n"
+            f"Research:\n{summary}\n"
+            f"{ticker_block}\n"
+            f"Risk:\n{risk_narrative}\n"
+            f"{portfolio_block}"
+            f"{calibration_block}\n"
             f"Produce 5 trade ideas and portfolio strategy JSON. Use price tools for entry/stop/target levels."
         )

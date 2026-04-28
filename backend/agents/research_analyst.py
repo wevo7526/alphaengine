@@ -89,21 +89,44 @@ def get_options_chain(ticker: str) -> dict:
 
 @tool
 def get_ticker_news(ticker: str) -> list:
-    """Get recent news for a ticker. Returns title, source, date. Limited to 5 articles."""
+    """
+    Recent news for a ticker. Returns title + description + source + date for
+    the top 5 articles. Description is ~200-400 chars so the LLM can read
+    actual content, not just headlines (was: title-only).
+    """
     articles = _news.get_ticker_news(ticker, page_size=5)
-    # Return only title and source to minimize tokens
-    return [{"title": a.get("title", ""), "source": a.get("source", "")} for a in articles]
+    return [
+        {
+            "title": a.get("title", ""),
+            "description": (a.get("description") or "")[:500],
+            "source": a.get("source", ""),
+            "published_at": a.get("published_at") or a.get("publishedAt"),
+            "url": a.get("url"),
+        }
+        for a in articles
+    ]
 
 
 @tool
 def get_finnhub_news(ticker: str) -> dict:
-    """Get company news from Finnhub. Returns article count and top 3 headlines."""
+    """
+    Company news from Finnhub. Returns article count + top 5 headlines with
+    summaries (was: 3 truncated headlines).
+    """
     data = _news.get_market_sentiment_finnhub(ticker)
-    # Trim to just count + top 3 headlines to save tokens
-    articles = data.get("articles", [])[:3]
+    articles = data.get("articles", [])[:5]
     return {
         "article_count": data.get("article_count", 0),
-        "top_headlines": [a.get("headline", "")[:80] for a in articles],
+        "articles": [
+            {
+                "headline": a.get("headline", ""),
+                "summary": (a.get("summary") or "")[:400],
+                "source": a.get("source"),
+                "datetime": a.get("datetime"),
+                "url": a.get("url"),
+            }
+            for a in articles
+        ],
     }
 
 
@@ -119,6 +142,41 @@ def get_market_news() -> list:
 def get_recent_filings(ticker: str, form_type: str = "8-K", limit: int = 3) -> dict:
     """Get recent SEC filings by type. form_type: 8-K, 10-K, 10-Q. Keep limit low."""
     return _sec.get_recent_filings(ticker, form_type=form_type, limit=limit)
+
+
+@tool
+def get_filing_section(filing_url: str, section: str = "mda") -> dict:
+    """
+    Pull a specific section from a 10-K / 10-Q filing. `section` is one of:
+      "mda"            — Management's Discussion & Analysis
+      "risk_factors"   — Item 1A risk factors
+      "business"       — Business description
+      "financials"     — Financial statements
+
+    Returns the raw text trimmed to 8000 chars (~1500 tokens) so the LLM can
+    actually read it. Use SPARINGLY — costs an SEC-API call and large tokens.
+    Pass a `filing_url` from get_recent_filings.
+    """
+    fn_map = {
+        "mda": _sec.extract_mda,
+        "risk_factors": _sec.extract_risk_factors,
+        "business": _sec.extract_business_description,
+        "financials": _sec.extract_financial_statements,
+    }
+    fn = fn_map.get(section.lower())
+    if not fn:
+        return {"error": f"Unknown section '{section}'. Use: {list(fn_map.keys())}"}
+    try:
+        text = fn(filing_url) or ""
+        return {
+            "section": section,
+            "filing_url": filing_url,
+            "char_count": len(text),
+            "text": text[:8000],
+            "truncated": len(text) > 8000,
+        }
+    except Exception as e:
+        return {"error": str(e), "section": section}
 
 
 @tool
@@ -164,6 +222,11 @@ def get_options_analysis(ticker: str) -> dict:
         "max_pain": data.get("max_pain"),
         "pc_ratio_signal": data.get("pc_ratio_signal"),
         "greeks": data.get("greeks"),
+        # Enriched flow / term-structure signals
+        "term_structure": data.get("term_structure"),
+        "vol_backwardation": data.get("vol_backwardation"),
+        "flow_imbalance": data.get("flow_imbalance"),
+        "flow_signal": data.get("flow_signal"),
     }
 
 
@@ -192,6 +255,152 @@ def get_macd(ticker: str) -> dict:
     return _av.get_macd(ticker)
 
 
+# === Earnings calendar / analyst consensus / peer comp / short interest ===
+
+@tool
+def get_earnings_calendar(ticker: str) -> dict:
+    """
+    Verified next earnings date + recent reported quarters for a ticker.
+    Use this BEFORE writing 'Q2 earnings July 25' style catalysts so dates
+    are tool-grounded, not LLM-guessed.
+    """
+    return _market.get_earnings_calendar(ticker)
+
+
+@tool
+def get_analyst_consensus(ticker: str) -> dict:
+    """
+    Sell-side analyst consensus: target price (mean/high/low/median),
+    recommendation_key, number of analysts covering, forward EPS,
+    revenue growth, and implied upside vs current price.
+
+    Use this to back up 'Street is bullish' / 'beating expectations' claims
+    with actual numbers.
+    """
+    return _market.get_consensus(ticker)
+
+
+@tool
+def get_peer_comparison(ticker: str, peers: str | None = None) -> dict:
+    """
+    Pull P/E, EV/EBITDA, margin, growth for a ticker AND its sector peers
+    so valuation can be assessed in context, not in isolation.
+
+    `peers`: optional comma-separated peer tickers. If omitted, uses a
+    default peer set per sector (top 4 mega-caps in the same GICS sector).
+    Returns each peer's key ratios + the relative position of `ticker`
+    (above/below median for each metric).
+    """
+    from data.sector_map import resolve_sector
+    target_fund = _market.get_fundamentals(ticker)
+    target_sector, _ = resolve_sector(ticker, (target_fund or {}).get("sector"))
+
+    # Default peer sets — top mega-caps per GICS sector. Hand-curated so we
+    # don't burn API on a dynamic universe scan.
+    DEFAULT_PEERS: dict[str, list[str]] = {
+        "Technology": ["AAPL", "MSFT", "NVDA", "AVGO"],
+        "Communication Services": ["GOOGL", "META", "NFLX", "DIS"],
+        "Consumer Cyclical": ["AMZN", "TSLA", "HD", "MCD"],
+        "Consumer Defensive": ["WMT", "PG", "COST", "KO"],
+        "Healthcare": ["UNH", "JNJ", "LLY", "PFE"],
+        "Financial Services": ["JPM", "V", "MA", "BAC"],
+        "Industrials": ["BA", "GE", "CAT", "HON"],
+        "Energy": ["XOM", "CVX", "COP", "SLB"],
+        "Utilities": ["NEE", "SO", "DUK", "AEP"],
+        "Real Estate": ["PLD", "AMT", "EQIX", "WELL"],
+        "Basic Materials": ["LIN", "SHW", "FCX", "NEM"],
+    }
+
+    if peers:
+        peer_list = [p.strip().upper() for p in peers.split(",") if p.strip() and p.strip().upper() != ticker.upper()]
+    else:
+        peer_list = [p for p in DEFAULT_PEERS.get(target_sector, []) if p != ticker.upper()]
+
+    peer_list = peer_list[:4]  # cap at 4 peers — API conservation
+    peer_data = {}
+    for p in peer_list:
+        try:
+            f = _market.get_fundamentals(p)
+            peer_data[p] = {
+                "pe_ratio": f.get("pe_ratio"),
+                "forward_pe": f.get("forward_pe"),
+                "ev_ebitda": f.get("ev_ebitda"),
+                "profit_margin": f.get("profit_margin"),
+                "revenue_growth": f.get("revenue_growth"),
+                "market_cap": f.get("market_cap"),
+            }
+        except Exception:
+            continue
+
+    if not peer_data:
+        return {"ticker": ticker.upper(), "sector": target_sector, "peers": {}, "note": "Peer data unavailable"}
+
+    # Median by metric — flag where target lies
+    import statistics as _stats
+    metrics = ["pe_ratio", "forward_pe", "ev_ebitda", "profit_margin", "revenue_growth"]
+    target_metrics = {m: target_fund.get(m) for m in metrics}
+    medians: dict[str, float | None] = {}
+    relative: dict[str, str] = {}
+    for m in metrics:
+        vals = [pd[m] for pd in peer_data.values() if pd.get(m) is not None]
+        if vals:
+            med = float(_stats.median(vals))
+            medians[m] = round(med, 4)
+            tv = target_metrics.get(m)
+            if tv is not None:
+                if m in ("pe_ratio", "forward_pe", "ev_ebitda"):
+                    # Lower = cheaper for valuation multiples
+                    relative[m] = "cheaper" if tv < med else "richer" if tv > med else "in-line"
+                else:
+                    # Higher = better for margin/growth
+                    relative[m] = "better" if tv > med else "worse" if tv < med else "in-line"
+        else:
+            medians[m] = None
+
+    return {
+        "ticker": ticker.upper(),
+        "sector": target_sector,
+        "target_metrics": target_metrics,
+        "peers": peer_data,
+        "peer_medians": medians,
+        "relative_to_peers": relative,
+    }
+
+
+@tool
+def get_short_interest(ticker: str) -> dict:
+    """
+    Short interest signal: shortRatio (days-to-cover), float shares, short %
+    of float (when available). High short ratio (>5 days) + positive
+    earnings surprise = squeeze setup. Negligible short interest with
+    weakness = no support coming from short covering.
+    """
+    f = _market.get_fundamentals(ticker)
+    if not f:
+        return {"error": f"No fundamentals for {ticker}"}
+    short_ratio = f.get("short_ratio")
+    float_shares = f.get("float_shares")
+    shares_out = f.get("shares_outstanding")
+    interpretation = []
+    if short_ratio is not None:
+        if short_ratio >= 7:
+            interpretation.append(f"days-to-cover {short_ratio:.1f} — squeeze risk if catalyst hits")
+        elif short_ratio >= 4:
+            interpretation.append(f"days-to-cover {short_ratio:.1f} — moderate short interest")
+        else:
+            interpretation.append(f"days-to-cover {short_ratio:.1f} — light short interest")
+    return {
+        "ticker": ticker.upper(),
+        "short_ratio_days_to_cover": short_ratio,
+        "float_shares": float_shares,
+        "shares_outstanding": shares_out,
+        "short_pct_of_float_estimate": (
+            round(short_ratio / 252 * 100, 2) if short_ratio else None
+        ),
+        "notes": interpretation,
+    }
+
+
 SYSTEM_PROMPT = """You are a senior research analyst at a quantitative hedge fund. You have been
 given an analysis plan and your job is to execute it by gathering all relevant data.
 
@@ -201,6 +410,11 @@ You have access to:
 - News (NewsAPI + Finnhub): ticker news, general market news
 - SEC filings: recent filings, insider trades, full-text search
 - Technicals (Alpha Vantage): RSI, MACD — USE SPARINGLY (25 calls/day)
+- Catalyst grounding: get_earnings_calendar (verified next earnings date),
+  get_analyst_consensus (target prices, recommendation_key, forward EPS)
+- Relative valuation: get_peer_comparison (target vs sector peers' P/E,
+  margin, growth — call ONCE per primary ticker)
+- Crowding: get_short_interest (days-to-cover, short %)
 
 IMPORTANT RULES:
 1. Execute ONLY the data_requests from the plan. Do not fetch data not asked for.
@@ -210,6 +424,9 @@ IMPORTANT RULES:
 5. Alpha Vantage: only use if specifically needed for technical confirmation.
 6. SEC full-text search: use for thematic queries, not per-ticker analysis.
 7. Keep options chain calls to 1-2 tickers max.
+8. ALWAYS call get_earnings_calendar before writing earnings-date catalysts.
+9. Use get_analyst_consensus for any "Street is bullish/bearish" claim.
+10. Use get_peer_comparison instead of judging valuation in isolation.
 
 After gathering data, produce a JSON summary with:
 {{
@@ -269,6 +486,7 @@ class ResearchAnalyst(BaseAgent):
             get_finnhub_news,
             get_market_news,
             get_recent_filings,
+            get_filing_section,
             get_insider_trades,
             search_filings_fulltext,
             score_news_sentiment,
@@ -276,6 +494,11 @@ class ResearchAnalyst(BaseAgent):
             search_web,
             get_rsi,
             get_macd,
+            # New: tool-ground catalysts, valuation context, and crowding
+            get_earnings_calendar,
+            get_analyst_consensus,
+            get_peer_comparison,
+            get_short_interest,
         ]
 
     def build_input_prompt(self, context: dict) -> str:

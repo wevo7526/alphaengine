@@ -44,6 +44,7 @@ class ResearchDeskState(TypedDict):
     risk_data: dict | None
     strategy_data: dict | None
     scorecard_data: dict | None
+    portfolio_data: dict | None
     memo_data: dict | None
     error: str | None
     current_phase: str
@@ -127,11 +128,23 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
         return state
     state["current_phase"] = "strategizing"
     logger.info("[orchestrator] Portfolio Strategist building trade ideas")
+
+    # Pull portfolio snapshot so Strategist sizes new ideas against the
+    # actual book (sector caps, net exposure) rather than in a vacuum.
+    if state.get("portfolio_data") is None:
+        state["portfolio_data"] = await _fetch_portfolio_snapshot(state.get("user_id"))
+
+    # Pull scorecard early so Strategist can calibrate conviction at the source.
+    if state.get("scorecard_data") is None:
+        state["scorecard_data"] = await _fetch_scorecard_for_calibration(state.get("user_id"))
+
     output = await _with_timeout(
         _portfolio_strategist.analyze({
             "plan": state["plan_data"],
             "research": state["research_data"],
             "risk": state["risk_data"],
+            "portfolio": state.get("portfolio_data"),
+            "scorecard": state.get("scorecard_data"),
         }),
         seconds=90, label="Portfolio Strategist"
     )
@@ -147,6 +160,118 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     else:
         state["strategy_data"] = output.output
     return state
+
+
+async def _fetch_prior_memos(
+    user_id: str | None,
+    tickers: list[str] | None,
+    themes: list[str] | None,
+    limit: int = 3,
+) -> list[dict]:
+    """
+    Look up the user's most recent prior memos that overlap with the current
+    plan's tickers or themes. Used by the CIO for narrative continuity:
+    "we said this 3 weeks ago — here's how it played out."
+
+    Returns up to `limit` compact dicts: {id, query, title, decision, created_at,
+    tickers, themes, executive_summary[:300]}.
+    """
+    if not user_id:
+        return []
+    try:
+        from sqlalchemy import select, desc, or_
+        from db.database import async_session
+        from db.models import IntelligenceMemoRecord
+
+        target_tickers = set(t.upper() for t in (tickers or []))
+        target_themes = set((t or "").lower() for t in (themes or []))
+
+        async with async_session() as session:
+            # Pull recent memos for this user, post-filter for overlap.
+            result = await asyncio.wait_for(
+                session.execute(
+                    select(IntelligenceMemoRecord)
+                    .where(IntelligenceMemoRecord.user_id == user_id)
+                    .order_by(desc(IntelligenceMemoRecord.created_at))
+                    .limit(20)
+                ),
+                timeout=5.0,
+            )
+            memos = result.scalars().all()
+    except Exception as e:
+        logger.debug(f"[orchestrator] prior memos fetch failed (non-fatal): {e}")
+        return []
+
+    out: list[dict] = []
+    for m in memos:
+        memo_tickers = set(t.upper() for t in (m.tickers_analyzed or []))
+        memo_themes = set((t or "").lower() for t in (m.themes or []))
+        ticker_overlap = bool(target_tickers & memo_tickers)
+        theme_overlap = bool(target_themes & memo_themes)
+        if not (ticker_overlap or theme_overlap):
+            continue
+        out.append({
+            "id": m.id,
+            "query": (m.query or "")[:200],
+            "title": (m.title or "")[:160],
+            "executive_summary": (m.executive_summary or "")[:400],
+            "macro_regime": m.macro_regime,
+            "tickers": list(memo_tickers),
+            "themes": list(memo_themes),
+            "created_at": str(m.created_at) if m.created_at else None,
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
+async def _fetch_portfolio_snapshot(user_id: str | None) -> dict | None:
+    """
+    Fetch a compact view of the user's existing open trades so the Strategist
+    and CIO can size new ideas against the actual book. Never raises — falls
+    back to None for cold-start users.
+    """
+    if not user_id:
+        return None
+    try:
+        from sqlalchemy import select
+        from db.database import async_session
+        from db.models import TradeRecord
+        from data.sector_map import resolve_sector
+        from data.market_client import MarketDataClient
+
+        mc = MarketDataClient()
+        async with async_session() as session:
+            result = await asyncio.wait_for(
+                session.execute(
+                    select(TradeRecord).where(
+                        TradeRecord.status == "open",
+                        TradeRecord.user_id == user_id,
+                    )
+                ),
+                timeout=5.0,
+            )
+            trades = result.scalars().all()
+
+        positions = []
+        for t in trades:
+            yahoo_sec = None
+            try:
+                fund = mc.get_fundamentals(t.ticker)
+                yahoo_sec = (fund or {}).get("sector")
+            except Exception:
+                pass
+            sector, _ = resolve_sector(t.ticker, yahoo_sec)
+            positions.append({
+                "ticker": t.ticker,
+                "direction": t.direction,
+                "size_pct": float(t.position_size_pct or 0),
+                "sector": sector,
+            })
+        return {"open_positions": positions, "count": len(positions)}
+    except Exception as e:
+        logger.debug(f"[orchestrator] portfolio snapshot fetch failed (non-fatal): {e}")
+        return None
 
 
 async def _fetch_scorecard_for_calibration(user_id: str | None) -> dict | None:
@@ -179,8 +304,19 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
 
     # Adaptive calibration: pull track record before invoking the CIO so it
     # can dampen conviction in low-IC buckets and reinforce high-IC ones.
-    scorecard = await _fetch_scorecard_for_calibration(state.get("user_id"))
-    state["scorecard_data"] = scorecard
+    scorecard = state.get("scorecard_data")
+    if scorecard is None:
+        scorecard = await _fetch_scorecard_for_calibration(state.get("user_id"))
+        state["scorecard_data"] = scorecard
+
+    # Continuity context: prior memos for any ticker/theme overlap so the
+    # CIO can reconcile with the user's existing narrative on this name.
+    plan = state.get("plan_data") or {}
+    prior_memos = await _fetch_prior_memos(
+        state.get("user_id"),
+        plan.get("tickers") or [],
+        plan.get("themes") or [],
+    )
 
     output = await _with_timeout(
         _cio_synthesizer.synthesize({
@@ -189,6 +325,7 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
             "risk": state["risk_data"],
             "strategy": state["strategy_data"],
             "scorecard": scorecard,
+            "prior_memos": prior_memos,
         }),
         seconds=120, label="CIO Synthesizer"
     )
@@ -259,6 +396,7 @@ async def run_research_desk(query: str, user_id: str | None = None) -> Intellige
         "risk_data": None,
         "strategy_data": None,
         "scorecard_data": None,
+        "portfolio_data": None,
         "memo_data": None,
         "error": None,
         "current_phase": "idle",
@@ -289,6 +427,22 @@ async def run_research_desk(query: str, user_id: str | None = None) -> Intellige
     memo_data["trade_ideas"] = strategy.get("trade_ideas", [])  # Always use structured data
     memo_data["portfolio_positioning"] = strategy.get("portfolio_positioning", "")
     memo_data["hedging_recommendations"] = strategy.get("hedging_recommendations", [])
+
+    # Run the Decision Gate (programmatic) using the user's scorecard for
+    # track-record-adjusted confidence.
+    try:
+        from agents.desk5_decision_gate import compute_decision
+        decision = compute_decision(
+            trade_ideas=strategy.get("trade_ideas", []),
+            macro_regime=risk.get("macro_regime", "unknown"),
+            overall_risk_level=risk.get("overall_risk_level", "elevated"),
+            scorecard=final_state.get("scorecard_data"),
+        )
+        memo_data["decision"] = decision.get("decision", "WATCH")
+        memo_data["decision_reason"] = decision.get("reason", "")
+        memo_data["decision_confidence"] = decision.get("confidence", 0)
+    except Exception as e:
+        logger.warning(f"[orchestrator] Decision gate failed: {e}")
 
     memo = IntelligenceMemo(**memo_data)
     logger.info(f"[orchestrator] Memo complete: {memo.title}")

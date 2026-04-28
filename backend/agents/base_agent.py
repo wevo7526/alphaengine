@@ -108,10 +108,21 @@ class BaseAgent:
             max_iterations=self.max_iterations,
             handle_parsing_errors=True,
             callbacks=callbacks or None,
+            # Surface tool results so the grounding tripwire can scan them.
+            return_intermediate_steps=True,
         )
 
     async def analyze(self, context: dict, callbacks: list | None = None) -> AgentOutput:
-        """Run analysis given the pipeline context."""
+        """
+        Run analysis given the pipeline context.
+
+        Robustness:
+          - If the agent produces malformed JSON, fire ONE corrective re-prompt
+            asking the LLM to output strict JSON only. Catches a meaningful
+            fraction of "almost JSON" outputs (markdown wrappers, leading
+            prose, trailing commentary) without doubling the latency budget
+            on every successful run.
+        """
         input_prompt = self.build_input_prompt(context)
         logger.info(f"[{self.agent_name}] Starting analysis")
 
@@ -121,6 +132,47 @@ class BaseAgent:
             result = await executor.ainvoke({"input": input_prompt}, config=config)
             output_text = self._extract_text(result.get("output", "{}"))
             parsed = self._parse_json(output_text)
+
+            # If parse fell back to wrapping text as data_summary, attempt
+            # one corrective re-prompt with the original output appended.
+            if parsed.get("parse_error") and len(output_text) > 50:
+                logger.warning(f"[{self.agent_name}] JSON malformed; firing corrective re-prompt")
+                corrective = (
+                    "Your previous response was not valid JSON. Re-emit it as STRICT JSON "
+                    "with no markdown fences, no leading prose, no trailing commentary. "
+                    "Match the schema in the system prompt exactly. Here is your previous "
+                    "output verbatim — fix it:\n\n"
+                    + output_text[:3000]
+                )
+                try:
+                    retry = await executor.ainvoke({"input": corrective}, config=config)
+                    retry_text = self._extract_text(retry.get("output", "{}"))
+                    re_parsed = self._parse_json(retry_text)
+                    if not re_parsed.get("parse_error"):
+                        parsed = re_parsed
+                        logger.info(f"[{self.agent_name}] Corrective re-prompt succeeded")
+                    else:
+                        logger.warning(f"[{self.agent_name}] Corrective re-prompt still malformed; using fallback")
+                except Exception as e:
+                    logger.warning(f"[{self.agent_name}] Corrective re-prompt failed: {e}")
+
+            # Tool-grounding tripwire: collect tool-result strings from the
+            # executor's intermediate steps and check the narrative's numeric
+            # claims against them. Adds parsed["_grounding"] for downstream
+            # display and audit.
+            try:
+                tool_results: list[str] = []
+                for step in (result.get("intermediate_steps") or []):
+                    # LangChain returns (action, observation) tuples
+                    if isinstance(step, (list, tuple)) and len(step) >= 2:
+                        obs = step[1]
+                        tool_results.append(json.dumps(obs, default=str))
+                tool_text = "\n".join(tool_results)
+                if tool_text:
+                    parsed = self._ground_check(parsed, tool_text)
+            except Exception as e:
+                logger.debug(f"[{self.agent_name}] grounding check skipped: {e}")
+
             logger.info(f"[{self.agent_name}] Analysis complete")
             return AgentOutput(
                 agent_name=self.agent_name,
@@ -152,6 +204,83 @@ class BaseAgent:
         if isinstance(output, dict):
             return output.get("text", output.get("content", json.dumps(output)))
         return str(output)
+
+    def _ground_check(self, parsed: dict, tool_results_text: str) -> dict:
+        """
+        Lightweight tool-grounding heuristic. Scans the agent's narrative
+        output for numeric claims (P/E ratios, percentages, dollar values)
+        and flags any number that doesn't appear (within rounding tolerance)
+        in the concatenated tool-result string. NOT a full provenance trace
+        — a tripwire.
+
+        Adds `_grounding` to parsed: {numeric_claims: int, ungrounded: list,
+        confidence: "high"|"medium"|"low"}.
+        """
+        if not isinstance(parsed, dict):
+            return parsed
+        narrative = (
+            parsed.get("data_summary")
+            or parsed.get("risk_narrative")
+            or parsed.get("strategy_narrative")
+            or ""
+        )
+        if not isinstance(narrative, str) or len(narrative) < 50 or not tool_results_text:
+            return parsed
+
+        # Extract numeric tokens with at most 2 decimals. We only check
+        # plausible "claim" numbers (skip 0/1/100 — too generic).
+        candidates = re.findall(r"\b\d{1,4}(?:\.\d{1,2})?\b", narrative)
+        ungrounded = []
+        seen = set()
+        for c in candidates:
+            if c in seen:
+                continue
+            seen.add(c)
+            try:
+                val = float(c)
+            except ValueError:
+                continue
+            if val <= 1 or val == 100:
+                continue
+            # Match within ±2% tolerance — strict equality fails on rounding.
+            if val == 0:
+                continue
+            tol = max(0.05, abs(val) * 0.02)
+            # Quick string check first (cheap)
+            rounded_strs = {f"{val:.0f}", f"{val:.1f}", f"{val:.2f}", c}
+            if any(s in tool_results_text for s in rounded_strs):
+                continue
+            # Numeric tolerance scan over tool-result numbers
+            tool_nums = re.findall(r"-?\d+(?:\.\d+)?", tool_results_text)
+            grounded = False
+            for tn in tool_nums:
+                try:
+                    if abs(float(tn) - val) <= tol:
+                        grounded = True
+                        break
+                except ValueError:
+                    continue
+            if not grounded:
+                ungrounded.append(c)
+
+        n_claims = len(seen)
+        n_ungrounded = len(ungrounded)
+        if n_claims == 0:
+            confidence = "n/a"
+        elif n_ungrounded / max(1, n_claims) > 0.4:
+            confidence = "low"
+        elif n_ungrounded / max(1, n_claims) > 0.15:
+            confidence = "medium"
+        else:
+            confidence = "high"
+
+        parsed["_grounding"] = {
+            "numeric_claims": n_claims,
+            "ungrounded_count": n_ungrounded,
+            "ungrounded_samples": ungrounded[:10],
+            "confidence": confidence,
+        }
+        return parsed
 
     def _parse_json(self, text: str) -> dict:
         """Extract JSON from LLM output, with progressive repair passes."""

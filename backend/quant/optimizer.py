@@ -34,10 +34,22 @@ def mean_variance_optimize(
     cov_matrix: dict,
     target_vol: float = 0.15,
     long_only: bool = True,
+    current_weights: dict[str, float] | None = None,
+    transaction_cost_bps: float = 10.0,
+    max_position_size: float = 0.05,
 ) -> dict:
     """
     Classical Markowitz mean-variance optimization.
-    Maximize Sharpe ratio subject to constraints.
+
+    Maximizes Sharpe ratio subject to weights summing to 1, bounded per-name
+    by `max_position_size` (default 5% — matches the risk gate so the
+    optimizer can't suggest weights the gate will reject downstream).
+
+    Transaction cost penalty: when `current_weights` is supplied, the
+    objective deducts `transaction_cost_bps * sum(|delta_w|)` from expected
+    return. This kills the classic MV pathology where a tiny estimated-return
+    differential triggers a complete rebalance — a real fund's turnover would
+    bleed all the alpha in commissions.
     """
     tickers = cov_matrix.get("tickers", [])
     matrix = cov_matrix.get("matrix", [])
@@ -48,26 +60,28 @@ def mean_variance_optimize(
     mu = np.array([expected_returns.get(t, 0) for t in tickers])
     cov = np.array(matrix)
     cov = np.where(cov == None, 0, cov).astype(float)
+    w_current = np.array([(current_weights or {}).get(t, 0.0) for t in tickers])
+    tc = transaction_cost_bps / 10000.0
 
-    # Maximize Sharpe: min -mu^T w / sqrt(w^T cov w)
-    # Equivalent: min w^T cov w subject to mu^T w >= target
     def neg_sharpe(w):
         port_ret = mu @ w
+        if current_weights is not None:
+            # Linear turnover penalty — proxy for round-trip transaction costs
+            port_ret -= tc * float(np.sum(np.abs(w - w_current)))
         port_vol = np.sqrt(w @ cov @ w)
         if port_vol == 0:
             return 0
         return -port_ret / port_vol
 
-    # Constraints
-    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]  # Weights sum to 1
+    constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
 
-    # Bounds
+    cap = max(0.0, min(1.0, max_position_size))
     if long_only:
-        bounds = [(0, 0.20) for _ in range(n)]  # Max 20% per position
+        bounds = [(0, cap) for _ in range(n)]
     else:
-        bounds = [(-0.20, 0.20) for _ in range(n)]
+        bounds = [(-cap, cap) for _ in range(n)]
 
-    w0 = np.ones(n) / n  # Equal weight start
+    w0 = np.ones(n) / n
 
     result = minimize(neg_sharpe, w0, method="SLSQP", bounds=bounds, constraints=constraints)
 
@@ -78,12 +92,17 @@ def mean_variance_optimize(
     weights = {tickers[i]: _clean(round(float(result.x[i]), 4)) for i in range(n)}
     port_ret = float(mu @ result.x)
     port_vol = float(np.sqrt(result.x @ cov @ result.x))
+    turnover = float(np.sum(np.abs(result.x - w_current))) if current_weights is not None else 0.0
+    tc_drag = tc * turnover
 
     return {
         "weights": weights,
         "expected_return_pct": _clean(round(port_ret * 100, 2)),
         "expected_vol_pct": _clean(round(port_vol * 100, 2)),
         "sharpe": _clean(round(port_ret / port_vol, 3)) if port_vol > 0 else None,
+        "turnover_pct": _clean(round(turnover * 100, 2)),
+        "tx_cost_drag_pct": _clean(round(tc_drag * 100, 4)),
+        "max_position_cap_pct": round(cap * 100, 2),
         "method": "mean_variance",
     }
 
@@ -95,6 +114,7 @@ def black_litterman(
     view_confidences: dict[str, float],
     risk_aversion: float = 2.5,
     tau: float = 0.05,
+    max_position_size: float = 0.05,
 ) -> dict:
     """
     Black-Litterman model.
@@ -127,12 +147,28 @@ def black_litterman(
     Q = np.zeros(k)  # View vector
     omega_diag = np.zeros(k)  # View uncertainty
 
+    # View confidence -> Omega (view uncertainty) mapping.
+    # Original code used omega = (1 - conf) / conf * tau * Sigma[idx, idx],
+    # which collapses to Omega ≈ tau*Sigma at conf=0.5 — drowning every
+    # mid-conviction view under prior uncertainty. That made the system
+    # treat 75-conviction signals like 50-conviction signals.
+    #
+    # Fixed mapping: a confidence floor of 0.5 (we never trust conviction
+    # below that) maps via squared falloff so a conviction of 1.0 yields
+    # very tight Omega (strong view), and a conviction of 0.5 yields Omega
+    # equal to tau * variance (i.e., the prior dominates only at the floor,
+    # not at every middle value). Matches Idzorek's (2002) confidence-based
+    # weighting in spirit.
     for j, t in enumerate(view_tickers):
         idx = tickers.index(t)
         P[j, idx] = 1
         Q[j] = views[t]
-        conf = max(0.01, view_confidences.get(t, 0.5))
-        omega_diag[j] = (1 - conf) / conf * tau * Sigma[idx, idx]
+        raw_conf = float(view_confidences.get(t, 0.5))
+        conf = max(0.5, min(1.0, raw_conf))   # floor at 0.5
+        # Falloff: at conf=1.0, omega ≈ 0.05 * tau * sigma (near-certain);
+        #         at conf=0.5, omega ≈ tau * sigma (prior weight equals view).
+        falloff = ((1.0 - conf) / 0.5) ** 2 + 0.05
+        omega_diag[j] = max(1e-8, falloff * tau * float(Sigma[idx, idx]))
 
     Omega = np.diag(omega_diag)
 
@@ -149,7 +185,8 @@ def black_litterman(
         return -(w @ mu_bl - (risk_aversion / 2) * w @ Sigma @ w)
 
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
-    bounds = [(0, 0.20) for _ in range(n)]
+    cap = max(0.0, min(1.0, max_position_size))
+    bounds = [(0, cap) for _ in range(n)]
     w0 = np.ones(n) / n
 
     result = minimize(neg_utility, w0, method="SLSQP", bounds=bounds, constraints=constraints)

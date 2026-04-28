@@ -160,6 +160,29 @@ class FREDDataClient:
         logger.info(f"Fetched {len(result)} observations for {series_id}")
         return result
 
+    def get_risk_free_rate(self) -> float:
+        """
+        Fetch current 3-month Treasury yield (DGS3MO) as the risk-free rate.
+
+        Falls back to 4% if FRED is unreachable. Result is decimal (0.045 for
+        4.5%) and cached via the underlying single-indicator cache (1h TTL),
+        so this is cheap to call repeatedly.
+
+        Why DGS3MO and not Fed funds: Treasuries are the textbook risk-free
+        proxy for Sharpe-style calculations, and DGS3MO closely tracks the
+        Fed funds path while being a true tradable rate.
+        """
+        try:
+            data = self.get_single_indicator("DGS3MO")
+            if data and data.get("value") is not None:
+                # FRED returns DGS3MO as a percentage (e.g. 5.25 for 5.25%)
+                pct = float(data["value"])
+                if 0 < pct < 25:  # sanity bounds
+                    return pct / 100.0
+        except Exception as e:
+            logger.warning(f"get_risk_free_rate fallback to 4% (FRED failed: {e})")
+        return 0.04
+
     def get_single_indicator(self, series_id: str) -> dict | None:
         cached = self._single_cache.get(series_id)
         if cached is not None:

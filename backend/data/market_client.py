@@ -41,6 +41,19 @@ _FUNDAMENTALS_MAX = 512
 _OPTIONS_MAX = 256
 
 
+def _safe_float(v) -> float | None:
+    """Coerce yfinance/pandas scalars to plain floats. NaN -> None."""
+    try:
+        if v is None:
+            return None
+        f = float(v)
+        if f != f:  # NaN
+            return None
+        return f
+    except (TypeError, ValueError):
+        return None
+
+
 def _retry_sync(fn, retries: int = 1, label: str = "yfinance"):
     """Single retry with jittered backoff for yfinance calls."""
     last_exc: Exception | None = None
@@ -73,6 +86,165 @@ class MarketDataClient:
     # ── Sync interface ─────────────────────────────────────────────
     # Agents still call these inside LangChain tool wrappers (sync).
     # Inside async handlers / agents, prefer the `a*` variants below.
+
+    def get_earnings_calendar(self, ticker: str) -> dict:
+        """
+        Next earnings date + last reported date for a ticker, plus EPS
+        actuals/estimates when available. Cached on the same TTL as
+        fundamentals — earnings calendars don't move daily.
+
+        Replaces LLM-hallucinated catalyst dates ("Q2 earnings July 25")
+        with tool-verified ones.
+        """
+        cache_key = f"EARN:{ticker}"
+        cached = self._fundamentals_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        def _fetch() -> dict:
+            stock = yf.Ticker(ticker)
+            out: dict = {"ticker": ticker.upper()}
+            # Calendar — yfinance returns a DataFrame with "Earnings Date" col
+            try:
+                cal = stock.calendar
+                if cal is not None:
+                    if hasattr(cal, "to_dict"):  # DataFrame
+                        d = cal.to_dict()
+                        # Extract first earnings date if present
+                        ed = d.get("Earnings Date") or d.get("earningsDate")
+                        if ed:
+                            vals = list(ed.values()) if isinstance(ed, dict) else list(ed)
+                            if vals:
+                                out["next_earnings_date"] = str(vals[0])
+                    elif isinstance(cal, dict):
+                        ed = cal.get("Earnings Date") or cal.get("earningsDate")
+                        if ed:
+                            vals = ed if isinstance(ed, list) else [ed]
+                            out["next_earnings_date"] = str(vals[0])
+            except Exception as e:
+                logger.debug(f"earnings calendar fetch (cal) {ticker}: {e}")
+            # Earnings dates DataFrame — historical actual vs estimate
+            try:
+                ed = stock.earnings_dates
+                if ed is not None and hasattr(ed, "head"):
+                    rows = []
+                    for idx, row in ed.head(8).iterrows():
+                        rows.append({
+                            "date": str(idx.date()) if hasattr(idx, "date") else str(idx),
+                            "eps_estimate": _safe_float(row.get("EPS Estimate")),
+                            "eps_actual": _safe_float(row.get("Reported EPS")),
+                            "surprise_pct": _safe_float(row.get("Surprise(%)")),
+                        })
+                    out["recent_earnings"] = rows
+                    # Most recent past report
+                    past = [r for r in rows if r.get("eps_actual") is not None]
+                    if past:
+                        out["last_reported"] = past[0]
+                    # Next upcoming
+                    upcoming = [r for r in rows if r.get("eps_actual") is None]
+                    if upcoming:
+                        out.setdefault("next_earnings_date", upcoming[-1]["date"])
+            except Exception as e:
+                logger.debug(f"earnings calendar fetch (dates) {ticker}: {e}")
+            return out
+
+        try:
+            result = _retry_sync(_fetch, label=f"yf.calendar({ticker})")
+        except Exception as e:
+            logger.warning(f"earnings calendar failed for {ticker}: {e}")
+            return {"ticker": ticker.upper(), "error": str(e)}
+
+        self._fundamentals_cache.set(cache_key, result)
+        return result
+
+    def get_consensus(self, ticker: str) -> dict:
+        """
+        Analyst consensus (target price, recommendation, EPS forward).
+        Pulled from yfinance `info` — no separate API call required.
+
+        Returns target_mean / target_high / target_low / num_analysts /
+        recommendation_key + forward EPS estimate.
+        """
+        cache_key = f"CONS:{ticker}"
+        cached = self._fundamentals_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        def _fetch() -> dict:
+            stock = yf.Ticker(ticker)
+            info = stock.info or {}
+            current = info.get("currentPrice") or info.get("regularMarketPrice")
+            target_mean = info.get("targetMeanPrice")
+            implied = None
+            if target_mean and current and current > 0:
+                implied = round((target_mean - current) / current * 100, 2)
+            return {
+                "ticker": ticker.upper(),
+                "current_price": current,
+                "target_mean": target_mean,
+                "target_high": info.get("targetHighPrice"),
+                "target_low": info.get("targetLowPrice"),
+                "target_median": info.get("targetMedianPrice"),
+                "num_analysts": info.get("numberOfAnalystOpinions"),
+                "recommendation_mean": info.get("recommendationMean"),
+                "recommendation_key": info.get("recommendationKey"),
+                "forward_eps": info.get("forwardEps"),
+                "trailing_eps": info.get("trailingEps"),
+                "earnings_growth": info.get("earningsGrowth"),
+                "revenue_growth": info.get("revenueGrowth"),
+                "implied_upside_pct": implied,
+            }
+
+        try:
+            result = _retry_sync(_fetch, label=f"yf.consensus({ticker})")
+        except Exception as e:
+            logger.warning(f"consensus fetch failed for {ticker}: {e}")
+            return {"ticker": ticker.upper(), "error": str(e)}
+
+        self._fundamentals_cache.set(cache_key, result)
+        return result
+
+    def get_total_return_history(self, ticker: str, period: str = "1y") -> list[dict]:
+        """
+        Total-return-adjusted price history. Adjusted for splits AND
+        dividends — used by the backtester so dividend-paying names don't
+        understate strategy returns by 2-5%/yr.
+
+        Cached separately from `get_price_history` (which keeps unadjusted
+        closes for live UI / mark-to-market display).
+        """
+        cache_key = f"TR:{ticker}:{period}"
+        cached = self._price_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        def _fetch() -> list[dict]:
+            stock = yf.Ticker(ticker)
+            df = stock.history(period=period, auto_adjust=True, actions=False)
+            if df is None or df.empty:
+                return []
+            return [
+                {
+                    "date": str(idx.date()),
+                    "open": round(float(row["Open"]), 4),
+                    "high": round(float(row["High"]), 4),
+                    "low": round(float(row["Low"]), 4),
+                    "close": round(float(row["Close"]), 4),
+                    "volume": int(row["Volume"]),
+                }
+                for idx, row in df.iterrows()
+            ]
+
+        try:
+            result = _retry_sync(_fetch, label=f"yf.history({ticker},auto_adjust)")
+        except Exception as e:
+            logger.warning(f"yfinance total-return history failed for {ticker}: {e}")
+            return []
+
+        if result:
+            self._price_cache.set(cache_key, result)
+        logger.info(f"Fetched {len(result)} total-return bars for {ticker} ({period})")
+        return result
 
     def get_price_history(self, ticker: str, period: str = "6mo") -> list[dict]:
         cache_key = f"{ticker}:{period}"
@@ -136,6 +308,13 @@ class MarketDataClient:
                 "sector": info.get("sector"),
                 "industry": info.get("industry"),
                 "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                # Liquidity inputs: average daily volume + bid/ask + float
+                "avg_volume_10d": info.get("averageDailyVolume10Day") or info.get("averageVolume10days"),
+                "avg_volume_3m": info.get("averageVolume") or info.get("averageDailyVolume3Month"),
+                "bid": info.get("bid"),
+                "ask": info.get("ask"),
+                "shares_outstanding": info.get("sharesOutstanding"),
+                "float_shares": info.get("floatShares"),
             }
 
         try:
