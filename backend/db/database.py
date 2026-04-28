@@ -150,6 +150,41 @@ async def _migrate_columns() -> None:
         except Exception as e:
             logger.debug(f"Index skip {name}: {e}")
 
+    # Postgres-only: convert legacy naive TIMESTAMP columns to TIMESTAMPTZ.
+    # Existing rows are tagged as UTC (which is what the app has always written).
+    # Idempotent: if already TIMESTAMPTZ, ALTER is a no-op for type and we swallow
+    # any "already X" error per-statement.
+    if DB_DIALECT == "postgres":
+        tz_columns = [
+            ("intelligence_memos", "created_at"),
+            ("trades", "opened_at"),
+            ("trades", "closed_at"),
+            ("portfolio", "updated_at"),
+            ("portfolio_snapshots", "created_at"),
+            ("backtest_runs", "created_at"),
+            ("backtest_results", "created_at"),
+            ("factor_exposures", "created_at"),
+            ("regime_states", "created_at"),
+            ("macro_snapshots", "created_at"),
+            ("scan_findings", "created_at"),
+            ("scan_runs", "started_at"),
+            ("scan_runs", "completed_at"),
+            ("signal_scores", "signal_date"),
+            ("signal_scores", "scored_at"),
+            ("watchlist", "added_at"),
+            ("morning_reports", "created_at"),
+        ]
+        for table, column in tz_columns:
+            try:
+                async with engine.begin() as conn:
+                    await conn.execute(text(
+                        f"ALTER TABLE {table} ALTER COLUMN {column} "
+                        f"TYPE TIMESTAMPTZ USING {column} AT TIME ZONE 'UTC'"
+                    ))
+                logger.info(f"Migrated {table}.{column} -> TIMESTAMPTZ")
+            except Exception as e:
+                logger.debug(f"TIMESTAMPTZ migration skip {table}.{column}: {e}")
+
 
 async def ping_db(timeout: float = 3.0) -> dict:
     """

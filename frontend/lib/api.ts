@@ -67,6 +67,7 @@ async function request<T>(path: string, init?: RequestInit & { timeoutMs?: numbe
 
 export const api = {
   health: () => request("/api/health"),
+  systemInfo: () => request("/api/system/info"),
   authMe: () => request<{ user_id: string; authenticated: boolean }>("/api/auth/me"),
 
   analyze: (query: string) =>
@@ -137,7 +138,6 @@ export const api = {
   // PDF Export — returns URLs; actual download needs auth headers handled manually
   exportMemoUrl: (memoId: string) => `${getApiBase()}/api/export/memo/${memoId}`,
   exportPortfolioUrl: () => `${getApiBase()}/api/export/portfolio`,
-  exportScanLatestUrl: () => `${getApiBase()}/api/export/scan/latest`,
   exportScorecardUrl: () => `${getApiBase()}/api/export/scorecard`,
   exportMorningUrl: () => `${getApiBase()}/api/export/morning`,
   exportRangeUrl: (start: string, end: string) =>
@@ -191,12 +191,6 @@ export const api = {
   latestMemos: (limit = 20) => request(`/api/signals/latest?limit=${limit}`),
   deleteMemo: (id: string) =>
     request(`/api/signals/${id}`, { method: "DELETE" }),
-
-  // Scan / Screening Desk
-  scanLatest: () => request("/api/scan/latest"),
-  scanTrigger: () =>
-    request("/api/scan/trigger", { method: "POST" }),
-  scanStatus: () => request("/api/scan/status"),
 
   // Watchlist
   watchlist: () => request("/api/watchlist"),

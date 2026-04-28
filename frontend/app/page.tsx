@@ -5,7 +5,6 @@ import Link from "next/link";
 import { api } from "@/lib/api";
 import { MacroChart } from "@/components/MacroChart";
 import { MemoPanel } from "@/components/MemoPanel";
-import { ScanFindings } from "@/components/ScanFindings";
 import type { MacroIndicator, IntelligenceMemo } from "@/lib/types";
 
 interface MacroSeries {
@@ -28,6 +27,18 @@ interface MorningReport {
   macro_regime?: string;
   overall_risk_level?: string;
   trade_ideas?: { ticker: string; direction: string; conviction: number; thesis: string }[];
+}
+
+interface PortfolioSummary {
+  open_positions: number;
+  closed_positions: number;
+  total_size_pct: number | null;
+  unrealized_pnl_pct: number | null;
+  unrealized_pnl_dollars: number | null;
+  realized_pnl_pct: number | null;
+  wins: number;
+  losses: number;
+  win_rate: number | null;
 }
 
 const ALL_INDICATORS: Record<string, string> = {
@@ -55,6 +66,14 @@ export default function HomePage() {
   const [expandedMemo, setExpandedMemo] = useState<number | null>(null);
   const [regime, setRegime] = useState<Record<string, unknown> | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+  const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
+
+  const recordError = (label: string, e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    setApiError(`${label}: ${msg}`);
+    if (typeof console !== "undefined") console.error(`[dashboard] ${label}`, e);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -73,11 +92,18 @@ export default function HomePage() {
 
     api.regime().then((d: unknown) => {
       if (!cancelled) setRegime(d as Record<string, unknown>);
-    }).catch(() => {});
+    }).catch((e) => { if (!cancelled) recordError("regime", e); });
 
     api.latestMemos(5).then((d: unknown) => {
       if (!cancelled) setRecentMemos((d as { memos: IntelligenceMemo[] }).memos || []);
-    }).catch(() => {});
+    }).catch((e) => { if (!cancelled) recordError("recent analyses", e); });
+
+    api.positions().then((d: unknown) => {
+      if (!cancelled) {
+        const data = d as { summary?: PortfolioSummary };
+        if (data.summary) setPortfolio(data.summary);
+      }
+    }).catch(() => { /* portfolio is optional on cold start */ });
 
     // Auto-load morning report only between 4:00-8:30 AM EST
     const now = new Date();
@@ -103,7 +129,10 @@ export default function HomePage() {
     api.morningReport().then((d: unknown) => {
       setMorningReport(d as MorningReport);
       setReportLoading(false);
-    }).catch(() => setReportLoading(false));
+    }).catch((e) => {
+      recordError("morning report", e);
+      setReportLoading(false);
+    });
   };
 
   const indicators = macro?.indicators ?? {};
@@ -111,6 +140,21 @@ export default function HomePage() {
 
   return (
     <div className="p-8 max-w-6xl">
+      {apiError && (
+        <div className="mb-4 flex items-start justify-between rounded-xl border border-signal-red/25 bg-signal-red/[0.06] p-3">
+          <div>
+            <p className="text-xs font-medium text-signal-red">Data load issue</p>
+            <p className="text-[11px] text-text-tertiary mt-0.5">{apiError}</p>
+          </div>
+          <button
+            onClick={() => setApiError(null)}
+            className="text-text-quaternary hover:text-text-primary text-xs px-2"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
@@ -128,9 +172,6 @@ export default function HomePage() {
           New Analysis
         </Link>
       </div>
-
-      {/* Overnight Scan — auto-populating findings */}
-      <ScanFindings />
 
       {/* Morning Report */}
       <div className="rounded-xl border border-border-primary bg-bg-surface p-5 mb-6">
@@ -190,6 +231,47 @@ export default function HomePage() {
           </div>
         )}
       </div>
+
+      {/* Portfolio P&L mini-card */}
+      {portfolio && portfolio.open_positions > 0 && (
+        <Link href="/portfolio" className="block mb-6 group">
+          <div className="rounded-xl border border-border-primary bg-bg-surface p-4 group-hover:border-zinc-600 transition-colors">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-6">
+                <div>
+                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Open Positions</p>
+                  <p className="text-lg font-mono font-medium text-text-primary">{portfolio.open_positions}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Capital Deployed</p>
+                  <p className="text-lg font-mono font-medium text-text-primary">
+                    {portfolio.total_size_pct != null ? `${portfolio.total_size_pct.toFixed(1)}%` : "—"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Unrealized P&amp;L</p>
+                  <p className={`text-lg font-mono font-medium ${
+                    portfolio.unrealized_pnl_pct != null
+                      ? portfolio.unrealized_pnl_pct >= 0 ? "text-signal-green" : "text-signal-red"
+                      : "text-text-primary"
+                  }`}>
+                    {portfolio.unrealized_pnl_pct != null
+                      ? `${portfolio.unrealized_pnl_pct >= 0 ? "+" : ""}${portfolio.unrealized_pnl_pct.toFixed(2)}%`
+                      : "—"}
+                  </p>
+                </div>
+                {portfolio.win_rate != null && (
+                  <div>
+                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Win Rate</p>
+                    <p className="text-lg font-mono font-medium text-text-primary">{portfolio.win_rate.toFixed(0)}%</p>
+                  </div>
+                )}
+              </div>
+              <span className="text-[11px] text-text-tertiary group-hover:text-text-secondary transition-colors">View portfolio →</span>
+            </div>
+          </div>
+        </Link>
+      )}
 
       {/* Regime Detection */}
       {regime && (

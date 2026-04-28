@@ -962,16 +962,45 @@ function TradeRow({ trade, onClose }: { trade: Trade; onClose?: (id: string) => 
   const [closing, setClosing] = useState(false);
   const [exitPrice, setExitPrice] = useState("");
   const [showClose, setShowClose] = useState(false);
+  const [marketPrice, setMarketPrice] = useState<number | null>(null);
+  const [marketLoading, setMarketLoading] = useState(false);
   const dir = DIRECTION_STYLE[trade.direction as keyof typeof DIRECTION_STYLE] ?? DIRECTION_STYLE.neutral;
 
-  const handleClose = async () => {
-    if (!exitPrice) return;
+  const fetchMarketPrice = async () => {
+    setMarketLoading(true);
+    try {
+      const data = await api.market(trade.ticker, "1mo") as { fundamentals?: { current_price?: number } };
+      const price = data.fundamentals?.current_price;
+      if (price && price > 0) {
+        setMarketPrice(price);
+        if (!exitPrice) setExitPrice(price.toFixed(2));
+      }
+    } catch { /* leave blank */ }
+    setMarketLoading(false);
+  };
+
+  const openCloseUI = () => {
+    setShowClose(true);
+    if (!marketPrice) fetchMarketPrice();
+  };
+
+  const handleClose = async (priceOverride?: number) => {
+    const px = priceOverride ?? parseFloat(exitPrice);
+    if (!px || px <= 0) return;
     setClosing(true);
     try {
-      await api.closeTrade(trade.id, parseFloat(exitPrice));
+      await api.closeTrade(trade.id, px);
       onClose?.(trade.id);
     } catch { /* ignore */ }
     setClosing(false);
+  };
+
+  const handleCloseAtMarket = async () => {
+    if (!marketPrice) {
+      await fetchMarketPrice();
+      return;
+    }
+    await handleClose(marketPrice);
   };
 
   return (
@@ -1005,27 +1034,35 @@ function TradeRow({ trade, onClose }: { trade: Trade; onClose?: (id: string) => 
       {trade.status === "open" && onClose && (
         <div className="mt-3 pt-3 border-t border-border-primary">
           {showClose ? (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={handleCloseAtMarket}
+                disabled={closing || marketLoading}
+                className="px-2 py-1 rounded-lg bg-white text-bg-primary text-[11px] font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
+              >
+                {marketLoading ? "Loading market..." : marketPrice ? `Close @ Market $${marketPrice.toFixed(2)}` : "Fetch Market Price"}
+              </button>
+              <span className="text-[10px] text-text-quaternary">or</span>
               <input
                 type="number"
                 step="0.01"
                 value={exitPrice}
                 onChange={(e) => setExitPrice(e.target.value)}
-                placeholder="Exit price..."
-                className="bg-bg-primary border border-border-primary rounded-lg px-2 py-1 text-xs text-text-primary outline-none w-28"
+                placeholder="Custom exit"
+                className="bg-bg-primary border border-border-primary rounded-lg px-2 py-1 text-xs text-text-primary outline-none w-24"
               />
               <button
-                onClick={handleClose}
+                onClick={() => handleClose()}
                 disabled={closing || !exitPrice}
                 className="px-2 py-1 rounded-lg bg-signal-red/10 text-signal-red text-[11px] font-medium hover:bg-signal-red/20 transition-colors disabled:opacity-40"
               >
-                {closing ? "Closing..." : "Confirm Close"}
+                {closing ? "Closing..." : "Close"}
               </button>
               <button onClick={() => setShowClose(false)} className="text-[11px] text-text-quaternary hover:text-text-tertiary">Cancel</button>
             </div>
           ) : (
             <button
-              onClick={() => setShowClose(true)}
+              onClick={openCloseUI}
               className="text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
             >
               Close Trade

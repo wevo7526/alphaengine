@@ -20,27 +20,35 @@ const ACTION_MAP: Record<string, { label: string; color: string }> = {
 function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; memoId?: string }) {
   const [open, setOpen] = useState(false);
   const [taken, setTaken] = useState(false);
+  const [takeError, setTakeError] = useState<string | null>(null);
+  const [filledAt, setFilledAt] = useState<number | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const action = ACTION_MAP[idea.direction] ?? ACTION_MAP.neutral;
 
   const handleTakeTrade = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (taken) return;
+    if (taken || submitting) return;
+    setSubmitting(true);
+    setTakeError(null);
     try {
-      await api.takeTrade({
+      const res = await api.takeTrade({
         memo_id: memoId,
         ticker: idea.ticker,
         direction: idea.direction,
         action: idea.direction.includes("bullish") ? "BUY" : idea.direction.includes("bearish") ? "SHORT" : "HOLD",
-        entry_price: idea.stop_loss ? undefined : undefined, // entry_zone is a string
+        // Backend marks at current market when entry_price is omitted.
         stop_loss: idea.stop_loss ?? undefined,
         take_profit: idea.take_profit ?? undefined,
         position_size_pct: idea.position_size_pct,
         conviction: idea.conviction,
         thesis: idea.thesis,
-      });
+      }) as { entry_price?: number; entry_filled_at_market?: boolean };
       setTaken(true);
-    } catch {
-      setTaken(false);
+      if (res.entry_price) setFilledAt(res.entry_price);
+    } catch (err) {
+      setTakeError(err instanceof Error ? err.message : "Failed");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -119,16 +127,29 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
               <span className="text-text-secondary">{idea.risks?.join(" · ")}</span>
             </div>
           )}
-          <button
-            onClick={handleTakeTrade}
-            className={`mt-2 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
-              taken
-                ? "bg-signal-green/10 text-signal-green border border-signal-green/20 cursor-default"
-                : "bg-white text-bg-primary hover:bg-zinc-200"
-            }`}
-          >
-            {taken ? "Trade Logged" : "Take Trade"}
-          </button>
+          <div className="mt-2 flex items-center gap-3">
+            <button
+              onClick={handleTakeTrade}
+              disabled={submitting || taken}
+              className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+                taken
+                  ? "bg-signal-green/10 text-signal-green border border-signal-green/20 cursor-default"
+                  : submitting
+                    ? "bg-zinc-300 text-bg-primary cursor-wait"
+                    : "bg-white text-bg-primary hover:bg-zinc-200"
+              }`}
+            >
+              {taken ? "Trade Logged" : submitting ? "Filling..." : "Take Trade @ Market"}
+            </button>
+            {filledAt && (
+              <span className="text-[11px] text-signal-green font-mono">
+                Filled @ ${filledAt.toFixed(2)}
+              </span>
+            )}
+            {takeError && (
+              <span className="text-[11px] text-signal-red">{takeError}</span>
+            )}
+          </div>
         </div>
       )}
     </div>

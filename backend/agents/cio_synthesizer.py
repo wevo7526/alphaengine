@@ -54,6 +54,7 @@ class CIOSynthesizer:
         research = context.get("research", {})
         risk = context.get("risk", {})
         strategy = context.get("strategy", {})
+        scorecard = context.get("scorecard") or {}
 
         # Compress risk factors to one-liners instead of full JSON
         risk_factors = risk.get("risk_factors", [])
@@ -79,6 +80,34 @@ class CIOSynthesizer:
         if len(data_summary) > 2000:
             data_summary = data_summary[:2000] + "..."
 
+        # Adaptive calibration: if we have a scorecard from past signals,
+        # surface it so the CIO calibrates conviction based on actual track record.
+        # High-IC conviction buckets earn more confidence; low-IC buckets get dampened.
+        calibration_block = ""
+        if scorecard and scorecard.get("signals", 0) >= 5:
+            ic_5d = scorecard.get("ic_5d")
+            ic_20d = scorecard.get("ic_20d")
+            hr_5d = scorecard.get("hit_rate_5d")
+            by_conv = scorecard.get("by_conviction") or {}
+            bucket_lines = []
+            for bucket, stats in by_conv.items():
+                if isinstance(stats, dict) and stats.get("count", 0) > 0:
+                    bucket_lines.append(
+                        f"  - {bucket}: hit {stats.get('hit_rate_5d', '?')}%, "
+                        f"avg ret {stats.get('avg_return_5d', '?')}%, n={stats.get('count', 0)}"
+                    )
+            calibration_block = (
+                f"\n=== TRACK RECORD CALIBRATION ===\n"
+                f"Past signals: {scorecard.get('signals', 0)} scored | "
+                f"IC 5d: {ic_5d if ic_5d is not None else '—'} | "
+                f"IC 20d: {ic_20d if ic_20d is not None else '—'} | "
+                f"5d hit rate: {hr_5d if hr_5d is not None else '—'}%\n"
+                + ("By conviction bucket:\n" + "\n".join(bucket_lines) if bucket_lines else "")
+                + "\nUse this to calibrate conviction levels in this memo. Buckets with weak "
+                "track records (hit_rate < 50%, IC < 0.05) should be assigned conservatively. "
+                "Strong buckets (hit_rate > 55%, IC > 0.1) earn higher conviction.\n"
+            )
+
         user_prompt = (
             f"Query: {plan.get('query', '')}\n"
             f"Intent: {plan.get('intent', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Themes: {', '.join(plan.get('themes', []))}\n\n"
@@ -86,7 +115,8 @@ class CIOSynthesizer:
             f"=== RISK ===\nRegime: {risk.get('macro_regime', '?')} | Level: {risk.get('overall_risk_level', '?')}\n"
             f"{risk.get('risk_narrative', '')[:500]}\n{risk_lines}\n\n"
             f"=== TRADE IDEAS ===\nPositioning: {strategy.get('portfolio_positioning', 'neutral')}\n"
-            f"{trade_lines}\n\nHedges:\n{hedge_lines}\n\n"
+            f"{trade_lines}\n\nHedges:\n{hedge_lines}\n"
+            f"{calibration_block}\n"
             f"Produce the final intelligence memo as JSON. Include the trade ideas and risk factors as structured objects in your output."
         )
 

@@ -38,10 +38,12 @@ _cio_synthesizer = CIOSynthesizer()
 
 class ResearchDeskState(TypedDict):
     query: str
+    user_id: str | None
     plan_data: dict | None
     research_data: dict | None
     risk_data: dict | None
     strategy_data: dict | None
+    scorecard_data: dict | None
     memo_data: dict | None
     error: str | None
     current_phase: str
@@ -147,17 +149,46 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     return state
 
 
+async def _fetch_scorecard_for_calibration(user_id: str | None) -> dict | None:
+    """
+    Fetch the user's scorecard summary so the CIO can calibrate conviction
+    against the system's actual track record. Returns None on any failure —
+    the CIO must work without it for cold-start users.
+    """
+    if not user_id:
+        return None
+    try:
+        from agents.scorer import get_scorecard_summary
+        from db.database import async_session
+        summary = await asyncio.wait_for(
+            get_scorecard_summary(async_session, user_id=user_id),
+            timeout=5.0,
+        )
+        if summary and summary.get("signals", 0) >= 5:
+            return summary
+    except Exception as e:
+        logger.debug(f"[orchestrator] Scorecard fetch failed (non-fatal): {e}")
+    return None
+
+
 async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
     if state.get("error"):
         return state
     state["current_phase"] = "synthesizing"
     logger.info("[orchestrator] CIO Synthesizer writing memo")
+
+    # Adaptive calibration: pull track record before invoking the CIO so it
+    # can dampen conviction in low-IC buckets and reinforce high-IC ones.
+    scorecard = await _fetch_scorecard_for_calibration(state.get("user_id"))
+    state["scorecard_data"] = scorecard
+
     output = await _with_timeout(
         _cio_synthesizer.synthesize({
             "plan": state["plan_data"],
             "research": state["research_data"],
             "risk": state["risk_data"],
             "strategy": state["strategy_data"],
+            "scorecard": scorecard,
         }),
         seconds=120, label="CIO Synthesizer"
     )
@@ -215,17 +246,19 @@ def get_research_desk_graph():
     return _graph
 
 
-async def run_research_desk(query: str) -> IntelligenceMemo:
+async def run_research_desk(query: str, user_id: str | None = None) -> IntelligenceMemo:
     """Main entry point — run the full research desk pipeline on a freeform query."""
     logger.info(f"[orchestrator] Starting research desk for: {query}")
 
     graph = get_research_desk_graph()
     initial_state: ResearchDeskState = {
         "query": query,
+        "user_id": user_id,
         "plan_data": None,
         "research_data": None,
         "risk_data": None,
         "strategy_data": None,
+        "scorecard_data": None,
         "memo_data": None,
         "error": None,
         "current_phase": "idle",

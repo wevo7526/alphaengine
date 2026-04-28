@@ -36,7 +36,7 @@ class BacktestRunRecord(Base):
     mode = Column(String(30), default="rules_based")  # rules_based / signal_replay
     status = Column(String(20), default="pending")  # pending / running / completed / failed
     error_message = Column(Text)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class BacktestResultRecord(Base):
@@ -63,7 +63,7 @@ class BacktestResultRecord(Base):
     benchmark_return_pct = Column(Float)
     benchmark_sharpe = Column(Float)
     factor_exposures = Column(JSON)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class PortfolioSnapshotRecord(Base):
@@ -81,7 +81,7 @@ class PortfolioSnapshotRecord(Base):
     cumulative_pnl = Column(Float)
     cumulative_pnl_pct = Column(Float)
     positions_json = Column(JSON, default=list)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class FactorExposureRecord(Base):
@@ -100,7 +100,7 @@ class FactorExposureRecord(Base):
     alpha = Column(Float)
     alpha_tstat = Column(Float)
     r_squared = Column(Float)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class RegimeRecord(Base):
@@ -115,7 +115,7 @@ class RegimeRecord(Base):
     contraction_prob = Column(Float)
     recovery_prob = Column(Float)
     confidence = Column(Float)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 # ============================================================
@@ -143,7 +143,7 @@ class IntelligenceMemoRecord(Base):
     hedging_recommendations = Column(JSON, default=list)
     tickers_analyzed = Column(JSON, default=list)
     themes = Column(JSON, default=list)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # /api/signals/latest filters by user_id ordered by created_at desc.
     # Without this composite, every call scans the whole table.
@@ -173,8 +173,8 @@ class TradeRecord(Base):
     status = Column(String(20), default="open")  # open, closed, stopped_out
     exit_price = Column(Float)
     realized_pnl = Column(Float)
-    opened_at = Column(DateTime, server_default=func.now())
-    closed_at = Column(DateTime)
+    opened_at = Column(DateTime(timezone=True), server_default=func.now())
+    closed_at = Column(DateTime(timezone=True))
 
     # /api/portfolio/positions filters by user_id + status (open), and memo_id
     # joins are common. Indexes sized for the actual query shape.
@@ -195,7 +195,7 @@ class PortfolioPosition(Base):
     current_price = Column(Float)
     unrealized_pnl = Column(Float)
     weight = Column(Float)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class MacroSnapshotRecord(Base):
@@ -207,7 +207,7 @@ class MacroSnapshotRecord(Base):
     regime_confidence = Column(Integer)
     risk_level = Column(String(20))
     indicators = Column(JSON, nullable=False)
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class ScanFindingRecord(Base):
@@ -225,7 +225,7 @@ class ScanFindingRecord(Base):
     headline = Column(String(200), nullable=False)
     detail = Column(Text)
     data_json = Column(JSON)  # Raw anomaly data for drill-down
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class ScanRunRecord(Base):
@@ -236,8 +236,8 @@ class ScanRunRecord(Base):
     user_id = Column(String, nullable=True, index=True)
     universe_size = Column(Integer)
     findings_count = Column(Integer, default=0)
-    started_at = Column(DateTime, server_default=func.now())
-    completed_at = Column(DateTime)
+    started_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True))
     status = Column(String(20), default="running")  # running, completed, failed
     error_message = Column(Text)
 
@@ -253,7 +253,7 @@ class SignalScoreRecord(Base):
     direction = Column(String(20))  # from trade idea
     conviction = Column(Integer)
     entry_price = Column(Float)          # Price at signal time
-    signal_date = Column(DateTime)        # When the memo was created
+    signal_date = Column(DateTime(timezone=True))        # When the memo was created
 
     # Forward prices at different intervals
     price_1d = Column(Float)
@@ -270,7 +270,7 @@ class SignalScoreRecord(Base):
     hit_5d = Column(Boolean)
     hit_20d = Column(Boolean)
 
-    scored_at = Column(DateTime, server_default=func.now())
+    scored_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Scorecard queries filter by user_id and order by signal_date desc.
     __table_args__ = (
@@ -286,7 +286,7 @@ class WatchlistRecord(Base):
     user_id = Column(String, nullable=True, index=True)
     ticker = Column(String(10), nullable=False)
     notes = Column(Text)
-    added_at = Column(DateTime, server_default=func.now())
+    added_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
 class MorningReportRecord(Base):
@@ -302,4 +302,4 @@ class MorningReportRecord(Base):
     risk_alerts = Column(JSON, default=list)
     overnight_opportunities = Column(JSON, default=list)
     full_report = Column(JSON)  # Complete report data
-    created_at = Column(DateTime, server_default=func.now())
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

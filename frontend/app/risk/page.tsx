@@ -48,6 +48,13 @@ export default function RiskPage() {
   const [conditionalReturns, setConditionalReturns] = useState<Record<string, Record<string, number>> | null>(null);
   const [loading, setLoading] = useState(true);
   const [hasPositions, setHasPositions] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const recordError = (label: string, e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    setApiError(`${label}: ${msg}`);
+    if (typeof console !== "undefined") console.error(`[risk] ${label}`, e);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -55,14 +62,14 @@ export default function RiskPage() {
     // Always load regime — doesn't need positions
     api.regime().then((d: unknown) => {
       if (!cancelled) setRegime(d as RegimeData);
-    }).catch(() => {});
+    }).catch((e) => { if (!cancelled) recordError("regime", e); });
 
     // Load conditional returns
     api.regimeConditionalReturns("SPY").then((d: unknown) => {
       if (!cancelled && d && typeof d === "object" && !("error" in (d as Record<string, unknown>))) {
         setConditionalReturns(d as Record<string, Record<string, number>>);
       }
-    }).catch(() => {});
+    }).catch((e) => { if (!cancelled) recordError("regime conditional returns", e); });
 
     // Try portfolio risk — may fail with no positions
     api.portfolioRisk().then((d: unknown) => {
@@ -72,13 +79,33 @@ export default function RiskPage() {
         setHasPositions(!data.error);
       }
       setLoading(false);
-    }).catch(() => { if (!cancelled) setLoading(false); });
+    }).catch((e) => {
+      if (!cancelled) {
+        recordError("portfolio risk", e);
+        setLoading(false);
+      }
+    });
 
     return () => { cancelled = true; };
   }, []);
 
   return (
     <div className="p-8 max-w-5xl">
+      {apiError && (
+        <div className="mb-4 flex items-start justify-between rounded-xl border border-signal-red/25 bg-signal-red/[0.06] p-3">
+          <div>
+            <p className="text-xs font-medium text-signal-red">Data load issue</p>
+            <p className="text-[11px] text-text-tertiary mt-0.5">{apiError}</p>
+          </div>
+          <button
+            onClick={() => setApiError(null)}
+            className="text-text-quaternary hover:text-text-primary text-xs px-2"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <h1 className="text-xl font-semibold tracking-tight text-text-primary mb-1">Risk Dashboard</h1>
       <p className="text-sm text-text-tertiary mb-8">Market regime, portfolio risk metrics, and circuit breaker status.</p>
 
@@ -106,7 +133,7 @@ export default function RiskPage() {
 
           {/* Regime probability bars */}
           <div className="flex gap-2">
-            {Object.entries(regime.probabilities).map(([state, prob]) => (
+            {Object.entries(regime.probabilities || {}).map(([state, prob]) => (
               <div key={state} className="flex-1">
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-[9px] text-text-quaternary capitalize">{state.replace("_", " ")}</span>

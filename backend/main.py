@@ -21,7 +21,7 @@ from data.market_client import MarketDataClient
 from data.news_client import NewsDataClient
 from data.sec_client import SECDataClient
 from db.database import init_db, async_session, ping_db, DB_DIALECT
-from db.models import IntelligenceMemoRecord, ScanFindingRecord, ScanRunRecord, WatchlistRecord, SignalScoreRecord
+from db.models import IntelligenceMemoRecord, WatchlistRecord, SignalScoreRecord
 from infra.logging_ctx import RequestIdMiddleware, install_logging, get_request_id
 from infra.status_store import AnalysisStatusStore
 from infra.timeout import RequestTimeoutMiddleware
@@ -152,6 +152,50 @@ async def health_check():
     return {"status": "degraded" if degraded else "healthy", "checks": checks}
 
 
+@app.get("/api/system/info")
+async def system_info():
+    """
+    Live system info for Settings page: dependency keys configured, risk
+    parameters in effect, app metadata. No secrets — only presence flags.
+    """
+    db = await ping_db(timeout=2.0)
+    return {
+        "app": {
+            "version": app.version,
+            "env": settings.ENV,
+            "commit": os.environ.get("RAILWAY_GIT_COMMIT_SHA", "")[:8] or None,
+        },
+        "database": {
+            "ok": db["ok"],
+            "dialect": db.get("dialect"),
+        },
+        "data_sources": [
+            {"name": "Anthropic (Claude)", "configured": bool(settings.ANTHROPIC_API_KEY), "note": "LLM for all agents"},
+            {"name": "FRED (Macro)", "configured": bool(settings.FRED_API_KEY), "note": "13 indicators, 1hr cache"},
+            {"name": "Yahoo Finance", "configured": True, "note": "Price, fundamentals, options (no key)"},
+            {"name": "NewsAPI", "configured": bool(settings.NEWS_API_KEY), "note": "100/day, 30min cache"},
+            {"name": "Finnhub", "configured": bool(settings.FINNHUB_API_KEY), "note": "60/min, 15min cache"},
+            {"name": "SEC EDGAR (sec-api.io)", "configured": bool(settings.SEC_API_KEY), "note": "Filings, insider trades, 13F"},
+            {"name": "Alpha Vantage", "configured": bool(settings.ALPHA_VANTAGE_KEY), "note": "25/day, 4hr cache"},
+            {"name": "Firecrawl", "configured": bool(settings.FIRECRAWL_API_KEY), "note": "Web validation (optional)"},
+        ],
+        "auth": {
+            "provider": "Clerk",
+            "issuer_configured": bool(settings.CLERK_ISSUER),
+        },
+        "risk_parameters": [
+            {"label": "Max position size", "value": "5%", "description": "Maximum allocation to a single position"},
+            {"label": "Max sector concentration", "value": "30%", "description": "Maximum allocation to one sector"},
+            {"label": "Sizing method", "value": "Half-Kelly", "description": "Position sizing algorithm"},
+            {"label": "BUY/SELL threshold", "value": "75 conviction", "description": "Minimum conviction to recommend action"},
+            {"label": "WATCH threshold", "value": "50 conviction", "description": "Minimum conviction for watchlist"},
+            {"label": "Circuit breaker", "value": "10% drawdown", "description": "Portfolio drawdown that pauses new trades"},
+            {"label": "Stop loss default", "value": "Quant agent metadata", "description": "Per-trade stop level from technical analysis"},
+            {"label": "VaR confidence", "value": "95%", "description": "Daily Value-at-Risk confidence interval"},
+        ],
+    }
+
+
 @app.get("/api/ready")
 async def readiness_check():
     """
@@ -200,7 +244,7 @@ async def analyze(request: AnalyzeRequest, req: Request):
     await analysis_status.set(query_id, {"status": "running", "phase": "interpreting"})
 
     try:
-        memo = await run_research_desk(query)
+        memo = await run_research_desk(query, user_id=user_id)
         result = memo.model_dump(mode="json")
 
         # Persist to database — wrap so DB errors don't kill the response.
@@ -492,8 +536,11 @@ async def macro_time_series():
 # === RISK MANAGEMENT ===
 
 @app.get("/api/quant/portfolio-risk")
-async def portfolio_risk_analysis():
-    """Full portfolio risk dashboard: VaR, CVaR, sector exposure, circuit breaker."""
+async def portfolio_risk_analysis(req: Request):
+    """Full portfolio risk dashboard: VaR, CVaR, sector exposure, circuit breaker.
+
+    Scoped to the authenticated user's open trades only.
+    """
     try:
         from quant.risk import compute_ewma_covariance, compute_portfolio_var, compute_portfolio_cvar, check_sector_limits, drawdown_circuit_breaker
         from quant.computations import compute_drawdown
@@ -501,9 +548,22 @@ async def portfolio_risk_analysis():
         logger.error(f"Import error in portfolio-risk: {e}")
         return {"error": str(e), "var_95": None, "cvar_95": None}
 
-    # Get open trades as positions
+    user_id = require_user_id(req)
+
+    # Get open trades for this user only
     try:
-        trades = await list_trades_internal("open")
+        from db.models import TradeRecord
+        async with async_session() as session:
+            result = await session.execute(
+                select(TradeRecord).where(
+                    TradeRecord.status == "open",
+                    TradeRecord.user_id == user_id,
+                )
+            )
+            trades = [
+                {c.name: getattr(r, c.name) for c in r.__table__.columns}
+                for r in result.scalars().all()
+            ]
     except Exception as e:
         logger.error(f"Failed to get trades for risk: {e}")
         trades = []
@@ -609,17 +669,19 @@ async def regime_detection():
 # === BACKTESTING ===
 
 @app.post("/api/backtest/run")
-async def run_backtest(request: dict):
+async def run_backtest(request: dict, req: Request):
     """Run a rules-based backtest."""
     from quant.backtester import run_rules_based_backtest, BacktestConfig
     from db.repositories import BacktestRepository
 
+    user_id = require_user_id(req)
     tickers = request.get("tickers", ["AAPL", "MSFT", "GOOGL"])
     period = request.get("period", "1y")
     initial_capital = request.get("initial_capital", 100000)
 
-    # Save run
+    # Save run scoped to authenticated user
     run_id = await BacktestRepository.save_run({
+        "user_id": user_id,
         "name": f"Backtest: {', '.join(tickers[:3])}",
         "tickers": tickers,
         "initial_capital": initial_capital,
@@ -661,21 +723,48 @@ async def run_backtest(request: dict):
 
 
 @app.get("/api/backtest/runs")
-async def list_backtest_runs():
-    """List all backtest runs."""
-    from db.repositories import BacktestRepository
-    runs = await BacktestRepository.get_runs()
+async def list_backtest_runs(req: Request):
+    """List backtest runs owned by the authenticated user."""
+    from db.models import BacktestRunRecord
+    user_id = require_user_id(req)
+    async with async_session() as session:
+        result = await session.execute(
+            select(BacktestRunRecord)
+            .where(BacktestRunRecord.user_id == user_id)
+            .order_by(desc(BacktestRunRecord.created_at))
+            .limit(50)
+        )
+        runs = [
+            {c.name: getattr(r, c.name) for c in r.__table__.columns}
+            for r in result.scalars().all()
+        ]
     return {"runs": runs}
 
 
 @app.get("/api/backtest/results/{run_id}")
-async def get_backtest_results(run_id: str):
-    """Get results for a specific backtest run."""
-    from db.repositories import BacktestRepository
-    results = await BacktestRepository.get_results(run_id)
-    if not results:
-        raise HTTPException(status_code=404, detail="Backtest not found")
-    return results
+async def get_backtest_results(run_id: str, req: Request):
+    """Get results for a specific backtest run — owner-only."""
+    from db.models import BacktestRunRecord, BacktestResultRecord
+    user_id = require_user_id(req)
+    async with async_session() as session:
+        # Verify the requested run belongs to this user before exposing results.
+        # BacktestResultRecord has no user_id of its own; ownership flows through the run.
+        run = await session.execute(
+            select(BacktestRunRecord).where(
+                BacktestRunRecord.id == run_id,
+                BacktestRunRecord.user_id == user_id,
+            )
+        )
+        if not run.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Backtest not found")
+
+        result = await session.execute(
+            select(BacktestResultRecord).where(BacktestResultRecord.backtest_run_id == run_id)
+        )
+        record = result.scalar_one_or_none()
+        if not record:
+            raise HTTPException(status_code=404, detail="Backtest results not available")
+        return {c.name: getattr(record, c.name) for c in record.__table__.columns}
 
 
 # === FACTOR ANALYSIS ===
@@ -871,7 +960,8 @@ async def morning_report(req: Request):
         memo = await run_research_desk(
             "Generate a pre-market morning briefing for today. "
             "Assess the macro regime, identify overnight developments, key risk alerts, "
-            "and surface 3-5 actionable trade opportunities across sectors."
+            "and surface 3-5 actionable trade opportunities across sectors.",
+            user_id=user_id,
         )
         report_data = memo.model_dump(mode="json")
         report_data["report_date"] = today
@@ -1056,6 +1146,20 @@ async def take_trade(req: TakeTradeRequest, request: Request):
         size_adjusted = False
         gate = {}
 
+    # If no entry_price provided, mark at current market — turns "Take Trade"
+    # into a one-click paper-trading entry without requiring users to look up a price.
+    entry_price = req.entry_price
+    entry_filled_at_market = False
+    if entry_price is None or entry_price <= 0:
+        try:
+            fundamentals = market_client.get_fundamentals(req.ticker.upper())
+            current = fundamentals.get("current_price") if fundamentals else None
+            if current and current > 0:
+                entry_price = float(current)
+                entry_filled_at_market = True
+        except Exception as e:
+            logger.warning(f"Could not fetch market entry for {req.ticker}: {e}")
+
     async with async_session() as session:
         record = TradeRecord(
             user_id=user_id,
@@ -1063,7 +1167,7 @@ async def take_trade(req: TakeTradeRequest, request: Request):
             ticker=req.ticker,
             direction=req.direction,
             action=req.action,
-            entry_price=req.entry_price,
+            entry_price=entry_price,
             stop_loss=req.stop_loss,
             take_profit=req.take_profit,
             position_size_pct=final_size_pct,
@@ -1079,6 +1183,8 @@ async def take_trade(req: TakeTradeRequest, request: Request):
             "status": "open",
             "ticker": req.ticker,
             "size_pct": final_size_pct,
+            "entry_price": entry_price,
+            "entry_filled_at_market": entry_filled_at_market,
         }
         if size_adjusted:
             response["size_adjusted"] = True
@@ -1127,7 +1233,7 @@ async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request):
                 status="closed",
                 exit_price=req.exit_price,
                 realized_pnl=round(pnl_pct, 2),
-                closed_at=datetime.utcnow(),
+                closed_at=datetime.now(timezone.utc),
                 md_notes=(trade.md_notes or "") + f"\nClosed: {req.notes}" if req.notes else trade.md_notes,
             )
         )
@@ -1179,14 +1285,18 @@ async def list_trades(req: Request, status: str = "all"):
 
 
 @app.get("/api/portfolio/backtest")
-async def backtest_trades():
-    """Evaluate all open trades against current market prices."""
+async def backtest_trades(req: Request):
+    """Evaluate the authenticated user's open trades against current market prices."""
     from db.models import TradeRecord
     from quant.backtesting import evaluate_trades
 
+    user_id = require_user_id(req)
     async with async_session() as session:
         result = await session.execute(
-            select(TradeRecord).where(TradeRecord.status == "open")
+            select(TradeRecord).where(
+                TradeRecord.status == "open",
+                TradeRecord.user_id == user_id,
+            )
         )
         records = result.scalars().all()
         trades = [
@@ -1311,67 +1421,6 @@ async def export_portfolio(req: Request):
     pdf = render_portfolio(positions, summary, attr_result, scorecard)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d")
     return _pdf_response(pdf, f"alpha-engine-portfolio-{ts}.pdf")
-
-
-@app.get("/api/export/scan/{run_id}")
-async def export_scan(run_id: str, req: Request):
-    """Export a scan digest as PDF."""
-    from exports.pdf_renderer import render_scan
-
-    user_id = require_user_id(req)
-
-    async with async_session() as session:
-        # Validate run ownership
-        run_result = await session.execute(
-            select(ScanRunRecord).where(
-                ScanRunRecord.id == run_id,
-                ScanRunRecord.user_id == user_id,
-            )
-        )
-        run = run_result.scalar_one_or_none()
-        if not run:
-            raise HTTPException(status_code=404, detail="Scan run not found")
-
-        findings_result = await session.execute(
-            select(ScanFindingRecord).where(ScanFindingRecord.scan_run_id == run_id)
-        )
-        findings = findings_result.scalars().all()
-
-    by_priority: dict[str, list[dict]] = {"high": [], "medium": [], "low": []}
-    for f in findings:
-        by_priority.setdefault(f.priority, []).append({
-            "ticker": f.ticker,
-            "finding_type": f.finding_type,
-            "headline": f.headline,
-            "detail": f.detail or "",
-            "priority": f.priority,
-        })
-
-    run_meta = {
-        "universe_size": run.universe_size,
-        "findings_count": run.findings_count,
-        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
-    }
-
-    pdf = render_scan(by_priority, run_meta)
-    return _pdf_response(pdf, f"alpha-engine-scan-{run_id[:8]}.pdf")
-
-
-@app.get("/api/export/scan/latest")
-async def export_scan_latest(req: Request):
-    """Export the most recent scan for the user."""
-    user_id = require_user_id(req)
-    async with async_session() as session:
-        result = await session.execute(
-            select(ScanRunRecord).where(
-                ScanRunRecord.user_id == user_id,
-                ScanRunRecord.status == "completed",
-            ).order_by(desc(ScanRunRecord.completed_at)).limit(1)
-        )
-        run = result.scalar_one_or_none()
-    if not run:
-        raise HTTPException(status_code=404, detail="No completed scan found")
-    return await export_scan(run.id, req)
 
 
 @app.get("/api/export/scorecard")
@@ -1824,228 +1873,6 @@ async def portfolio_positions(req: Request):
     return {"positions": positions, "summary": summary}
 
 
-# === SCAN / SCREENING DESK ===
-
-# Concurrency-safe; LRU+TTL eviction prevents unbounded growth when users
-# trigger repeated scans over a long uptime.
-scan_status_store = AnalysisStatusStore(max_entries=1000, ttl_seconds=6 * 3600)
-
-
-_SCAN_WATCHDOG_SECONDS = 300  # 5 min — scans must not hang past this
-
-
-async def _run_scan_background(user_id: str | None, run_id: str, universe: list[str]):
-    """Execute scan, persist findings, update status. Watchdog-bounded so a
-    hung scan can never permanently lock the trigger."""
-    from agents.scanner import run_scan
-    from datetime import datetime as _dt, timezone as _tz
-
-    try:
-        result = await asyncio.wait_for(
-            asyncio.get_running_loop().run_in_executor(None, lambda: run_scan(universe=universe)),
-            timeout=_SCAN_WATCHDOG_SECONDS,
-        )
-        findings = result.get("findings", [])
-
-        async with async_session() as session:
-            # Update run record
-            run = await session.get(ScanRunRecord, run_id)
-            if run:
-                run.universe_size = result.get("universe_size", 0)
-                run.findings_count = len(findings)
-                run.status = "completed"
-                run.completed_at = _dt.utcnow()
-
-            # Persist findings
-            for f in findings:
-                rec = ScanFindingRecord(
-                    user_id=user_id,
-                    scan_run_id=run_id,
-                    ticker=f.get("ticker", ""),
-                    finding_type=f.get("finding_type", "unknown"),
-                    priority=f.get("priority", "low"),
-                    headline=f.get("headline", "")[:200],
-                    detail=f.get("detail", ""),
-                    data_json=f.get("data", {}),
-                )
-                session.add(rec)
-            await session.commit()
-        logger.info(f"Scan {run_id} completed with {len(findings)} findings")
-    except asyncio.TimeoutError:
-        logger.error(f"Scan {run_id} exceeded watchdog timeout ({_SCAN_WATCHDOG_SECONDS}s)")
-        try:
-            async with async_session() as session:
-                run = await session.get(ScanRunRecord, run_id)
-                if run:
-                    run.status = "failed"
-                    run.error_message = f"watchdog timeout after {_SCAN_WATCHDOG_SECONDS}s"
-                    run.completed_at = _dt.utcnow()
-                    await session.commit()
-        except Exception:
-            pass
-    except Exception as e:
-        logger.error(f"Scan {run_id} failed: {e}")
-        try:
-            async with async_session() as session:
-                run = await session.get(ScanRunRecord, run_id)
-                if run:
-                    run.status = "failed"
-                    run.error_message = str(e)[:500]
-                    run.completed_at = _dt.utcnow()
-                    await session.commit()
-        except Exception:
-            pass
-    finally:
-        key = user_id or "_anon"
-        current = await scan_status_store.get(key)
-        if current:
-            await scan_status_store.set(key, {**{k: v for k, v in current.items() if not k.startswith("_")}, "status": "idle"})
-
-
-@app.get("/api/scan/latest")
-async def scan_latest(req: Request):
-    """Get findings from the most recent completed scan for the current user."""
-    user_id = require_user_id(req)
-    try:
-        async with async_session() as session:
-            # Find most recent completed run scoped strictly to this user
-            runs_q = (
-                select(ScanRunRecord)
-                .where(
-                    ScanRunRecord.status == "completed",
-                    ScanRunRecord.user_id == user_id,
-                )
-                .order_by(desc(ScanRunRecord.completed_at))
-                .limit(1)
-            )
-            run_result = await session.execute(runs_q)
-            latest_run = run_result.scalar_one_or_none()
-
-            if not latest_run:
-                return {
-                    "findings": [],
-                    "by_priority": {"high": [], "medium": [], "low": []},
-                    "run_id": None,
-                    "completed_at": None,
-                    "stale": True,
-                }
-
-            # Fetch findings for this run
-            findings_q = select(ScanFindingRecord).where(
-                ScanFindingRecord.scan_run_id == latest_run.id
-            )
-            f_result = await session.execute(findings_q)
-            findings = f_result.scalars().all()
-
-            priority_order = {"high": 0, "medium": 1, "low": 2}
-            serialized = [
-                {
-                    "id": f.id,
-                    "ticker": f.ticker,
-                    "finding_type": f.finding_type,
-                    "priority": f.priority,
-                    "headline": f.headline,
-                    "detail": f.detail or "",
-                    "data": f.data_json or {},
-                    "created_at": f.created_at.isoformat() if f.created_at else None,
-                }
-                for f in findings
-            ]
-            serialized.sort(key=lambda x: (priority_order.get(x["priority"], 2), x["ticker"]))
-
-            by_priority: dict[str, list[dict]] = {"high": [], "medium": [], "low": []}
-            for f in serialized:
-                by_priority.setdefault(f["priority"], []).append(f)
-
-            # Determine staleness (> 6 hours old)
-            from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-            stale = False
-            if latest_run.completed_at:
-                age = _dt.now(_tz.utc) - latest_run.completed_at.replace(tzinfo=_tz.utc)
-                stale = age > _td(hours=6)
-
-            return {
-                "findings": serialized,
-                "by_priority": by_priority,
-                "run_id": latest_run.id,
-                "universe_size": latest_run.universe_size,
-                "findings_count": latest_run.findings_count,
-                "completed_at": latest_run.completed_at.isoformat() if latest_run.completed_at else None,
-                "stale": stale,
-            }
-    except Exception as e:
-        logger.error(f"scan_latest failed: {e}")
-        return {"findings": [], "by_priority": {"high": [], "medium": [], "low": []}, "run_id": None, "completed_at": None, "stale": True}
-
-
-@app.post("/api/scan/trigger")
-async def scan_trigger(req: Request):
-    """Trigger a new scan in the background. Returns immediately."""
-    user_id = require_user_id(req)
-    key = user_id
-
-    # Don't allow concurrent scans for the same user — but auto-recover from
-    # a stale "running" entry whose worker died or watchdog already fired.
-    # Without this, a single hung scan permanently locks the trigger.
-    current = await scan_status_store.get(key)
-    if current and current.get("status") == "running":
-        started_at = current.get("started_at") or 0
-        if _time.time() - started_at < _SCAN_WATCHDOG_SECONDS + 30:
-            return {"status": "already_running", "run_id": current.get("run_id")}
-        logger.warning(
-            "Stale running scan for %s (started %ss ago); resetting and re-triggering",
-            user_id, int(_time.time() - started_at),
-        )
-        await scan_status_store.set(key, {"status": "idle"})
-
-    # Build universe: default + user watchlist + open trade tickers
-    from agents.universe import DEFAULT_UNIVERSE
-    universe = list(DEFAULT_UNIVERSE)
-    try:
-        async with async_session() as session:
-            # Add watchlist tickers for this user only
-            wl_q = select(WatchlistRecord).where(WatchlistRecord.user_id == user_id)
-            wl_result = await session.execute(wl_q)
-            for rec in wl_result.scalars().all():
-                if rec.ticker not in universe:
-                    universe.append(rec.ticker)
-
-            # Create run record
-            from db.models import TradeRecord
-            run = ScanRunRecord(
-                user_id=user_id,
-                universe_size=len(universe),
-                status="running",
-            )
-            session.add(run)
-            await session.commit()
-            run_id = run.id
-    except Exception as e:
-        logger.error(f"scan_trigger setup failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    await scan_status_store.set(key, {
-        "status": "running", "run_id": run_id, "started_at": _time.time(),
-    })
-
-    # Fire and forget — run in background task
-    asyncio.create_task(_run_scan_background(user_id, run_id, universe))
-
-    return {"status": "started", "run_id": run_id, "universe_size": len(universe)}
-
-
-@app.get("/api/scan/status")
-async def scan_status(req: Request):
-    """Check if a scan is currently running for this user."""
-    user_id = require_user_id(req)
-    current = await scan_status_store.get(user_id) or {"status": "idle"}
-    return {
-        "status": current.get("status", "idle"),
-        "run_id": current.get("run_id"),
-        "started_at": current.get("started_at"),
-    }
-
-
 # === SCORECARD (Desk 6) ===
 
 @app.get("/api/scorecard/summary")
@@ -2448,10 +2275,26 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         yield send({"phase": "synthesizing", "agent": "cio_synthesizer"})  # Backward compat
         cio_cb = DeskStreamCallback(event_queue, desk="cio", agent="cio_synthesizer")
         cio_start = asyncio.get_event_loop().time()
+
+        # Adaptive calibration: pull this user's track record so the CIO
+        # tunes conviction against actual hit rates / IC, not just the LLM's prior.
+        scorecard_for_cio = None
+        try:
+            from agents.orchestrator import _fetch_scorecard_for_calibration
+            scorecard_for_cio = await _fetch_scorecard_for_calibration(user_id)
+        except Exception as e:
+            logger.debug(f"[stream] Scorecard calibration skipped: {e}")
+
         try:
             output = await _with_timeout(
                 _cio_synthesizer.synthesize(
-                    {"plan": plan_data, "research": research_data, "risk": risk_data, "strategy": strategy_data},
+                    {
+                        "plan": plan_data,
+                        "research": research_data,
+                        "risk": risk_data,
+                        "strategy": strategy_data,
+                        "scorecard": scorecard_for_cio,
+                    },
                     callbacks=[cio_cb],
                 ),
                 seconds=120, label="CIO",
