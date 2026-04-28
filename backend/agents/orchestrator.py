@@ -138,6 +138,12 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     if state.get("scorecard_data") is None:
         state["scorecard_data"] = await _fetch_scorecard_for_calibration(state.get("user_id"))
 
+    # Pre-fetch CURRENT prices for every plan ticker so the Strategist gets
+    # them in the prompt as authoritative data. Prevents the LLM from
+    # inventing entry/stop/target levels when its own tool history blurs.
+    plan_tickers = (state.get("plan_data") or {}).get("tickers", []) or []
+    live_prices = await _fetch_live_prices_for(plan_tickers)
+
     output = await _with_timeout(
         _portfolio_strategist.analyze({
             "plan": state["plan_data"],
@@ -145,9 +151,18 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
             "risk": state["risk_data"],
             "portfolio": state.get("portfolio_data"),
             "scorecard": state.get("scorecard_data"),
+            "live_prices": live_prices,
         }),
         seconds=90, label="Portfolio Strategist"
     )
+
+    # Post-validate trade ideas against live prices — overrides any LLM
+    # hallucinations that snuck past the prompt rules.
+    if output and not output.error and isinstance(output.output, dict):
+        from agents.portfolio_strategist import validate_and_fix_trade_ideas
+        ideas = output.output.get("trade_ideas") or []
+        if ideas and live_prices:
+            output.output["trade_ideas"] = validate_and_fix_trade_ideas(ideas, live_prices)
     if output is None or (output and output.error):
         err = output.error if output else "timed out"
         logger.warning(f"[orchestrator] Portfolio Strategist error: {err}")
@@ -160,6 +175,52 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     else:
         state["strategy_data"] = output.output
     return state
+
+
+async def _fetch_live_prices_for(tickers: list[str]) -> dict[str, float]:
+    """
+    Pre-fetch current prices for all plan tickers, in parallel, with a hard
+    timeout per ticker. Returns {ticker: float}; tickers we couldn't price
+    are simply omitted (the Strategist's anchoring rule then forces it to
+    drop trade ideas for those).
+
+    Uses MarketDataClient.get_fundamentals which is cached on a 1h TTL, so
+    subsequent calls within the same session are free. Capped at 12 tickers
+    to bound API cost on broad thematic queries.
+    """
+    if not tickers:
+        return {}
+    from data.market_client import MarketDataClient
+    from concurrent.futures import ThreadPoolExecutor
+
+    mc = MarketDataClient()
+    capped = list(dict.fromkeys((t or "").strip().upper() for t in tickers if t))[:12]
+
+    def _one(tk: str) -> tuple[str, float | None]:
+        try:
+            data = mc.get_fundamentals(tk) or {}
+            price = data.get("current_price")
+            if price and price > 0:
+                return tk, float(price)
+        except Exception as e:
+            logger.debug(f"[orchestrator] price fetch failed for {tk}: {e}")
+        return tk, None
+
+    loop = asyncio.get_running_loop()
+
+    def _gather() -> dict[str, float]:
+        out: dict[str, float] = {}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for tk, px in pool.map(_one, capped):
+                if px is not None:
+                    out[tk] = px
+        return out
+
+    try:
+        return await asyncio.wait_for(loop.run_in_executor(None, _gather), timeout=15.0)
+    except asyncio.TimeoutError:
+        logger.warning("[orchestrator] live price prefetch timed out — Strategist runs without LIVE PRICES block")
+        return {}
 
 
 async def _fetch_prior_memos(

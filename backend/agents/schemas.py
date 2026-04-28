@@ -124,6 +124,17 @@ class TradeIdea(BaseModel):
     time_horizon: str = "weeks"
     catalysts: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    # Set by the server-side validator when entry/stop/target were
+    # auto-corrected to anchor against live price. Surfaced as a UI badge.
+    price_corrected: bool = False
+    live_price_used: Optional[float] = None
+    original_entry_zone: Optional[str] = None
+
+    @field_validator("price_corrected", mode="before")
+    @classmethod
+    def _coerce_corrected(cls, v):
+        # Validator emits "_price_corrected" prefixed key; map both spellings.
+        return bool(v) if v is not None else False
 
     @field_validator("direction", mode="before")
     @classmethod

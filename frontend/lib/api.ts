@@ -125,6 +125,12 @@ export const api = {
       { method: "POST" }
     ),
 
+  flushAnalyses: (scope: "all" | "stale" = "all") =>
+    request<{ deleted: number; scope: string }>(
+      `/api/signals/flush?scope=${scope}`,
+      { method: "POST" }
+    ),
+
   // Portfolio positions + live P&L
   positions: () => request("/api/portfolio/positions"),
   attribution: () => request("/api/portfolio/attribution"),

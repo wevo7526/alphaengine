@@ -107,11 +107,19 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
       </div>
 
       {/* Price levels row */}
-      <div className="flex items-center gap-4 text-xs mt-2">
+      <div className="flex items-center gap-4 text-xs mt-2 flex-wrap">
         {idea.entry_zone && (
-          <div>
+          <div className="flex items-center gap-1.5">
             <span className="text-text-quaternary">Entry </span>
             <span className="font-mono text-text-primary">{idea.entry_zone}</span>
+            {idea.price_corrected && idea.live_price_used && (
+              <span
+                className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-signal-yellow/10 text-signal-yellow border border-signal-yellow/30"
+                title={`System auto-corrected from ${idea.original_entry_zone ?? "stale value"} to anchor on live price $${idea.live_price_used}.`}
+              >
+                Auto-anchored
+              </span>
+            )}
           </div>
         )}
         {idea.stop_loss && (

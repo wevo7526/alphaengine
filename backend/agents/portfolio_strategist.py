@@ -3,14 +3,147 @@ Portfolio Strategist — translates research + risk assessment into actionable t
 
 Has 2 price tools for entry/stop/target precision. Otherwise reasons over
 the accumulated context from Research Analyst and Risk Manager.
+
+Includes a server-side post-validation step (`validate_and_fix_trade_ideas`)
+that scans every trade idea's entry/stop/target against the live price for
+that ticker. If the LLM emitted prices that are >10% off, the entries get
+clamped to a sensible band around live price and a `_price_corrected` flag
+is added so the UI can show the user the system overrode the LLM.
 """
 
+import logging
+import re
 from langchain_core.tools import tool
 
 from agents.base_agent import BaseAgent
 from data.market_client import MarketDataClient
 
+logger = logging.getLogger(__name__)
+
 _market = MarketDataClient()
+
+
+def _parse_entry_zone(raw: str | None) -> tuple[float | None, float | None]:
+    """
+    Parse strings like '$255-260', '$255 - $260', '255.50', '$1,420-1,440'.
+    Returns (lo, hi). Either may be None if unparseable.
+    """
+    if not raw:
+        return None, None
+    nums = re.findall(r"-?\d+(?:,\d{3})*(?:\.\d+)?", str(raw))
+    parsed: list[float] = []
+    for n in nums:
+        try:
+            parsed.append(float(n.replace(",", "")))
+        except ValueError:
+            continue
+    if not parsed:
+        return None, None
+    if len(parsed) == 1:
+        return parsed[0], parsed[0]
+    return min(parsed[:2]), max(parsed[:2])
+
+
+def validate_and_fix_trade_ideas(
+    trade_ideas: list[dict],
+    live_prices: dict[str, float],
+    max_drift_pct: float = 10.0,
+    band_pct: float = 2.5,
+) -> list[dict]:
+    """
+    Post-validate every trade idea against the live price for its ticker.
+
+    For each idea:
+      1. Drop the idea entirely if no live price is available.
+      2. If entry_zone midpoint is within `max_drift_pct` of live price, leave it.
+      3. Otherwise overwrite entry_zone with live ± band_pct, and rebuild
+         stop/target preserving the original risk_reward_ratio if available.
+      4. Always set `_price_corrected: true` and `_live_price_used: <px>` when
+         we modified anything, so the UI can show a small badge.
+    """
+    if not trade_ideas:
+        return []
+
+    fixed: list[dict] = []
+    for idea in trade_ideas:
+        if not isinstance(idea, dict):
+            continue
+        tk = (idea.get("ticker") or "").upper().strip()
+        if not tk:
+            continue
+
+        live = live_prices.get(tk)
+        if not live or live <= 0:
+            # No live price — drop the idea so the user never sees an
+            # entry built on guessed numbers.
+            logger.warning(
+                "validator: dropping %s trade idea — no live price available",
+                tk,
+            )
+            continue
+
+        entry_lo, entry_hi = _parse_entry_zone(idea.get("entry_zone"))
+        midpoint = (entry_lo + entry_hi) / 2.0 if entry_lo is not None and entry_hi is not None else None
+
+        drift_ok = (
+            midpoint is not None
+            and live > 0
+            and abs(midpoint - live) / live <= max_drift_pct / 100.0
+        )
+
+        if drift_ok:
+            fixed.append(idea)
+            continue
+
+        # Entry too far from reality — rebuild around live price.
+        direction = (idea.get("direction") or "").lower()
+        is_long = "bullish" in direction
+        is_short = "bearish" in direction
+
+        band = live * band_pct / 100.0
+        new_lo = round(live - band, 2)
+        new_hi = round(live + band, 2)
+
+        # Preserve risk_reward if the LLM gave one; otherwise default to 2:1.
+        rr = idea.get("risk_reward_ratio")
+        try:
+            rr = float(rr) if rr is not None else 2.0
+        except (TypeError, ValueError):
+            rr = 2.0
+        if rr <= 0:
+            rr = 2.0
+
+        # Choose stop and target on the correct side of live price.
+        # Use a 4% stop distance as default — same scale as a typical swing trade.
+        stop_distance = live * 0.04
+        target_distance = stop_distance * rr
+
+        if is_long:
+            new_stop = round(live - stop_distance, 2)
+            new_target = round(live + target_distance, 2)
+        elif is_short:
+            new_stop = round(live + stop_distance, 2)
+            new_target = round(live - target_distance, 2)
+        else:
+            # Neutral — symmetric band, take_profit = upside, stop_loss = downside
+            new_stop = round(live - stop_distance, 2)
+            new_target = round(live + stop_distance, 2)
+
+        idea = dict(idea)  # don't mutate caller's dict in place
+        original_entry = idea.get("entry_zone")
+        idea["entry_zone"] = f"${new_lo}-{new_hi}"
+        idea["stop_loss"] = new_stop
+        idea["take_profit"] = new_target
+        idea["price_corrected"] = True
+        idea["live_price_used"] = round(live, 2)
+        idea["original_entry_zone"] = original_entry
+        logger.info(
+            "validator: corrected %s entry from %s to $%.2f-%.2f (live=$%.2f)",
+            tk, original_entry, new_lo, new_hi, live,
+        )
+        fixed.append(idea)
+
+    return fixed
 
 
 @tool
@@ -34,16 +167,31 @@ def get_recent_prices(ticker: str) -> list:
 SYSTEM_PROMPT = """You are a senior portfolio manager at a quantitative hedge fund. You translate
 research analysis and risk assessments into specific, actionable trade ideas.
 
+PRICING DISCIPLINE — READ FIRST. The "LIVE PRICES" block in the user prompt
+contains tool-fetched current prices. You MUST anchor every entry/stop/target
+to those exact numbers. Do NOT invent prices. Do NOT pull prices from the
+research summary's prose. Do NOT generate a trade idea for a ticker absent
+from LIVE PRICES — use get_current_price first if you need one not listed.
+
+Anchoring rules (the gate will reject violations and the response will be
+post-validated against current price):
+  - LONG ideas:  entry_zone brackets live_price ± 5%; stop_loss < live_price; take_profit > live_price
+  - SHORT ideas: entry_zone brackets live_price ± 5%; stop_loss > live_price; take_profit < live_price
+  - NEUTRAL ideas: entry_zone brackets live_price ± 3%; stop and target are symmetric
+  - Quote the live price in your thesis (e.g., "at $426.55 spot, ...") so the
+    reader can verify alignment.
+
 Given the analysis plan, research data, and risk assessment, produce:
 
 1. TRADE IDEAS: Ranked by conviction (best first). Each must have:
-   - ticker: the stock symbol
+   - ticker: the stock symbol (MUST appear in LIVE PRICES block, or you must
+     have called get_current_price on it within this run)
    - direction: strong_bullish | bullish | neutral | bearish | strong_bearish
    - conviction: 0-100 (only include ideas with conviction >= 50)
-   - thesis: 1-3 sentence investment thesis
-   - entry_zone: specific price or range (e.g., "$255-260")
-   - stop_loss: technical invalidation level
-   - take_profit: target price
+   - thesis: 1-3 sentence investment thesis (must quote live price)
+   - entry_zone: range bracketing live price within ±5%
+   - stop_loss: technical invalidation level on the correct side of live price
+   - take_profit: target price on the correct side of live price
    - risk_reward_ratio: must be > 1.5:1 for inclusion
    - position_size_pct: % of portfolio (max 5%, adjusted for risk level)
    - time_horizon: intraday | days | weeks | months
@@ -130,15 +278,27 @@ Respond with JSON:
     "strategy_narrative": "<1-2 paragraph strategy explanation>"
 }}"""
 
-OUTPUT_INSTRUCTIONS = """CRITICAL: Call get_current_price for AT MOST 3 tickers, then IMMEDIATELY
-produce your JSON response. Do NOT call get_recent_prices unless absolutely needed.
-Produce exactly 5 trade ideas and 5 hedging recommendations."""
+OUTPUT_INSTRUCTIONS = """TOOL BUDGET: Up to 8 tool calls. Allocate as follows:
+  - The LIVE PRICES block already gives you tool-fetched prices for every
+    plan ticker. Do NOT re-fetch those.
+  - For any ticker you want to write an idea on that is NOT in LIVE PRICES,
+    call get_current_price ONCE to get its price.
+  - get_recent_prices is for support/resistance only — call sparingly (1-2 max).
+  - After you have prices for all 5 ideas, STOP and emit the JSON.
+
+Produce exactly 5 trade ideas and 5 hedging recommendations. Every entry/stop/
+target MUST anchor to a tool-fetched price (LIVE PRICES or your own get_current_price
+call) — no exceptions."""
 
 
 class PortfolioStrategist(BaseAgent):
     agent_name = "portfolio_strategist"
     system_prompt = SYSTEM_PROMPT
     output_instructions = OUTPUT_INSTRUCTIONS
+    # Bumped from default 6: with up to 5 trade ideas needing live prices,
+    # plus the prompt's instruction to call get_current_price for any ticker
+    # not in the LIVE PRICES block, the Strategist needs more headroom.
+    max_iterations = 10
 
     def get_tools(self):
         return [get_current_price, get_recent_prices]
@@ -149,6 +309,7 @@ class PortfolioStrategist(BaseAgent):
         risk = context.get("risk", {})
         portfolio = context.get("portfolio") or {}
         scorecard = context.get("scorecard") or {}
+        live_prices: dict[str, float] = context.get("live_prices") or {}
 
         summary = research.get("data_summary", "No research data.")
         if len(summary) > 2000:
@@ -181,6 +342,28 @@ class PortfolioStrategist(BaseAgent):
                 )
             if tlines:
                 ticker_block = "\n=== STRUCTURED TICKER DATA ===\n" + "\n".join(tlines) + "\n"
+
+        # Live-price authority block — these prices are guaranteed fresh
+        # from this exact run. The Strategist MUST anchor entry zones to
+        # them. Listed separately and prominently so it can't be missed.
+        prices_block = ""
+        if live_prices:
+            price_lines = "\n".join(
+                f"  {tk}: ${px:.2f}"
+                for tk, px in sorted(live_prices.items())
+                if px and px > 0
+            )
+            if price_lines:
+                prices_block = (
+                    "\n=== LIVE PRICES (use these — do not invent) ===\n"
+                    + price_lines
+                    + "\n"
+                    + "RULES (non-negotiable):\n"
+                    + "  1. Every trade idea's entry_zone MUST bracket the live price within ±5%.\n"
+                    + "  2. For LONG: stop_loss < live_price < take_profit. For SHORT: stop_loss > live_price > take_profit.\n"
+                    + "  3. If a ticker isn't in this list, do NOT generate an idea for it.\n"
+                    + "  4. Quote the live price you used in the thesis (e.g. 'at $426.55 spot').\n"
+                )
 
         # Existing portfolio context — Strategist must size new ideas
         # against current book (not in a vacuum). Sector and net-exposure
@@ -236,9 +419,11 @@ class PortfolioStrategist(BaseAgent):
             f"Query: {plan.get('query', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Horizon: {plan.get('time_horizon', 'weeks')}\n"
             f"Regime: {risk.get('macro_regime', '?')} | Risk: {risk.get('overall_risk_level', '?')}\n\n"
             f"Research:\n{summary}\n"
-            f"{ticker_block}\n"
+            f"{ticker_block}"
+            f"{prices_block}\n"
             f"Risk:\n{risk_narrative}\n"
             f"{portfolio_block}"
             f"{calibration_block}\n"
-            f"Produce 5 trade ideas and portfolio strategy JSON. Use price tools for entry/stop/target levels."
+            f"Produce 5 trade ideas and portfolio strategy JSON. Anchor every entry/stop/target to the LIVE PRICES block above. "
+            f"You may call get_current_price for additional tickers not in the LIVE PRICES block, but do NOT override prices already given."
         )

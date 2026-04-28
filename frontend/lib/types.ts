@@ -33,6 +33,11 @@ export interface TradeIdea {
   time_horizon: string;
   catalysts: string[];
   risks: string[];
+  // Set when the server-side validator overrode the LLM's entry/stop/target
+  // to anchor against live price. Surfaced as a small badge on the trade card.
+  price_corrected?: boolean;
+  live_price_used?: number;
+  original_entry_zone?: string | null;
 }
 
 export interface IntelligenceMemo {

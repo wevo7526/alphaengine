@@ -208,13 +208,14 @@ class BaseAgent:
     def _ground_check(self, parsed: dict, tool_results_text: str) -> dict:
         """
         Lightweight tool-grounding heuristic. Scans the agent's narrative
-        output for numeric claims (P/E ratios, percentages, dollar values)
-        and flags any number that doesn't appear (within rounding tolerance)
-        in the concatenated tool-result string. NOT a full provenance trace
-        — a tripwire.
+        output for numeric claims (P/E ratios, percentages, prices) and
+        flags any number that doesn't appear (within tolerance) in the
+        concatenated tool-result string. NOT a full provenance trace — a
+        tripwire that catches the LLM citing a price like "$185" when
+        the tool said "$350".
 
-        Adds `_grounding` to parsed: {numeric_claims: int, ungrounded: list,
-        confidence: "high"|"medium"|"low"}.
+        Adds `_grounding` to parsed: {numeric_claims, ungrounded_count,
+        ungrounded_samples, confidence: "high"|"medium"|"low"}.
         """
         if not isinstance(parsed, dict):
             return parsed
@@ -227,39 +228,53 @@ class BaseAgent:
         if not isinstance(narrative, str) or len(narrative) < 50 or not tool_results_text:
             return parsed
 
-        # Extract numeric tokens with at most 2 decimals. We only check
-        # plausible "claim" numbers (skip 0/1/100 — too generic).
-        candidates = re.findall(r"\b\d{1,4}(?:\.\d{1,2})?\b", narrative)
+        # Capture numbers up to 7 digits (so $1,420,000 caps), with optional
+        # commas and up to 4 decimals. Strip the commas before parsing.
+        num_re = re.compile(r"\b-?\d{1,3}(?:,\d{3})+(?:\.\d{1,4})?\b|\b-?\d+(?:\.\d{1,4})?\b")
+        candidates = num_re.findall(narrative)
+
+        # Pre-extract tool numbers ONCE (was re-scanning per candidate)
+        tool_nums_raw = num_re.findall(tool_results_text)
+        tool_floats: list[float] = []
+        for tn in tool_nums_raw:
+            try:
+                tool_floats.append(float(tn.replace(",", "")))
+            except ValueError:
+                continue
+
         ungrounded = []
         seen = set()
         for c in candidates:
-            if c in seen:
+            key = c
+            if key in seen:
                 continue
-            seen.add(c)
+            seen.add(key)
             try:
-                val = float(c)
+                val = float(c.replace(",", ""))
             except ValueError:
                 continue
-            if val <= 1 or val == 100:
+            # Skip generics: integers in {0, 1, 2, 3, 5, 10, 100} that show up
+            # as bullet numbers, decade counts, percentage-of-100 references.
+            if val in (0, 1, 2, 3, 5, 10, 100):
                 continue
-            # Match within ±2% tolerance — strict equality fails on rounding.
-            if val == 0:
-                continue
-            tol = max(0.05, abs(val) * 0.02)
-            # Quick string check first (cheap)
-            rounded_strs = {f"{val:.0f}", f"{val:.1f}", f"{val:.2f}", c}
+            # Tolerance: tighter for big numbers (likely prices). 2% baseline,
+            # 1% for values >= 50 (typical equity prices), but never below
+            # 0.05 absolute so small ratios still match within a rounding step.
+            if abs(val) >= 50:
+                tol = max(0.05, abs(val) * 0.01)
+            else:
+                tol = max(0.05, abs(val) * 0.02)
+
+            # Cheap string-form check first
+            rounded_strs = {f"{val:.0f}", f"{val:.1f}", f"{val:.2f}", c, c.replace(",", "")}
             if any(s in tool_results_text for s in rounded_strs):
                 continue
-            # Numeric tolerance scan over tool-result numbers
-            tool_nums = re.findall(r"-?\d+(?:\.\d+)?", tool_results_text)
+
             grounded = False
-            for tn in tool_nums:
-                try:
-                    if abs(float(tn) - val) <= tol:
-                        grounded = True
-                        break
-                except ValueError:
-                    continue
+            for tn in tool_floats:
+                if abs(tn - val) <= tol:
+                    grounded = True
+                    break
             if not grounded:
                 ungrounded.append(c)
 

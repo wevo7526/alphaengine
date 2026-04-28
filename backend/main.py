@@ -351,6 +351,36 @@ async def delete_memo(memo_id: str, req: Request):
     return {"deleted": memo_id}
 
 
+@app.post("/api/signals/flush")
+async def flush_signals(req: Request, scope: str = "all"):
+    """
+    Bulk-delete the authenticated user's intelligence memos.
+    `scope`: "all" (default) deletes every memo for this user;
+             "stale" deletes memos older than 30 days.
+    Strictly user-scoped — cannot affect other users' analyses.
+    """
+    from sqlalchemy import delete as sql_delete
+    from datetime import datetime, timezone, timedelta
+
+    user_id = require_user_id(req)
+    if scope not in ("all", "stale"):
+        raise HTTPException(status_code=400, detail="scope must be all|stale")
+
+    async with async_session() as session:
+        stmt = sql_delete(IntelligenceMemoRecord).where(
+            IntelligenceMemoRecord.user_id == user_id
+        )
+        if scope == "stale":
+            cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+            stmt = stmt.where(IntelligenceMemoRecord.created_at < cutoff)
+        result = await session.execute(stmt)
+        await session.commit()
+        deleted = result.rowcount or 0
+
+    logger.info(f"flush_signals: user={user_id} scope={scope} deleted={deleted}")
+    return {"deleted": deleted, "scope": scope}
+
+
 # === DATA ENDPOINTS ===
 
 @app.get("/api/data/macro")
@@ -2420,15 +2450,23 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         ps_start = asyncio.get_event_loop().time()
 
         # Pull live portfolio so Strategist sizes ideas against the real book,
-        # and pull the scorecard so it calibrates conviction by past hit rate.
+        # the scorecard for conviction calibration, and PRE-FETCH current
+        # prices so the Strategist anchors entry/stop/target to live data
+        # instead of inventing numbers from prose.
         portfolio_for_strategy = None
         scorecard_for_strategy = None
+        live_prices_for_strategy: dict = {}
         try:
-            from agents.orchestrator import _fetch_portfolio_snapshot, _fetch_scorecard_for_calibration
+            from agents.orchestrator import (
+                _fetch_portfolio_snapshot,
+                _fetch_scorecard_for_calibration,
+                _fetch_live_prices_for,
+            )
             portfolio_for_strategy = await _fetch_portfolio_snapshot(user_id)
             scorecard_for_strategy = await _fetch_scorecard_for_calibration(user_id)
+            live_prices_for_strategy = await _fetch_live_prices_for(plan_data.get("tickers", []))
         except Exception as e:
-            logger.debug(f"[stream] Portfolio/scorecard prefetch skipped: {e}")
+            logger.debug(f"[stream] Strategist prefetch skipped: {e}")
 
         try:
             async for chunk in run_with_streaming(
@@ -2439,6 +2477,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "risk": risk_data,
                         "portfolio": portfolio_for_strategy,
                         "scorecard": scorecard_for_strategy,
+                        "live_prices": live_prices_for_strategy,
                     }, callbacks=[ps_cb]
                 ),
                 timeout_s=90, label="PS",
@@ -2449,6 +2488,18 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "trade_ideas": [], "portfolio_positioning": "neutral",
                         "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
                     }
+                    # Post-validate trade ideas against live prices —
+                    # overrides any LLM hallucinations that snuck past the
+                    # prompt's anchoring rules.
+                    if isinstance(strategy_data, dict) and live_prices_for_strategy:
+                        try:
+                            from agents.portfolio_strategist import validate_and_fix_trade_ideas
+                            strategy_data["trade_ideas"] = validate_and_fix_trade_ideas(
+                                strategy_data.get("trade_ideas") or [],
+                                live_prices_for_strategy,
+                            )
+                        except Exception as e:
+                            logger.debug(f"[stream] trade-idea validator skipped: {e}")
                 else:
                     for evt in chunk:
                         if evt.get("_keepalive"):

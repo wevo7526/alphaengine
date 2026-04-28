@@ -228,6 +228,7 @@ export default function PortfolioPage() {
   };
 
   const [flushing, setFlushing] = useState(false);
+  const [flushingAnalyses, setFlushingAnalyses] = useState(false);
   const handleFlush = async () => {
     if (flushing) return;
     if (typeof window !== "undefined") {
@@ -823,6 +824,35 @@ export default function PortfolioPage() {
               <p className="text-sm text-text-tertiary">No analyses yet. Go to Analysis to run your first query.</p>
             </div>
           ) : (
+            <>
+              <div className="flex items-center justify-between mb-3">
+                <p className="text-[11px] text-text-quaternary">{memos.length} {memos.length === 1 ? "analysis" : "analyses"}</p>
+                <button
+                  onClick={async () => {
+                    if (flushingAnalyses) return;
+                    if (typeof window !== "undefined") {
+                      const ok = window.confirm(
+                        `Delete ALL ${memos.length} analyses for your account? This cannot be undone.`,
+                      );
+                      if (!ok) return;
+                    }
+                    setFlushingAnalyses(true);
+                    try {
+                      const res = await api.flushAnalyses("all");
+                      setMemos([]);
+                      setApiError(`Flushed ${res.deleted} ${res.deleted === 1 ? "analysis" : "analyses"}`);
+                    } catch (e) {
+                      recordError("flush analyses", e);
+                    }
+                    setFlushingAnalyses(false);
+                  }}
+                  disabled={flushingAnalyses}
+                  title="Hard-delete all analyses for your account"
+                  className="px-3 py-1.5 rounded-lg border border-signal-red/30 bg-signal-red/[0.06] text-signal-red text-xs font-medium hover:bg-signal-red/[0.12] transition-colors disabled:opacity-30"
+                >
+                  {flushingAnalyses ? "Flushing..." : `Flush All (${memos.length})`}
+                </button>
+              </div>
             <div className="space-y-2">
               {memos.map((memo, i) => (
                 <div key={i}>
@@ -864,6 +894,7 @@ export default function PortfolioPage() {
                 </div>
               ))}
             </div>
+            </>
           )}
         </>
       )}
