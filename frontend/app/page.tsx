@@ -217,9 +217,9 @@ export default function HomePage() {
               </span>
             </div>
           </div>
-          {regime.probabilities ? (
+          {regime.probabilities && typeof regime.probabilities === "object" ? (
             <div className="flex gap-2 mt-3">
-              {Object.entries(regime.probabilities as Record<string, number>).map(([state, prob]) => (
+              {Object.entries((regime.probabilities || {}) as Record<string, number>).map(([state, prob]) => (
                 <div key={state} className="flex-1 rounded-lg bg-bg-primary px-2 py-1.5 text-center">
                   <p className="text-[9px] text-text-quaternary capitalize">{state.replace("_", " ")}</p>
                   <p className="text-xs font-mono text-text-primary">{(Number(prob) * 100).toFixed(0)}%</p>

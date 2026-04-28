@@ -137,6 +137,13 @@ export default function PortfolioPage() {
   const [scorecard, setScorecard] = useState<ScorecardSummary | null>(null);
   const [scorecardRunning, setScorecardRunning] = useState(false);
   const [attribution, setAttribution] = useState<AttributionData | null>(null);
+  const [apiError, setApiError] = useState<string | null>(null);
+
+  const recordError = (label: string, e: unknown) => {
+    const msg = e instanceof Error ? e.message : String(e);
+    setApiError(`${label}: ${msg}`);
+    if (typeof console !== "undefined") console.error(`[portfolio] ${label}`, e);
+  };
 
   const loadPositions = () => {
     setPositionsLoading(true);
@@ -144,13 +151,13 @@ export default function PortfolioPage() {
       const data = d as { positions: Position[]; summary: PositionsSummary };
       setPositions(data.positions || []);
       setPositionsSummary(data.summary || null);
-    }).catch(() => {}).finally(() => setPositionsLoading(false));
+    }).catch((e) => recordError("positions", e)).finally(() => setPositionsLoading(false));
   };
 
   const loadScorecard = () => {
     api.scorecardSummary().then((d: unknown) => {
       setScorecard(d as ScorecardSummary);
-    }).catch(() => {});
+    }).catch((e) => recordError("scorecard", e));
   };
 
   const runScoring = async () => {
@@ -159,14 +166,16 @@ export default function PortfolioPage() {
       await api.scorecardRun();
       await new Promise((r) => setTimeout(r, 500));
       loadScorecard();
-    } catch {}
+    } catch (e) {
+      recordError("score signals", e);
+    }
     setScorecardRunning(false);
   };
 
   const loadAttribution = () => {
     api.attribution().then((d: unknown) => {
       setAttribution(d as AttributionData);
-    }).catch(() => {});
+    }).catch((e) => recordError("attribution", e));
   };
 
   useEffect(() => {
@@ -202,6 +211,21 @@ export default function PortfolioPage() {
 
   return (
     <div className="p-8 max-w-4xl">
+      {apiError && (
+        <div className="mb-4 flex items-start justify-between rounded-xl border border-signal-red/25 bg-signal-red/[0.06] p-3">
+          <div>
+            <p className="text-xs font-medium text-signal-red">Data load issue</p>
+            <p className="text-[11px] text-text-tertiary mt-0.5">{apiError}</p>
+          </div>
+          <button
+            onClick={() => setApiError(null)}
+            className="text-text-quaternary hover:text-text-primary text-xs px-2"
+            aria-label="Dismiss"
+          >
+            ×
+          </button>
+        </div>
+      )}
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-text-primary mb-1">
@@ -365,7 +389,11 @@ export default function PortfolioPage() {
                                 : "—"}
                             </td>
                             <td className="px-4 py-3 text-right font-mono text-[12px] text-text-tertiary">
-                              {p.weight_pct !== null ? `${p.weight_pct.toFixed(1)}%` : `${p.total_size_pct.toFixed(1)}%`}
+                              {p.weight_pct != null
+                                ? `${p.weight_pct.toFixed(1)}%`
+                                : p.total_size_pct != null
+                                  ? `${p.total_size_pct.toFixed(1)}%`
+                                  : "—"}
                             </td>
                             <td className="px-4 py-3 text-right font-mono text-[11px] text-text-quaternary">
                               {p.avg_stop_loss !== null ? `$${p.avg_stop_loss.toFixed(0)}` : "—"}
@@ -406,10 +434,17 @@ export default function PortfolioPage() {
           {!scorecard || scorecard.signals === 0 ? (
             <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
               <p className="text-[13px] text-text-secondary mb-2">No scored signals yet</p>
-              <p className="text-xs text-text-tertiary max-w-md mx-auto">
+              <p className="text-xs text-text-tertiary max-w-md mx-auto mb-4">
                 Run an analysis, wait at least 24 hours, then click Score Past Signals.
                 Signals are scored at 1, 5, and 20 trading day intervals against realized prices.
               </p>
+              <button
+                onClick={runScoring}
+                disabled={scorecardRunning}
+                className="px-4 py-2 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
+              >
+                {scorecardRunning ? "Scoring..." : "Score Past Signals Now"}
+              </button>
             </div>
           ) : (
             <div className="space-y-6">
@@ -484,13 +519,13 @@ export default function PortfolioPage() {
               </div>
 
               {/* Per-conviction breakdown */}
-              {scorecard.by_conviction && Object.keys(scorecard.by_conviction).length > 0 && (
+              {scorecard.by_conviction && typeof scorecard.by_conviction === "object" && Object.keys(scorecard.by_conviction).length > 0 && (
                 <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
                   <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
                     By Conviction Bucket
                   </h3>
                   <div className="space-y-2">
-                    {Object.entries(scorecard.by_conviction).map(([bucket, stats]) => (
+                    {Object.entries(scorecard.by_conviction || {}).map(([bucket, stats]) => (
                       <div key={bucket} className="flex items-center justify-between text-[12px] py-1.5 border-b border-border-primary last:border-b-0">
                         <span className="text-text-secondary capitalize">{bucket}</span>
                         <div className="flex items-center gap-4">

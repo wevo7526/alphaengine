@@ -68,7 +68,7 @@ class TradeRepository:
             await session.execute(
                 update(TradeRecord)
                 .where(TradeRecord.id == trade_id)
-                .values(status="closed", exit_price=exit_price, realized_pnl=pnl, closed_at=datetime.now(timezone.utc))
+                .values(status="closed", exit_price=exit_price, realized_pnl=pnl, closed_at=datetime.utcnow())
             )
             await session.commit()
 

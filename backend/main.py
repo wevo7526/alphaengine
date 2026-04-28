@@ -24,6 +24,7 @@ from db.database import init_db, async_session, ping_db, DB_DIALECT
 from db.models import IntelligenceMemoRecord, ScanFindingRecord, ScanRunRecord, WatchlistRecord, SignalScoreRecord
 from infra.logging_ctx import RequestIdMiddleware, install_logging, get_request_id
 from infra.status_store import AnalysisStatusStore
+from infra.timeout import RequestTimeoutMiddleware
 
 # Install structured-logging filter before any app logging happens.
 logging.basicConfig(level=logging.INFO)
@@ -77,6 +78,25 @@ app = FastAPI(title="Alpha Engine API", version="2.0.0", lifespan=lifespan)
 
 # Request ID first so every subsequent log line is tagged.
 app.add_middleware(RequestIdMiddleware)
+
+# Hard backstop on every non-streaming handler so a stuck dependency
+# (FRED, LLM, DB) can never wedge the frontend into perpetual loading.
+# Returns 504 after the deadline. Exemptions:
+#   /api/analyze/stream — SSE; long-lived by design.
+#   /api/analyze        — non-streaming fallback; orchestrator has its
+#                         own per-step deadlines totalling ~8 min.
+#   /api/backtest/run   — backtests legitimately scan months of bars.
+#   /api/morning-report — multi-agent report generation.
+app.add_middleware(
+    RequestTimeoutMiddleware,
+    timeout_seconds=90.0,
+    exempt_path_prefixes=(
+        "/api/analyze/stream",
+        "/api/analyze",
+        "/api/backtest/run",
+        "/api/morning-report",
+    ),
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -1100,7 +1120,6 @@ async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request):
         else:
             pnl_pct = ((entry - req.exit_price) / entry * 100) if entry > 0 else 0
 
-        from datetime import datetime, timezone
         await session.execute(
             sql_update(TradeRecord)
             .where(TradeRecord.id == trade_id)
@@ -1108,7 +1127,7 @@ async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request):
                 status="closed",
                 exit_price=req.exit_price,
                 realized_pnl=round(pnl_pct, 2),
-                closed_at=datetime.now(timezone.utc),
+                closed_at=datetime.utcnow(),
                 md_notes=(trade.md_notes or "") + f"\nClosed: {req.notes}" if req.notes else trade.md_notes,
             )
         )
@@ -1812,13 +1831,20 @@ async def portfolio_positions(req: Request):
 scan_status_store = AnalysisStatusStore(max_entries=1000, ttl_seconds=6 * 3600)
 
 
+_SCAN_WATCHDOG_SECONDS = 300  # 5 min — scans must not hang past this
+
+
 async def _run_scan_background(user_id: str | None, run_id: str, universe: list[str]):
-    """Execute scan, persist findings, update status."""
+    """Execute scan, persist findings, update status. Watchdog-bounded so a
+    hung scan can never permanently lock the trigger."""
     from agents.scanner import run_scan
     from datetime import datetime as _dt, timezone as _tz
 
     try:
-        result = run_scan(universe=universe)
+        result = await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(None, lambda: run_scan(universe=universe)),
+            timeout=_SCAN_WATCHDOG_SECONDS,
+        )
         findings = result.get("findings", [])
 
         async with async_session() as session:
@@ -1828,7 +1854,7 @@ async def _run_scan_background(user_id: str | None, run_id: str, universe: list[
                 run.universe_size = result.get("universe_size", 0)
                 run.findings_count = len(findings)
                 run.status = "completed"
-                run.completed_at = _dt.now(_tz.utc)
+                run.completed_at = _dt.utcnow()
 
             # Persist findings
             for f in findings:
@@ -1845,6 +1871,18 @@ async def _run_scan_background(user_id: str | None, run_id: str, universe: list[
                 session.add(rec)
             await session.commit()
         logger.info(f"Scan {run_id} completed with {len(findings)} findings")
+    except asyncio.TimeoutError:
+        logger.error(f"Scan {run_id} exceeded watchdog timeout ({_SCAN_WATCHDOG_SECONDS}s)")
+        try:
+            async with async_session() as session:
+                run = await session.get(ScanRunRecord, run_id)
+                if run:
+                    run.status = "failed"
+                    run.error_message = f"watchdog timeout after {_SCAN_WATCHDOG_SECONDS}s"
+                    run.completed_at = _dt.utcnow()
+                    await session.commit()
+        except Exception:
+            pass
     except Exception as e:
         logger.error(f"Scan {run_id} failed: {e}")
         try:
@@ -1853,7 +1891,7 @@ async def _run_scan_background(user_id: str | None, run_id: str, universe: list[
                 if run:
                     run.status = "failed"
                     run.error_message = str(e)[:500]
-                    run.completed_at = _dt.now(_tz.utc)
+                    run.completed_at = _dt.utcnow()
                     await session.commit()
         except Exception:
             pass
@@ -1946,10 +1984,19 @@ async def scan_trigger(req: Request):
     user_id = require_user_id(req)
     key = user_id
 
-    # Don't allow concurrent scans for the same user
+    # Don't allow concurrent scans for the same user — but auto-recover from
+    # a stale "running" entry whose worker died or watchdog already fired.
+    # Without this, a single hung scan permanently locks the trigger.
     current = await scan_status_store.get(key)
     if current and current.get("status") == "running":
-        return {"status": "already_running", "run_id": current.get("run_id")}
+        started_at = current.get("started_at") or 0
+        if _time.time() - started_at < _SCAN_WATCHDOG_SECONDS + 30:
+            return {"status": "already_running", "run_id": current.get("run_id")}
+        logger.warning(
+            "Stale running scan for %s (started %ss ago); resetting and re-triggering",
+            user_id, int(_time.time() - started_at),
+        )
+        await scan_status_store.set(key, {"status": "idle"})
 
     # Build universe: default + user watchlist + open trade tickers
     from agents.universe import DEFAULT_UNIVERSE

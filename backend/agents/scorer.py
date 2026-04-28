@@ -162,6 +162,8 @@ async def score_pending_signals(async_session_factory, user_id: str | None = Non
                     hit_20d = return_20d > 0 if return_20d is not None else None
 
                     if score is None:
+                        # signal_date column is TIMESTAMP WITHOUT TIME ZONE; strip tz before write
+                        signal_date_naive = memo_date.replace(tzinfo=None) if memo_date.tzinfo else memo_date
                         score = SignalScoreRecord(
                             user_id=memo.user_id,
                             memo_id=memo.id,
@@ -169,7 +171,7 @@ async def score_pending_signals(async_session_factory, user_id: str | None = Non
                             direction=direction,
                             conviction=conviction,
                             entry_price=entry_price,
-                            signal_date=memo_date,
+                            signal_date=signal_date_naive,
                             price_1d=price_1d,
                             price_5d=price_5d,
                             price_20d=price_20d,
@@ -197,7 +199,12 @@ async def score_pending_signals(async_session_factory, user_id: str | None = Non
                             score.hit_20d = hit_20d
                         updated_count += 1
 
-            await session.commit()
+            try:
+                await session.commit()
+            except Exception as commit_err:
+                await session.rollback()
+                logger.error(f"score_pending_signals commit failed, rolled back: {commit_err}")
+                return {"scored": 0, "updated": 0, "skipped": skipped, "error": str(commit_err)}
     except Exception as e:
         logger.error(f"score_pending_signals failed: {e}")
         return {"scored": 0, "updated": 0, "skipped": 0, "error": str(e)}
