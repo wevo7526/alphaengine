@@ -2342,9 +2342,27 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         yield send({"type": "desk_start", "desk": "query", "label": "Query Interpretation", "agent": "query_interpreter"})
         yield send({"phase": "interpreting", "agent": "query_interpreter"})  # Backward compat
         qi_cb = DeskStreamCallback(event_queue, desk="query", agent="query_interpreter")
+
+        # Pre-fetch macro context + scorecard so the Interpreter is regime-aware
+        # and track-record-aware from the start of the pipeline.
+        macro_context_for_interp: dict = {}
+        scorecard_for_interp = None
+        try:
+            from agents.orchestrator import _fetch_macro_context, _fetch_scorecard_for_calibration
+            macro_context_for_interp = await _fetch_macro_context()
+            scorecard_for_interp = await _fetch_scorecard_for_calibration(user_id)
+        except Exception as e:
+            logger.debug(f"[stream] interpreter prefetch skipped: {e}")
+
         try:
             plan = await _with_timeout(
-                _query_interpreter.interpret(query, callbacks=[qi_cb]), seconds=30, label="QI"
+                _query_interpreter.interpret(
+                    query,
+                    callbacks=[qi_cb],
+                    macro_context=macro_context_for_interp,
+                    scorecard=scorecard_for_interp,
+                ),
+                seconds=45, label="QI",
             )
             if not plan:
                 yield send({"phase": "error", "error": "Query interpretation timed out"})
@@ -2382,6 +2400,12 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                 if isinstance(chunk, tuple) and chunk[0] == "__result__":
                     output = chunk[1]
                     research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
+                    # Run sub-question completeness heuristic
+                    try:
+                        from agents.orchestrator import _research_completeness_check
+                        research_data = _research_completeness_check(plan_data, research_data)
+                    except Exception as e:
+                        logger.debug(f"[stream] completeness check skipped: {e}")
                 else:
                     # chunk is a list of events
                     for evt in chunk:
@@ -2478,6 +2502,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "portfolio": portfolio_for_strategy,
                         "scorecard": scorecard_for_strategy,
                         "live_prices": live_prices_for_strategy,
+                        "macro_context": macro_context_for_interp,
                     }, callbacks=[ps_cb]
                 ),
                 timeout_s=90, label="PS",
@@ -2488,16 +2513,18 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "trade_ideas": [], "portfolio_positioning": "neutral",
                         "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
                     }
-                    # Post-validate trade ideas against live prices —
-                    # overrides any LLM hallucinations that snuck past the
-                    # prompt's anchoring rules.
-                    if isinstance(strategy_data, dict) and live_prices_for_strategy:
+                    # Post-validate trade ideas against live prices +
+                    # diversity assessment.
+                    if isinstance(strategy_data, dict):
                         try:
-                            from agents.portfolio_strategist import validate_and_fix_trade_ideas
-                            strategy_data["trade_ideas"] = validate_and_fix_trade_ideas(
-                                strategy_data.get("trade_ideas") or [],
-                                live_prices_for_strategy,
+                            from agents.portfolio_strategist import (
+                                validate_and_fix_trade_ideas, assess_diversity,
                             )
+                            ideas = strategy_data.get("trade_ideas") or []
+                            if live_prices_for_strategy:
+                                ideas = validate_and_fix_trade_ideas(ideas, live_prices_for_strategy)
+                                strategy_data["trade_ideas"] = ideas
+                            strategy_data["_diversity"] = assess_diversity(ideas)
                         except Exception as e:
                             logger.debug(f"[stream] trade-idea validator skipped: {e}")
                 else:
@@ -2555,6 +2582,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "strategy": strategy_data,
                         "scorecard": scorecard_for_cio,
                         "prior_memos": prior_memos_for_cio,
+                        "macro_context": macro_context_for_interp,
                     },
                     callbacks=[cio_cb],
                 ),
@@ -2639,6 +2667,34 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         # Plan confidence + grounding aggregation (mirrors orchestrator path)
         memo_data["plan_confidence"] = int(plan_data.get("plan_confidence", 0) or 0)
         memo_data["plan_confidence_reason"] = plan_data.get("plan_confidence_reason", "") or ""
+
+        # Plan shape + macro context surfaced for the UI
+        memo_data["question_type"] = plan_data.get("question_type", "alpha_finding")
+        memo_data["benchmark"] = plan_data.get("benchmark", "")
+        memo_data["instrument_preference"] = plan_data.get("instrument_preference", "stock")
+        memo_data["idea_archetype"] = plan_data.get("idea_archetype", []) or []
+        memo_data["sub_questions"] = plan_data.get("sub_questions", []) or []
+        memo_data["falsification_criteria"] = plan_data.get("falsification_criteria", []) or []
+        memo_data["regime_sensitivity"] = plan_data.get("regime_sensitivity", []) or []
+        memo_data["macro_context"] = macro_context_for_interp or {}
+
+        # Quality + structural integrity signals
+        if isinstance(research_data, dict):
+            memo_data["sub_question_coverage"] = research_data.get("sub_question_coverage", []) or []
+            if research_data.get("sub_question_answered_pct") is not None:
+                memo_data["sub_question_answered_pct"] = research_data.get("sub_question_answered_pct")
+        if isinstance(strategy_data, dict):
+            memo_data["diversity"] = strategy_data.get("_diversity") or {}
+        if isinstance(risk_data, dict):
+            memo_data["falsification_probabilities"] = risk_data.get("falsification_probabilities", []) or []
+        # Data quality flag based on which desks degraded
+        if isinstance(research_data, dict) and "failed" in (research_data.get("data_summary") or "").lower():
+            memo_data["data_quality"] = "critical"
+        elif isinstance(research_data, dict) and "timed out" in (research_data.get("data_summary") or "").lower():
+            memo_data["data_quality"] = "degraded"
+        else:
+            memo_data["data_quality"] = "complete"
+
         try:
             rank = {"low": 0, "medium": 1, "high": 2, "n/a": 3}
             pieces = []

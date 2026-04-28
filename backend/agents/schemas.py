@@ -25,10 +25,51 @@ class QueryIntent(str, Enum):
     MARKET_REGIME = "market_regime"
 
 
+class QuestionType(str, Enum):
+    """Analytical shape of the query. Distinct from `intent` (which desk to engage)."""
+    ALPHA_FINDING = "alpha_finding"        # discover edge ("best risk-adjusted trade")
+    HEDGING = "hedging"                    # protect against risk ("how to hedge X?")
+    REGIME_CHECK = "regime_check"          # macro outlook ("late-cycle here?")
+    VALUATION = "valuation"                # is it cheap? ("AAPL overvalued at 32x?")
+    COMPARISON = "comparison"              # relative value ("MSFT vs GOOGL?")
+    FACTOR_EXPOSURE = "factor_exposure"    # beta/style ("how exposed to growth?")
+    PAIR_TRADE = "pair_trade"              # relative positioning
+    POST_MORTEM = "post_mortem"            # analyze past outcome
+    WHAT_IF = "what_if"                    # scenario analysis
+
+
+class InstrumentPreference(str, Enum):
+    """How the Strategist should structure the trade."""
+    STOCK = "stock"
+    OPTIONS = "options"
+    PAIR_TRADE = "pair_trade"
+    SPREAD = "spread"
+    HEDGE = "hedge"
+    MIXED = "mixed"
+
+
+class DataPriorityItem(BaseModel):
+    """One ranked instruction for the Research Analyst."""
+    model_config = ConfigDict(extra="ignore")
+    rank: int = Field(default=3, ge=1, le=4)  # 1=critical, 4=skip
+    data_source: str = ""  # "sec_filings", "fundamentals", "options", "macro", "news", "analyst_consensus", "skip"
+    query: str = ""        # specific instruction
+    justification: str = ""
+
+
+class RegimeSensitivity(BaseModel):
+    """How the thesis changes per macro regime."""
+    model_config = ConfigDict(extra="ignore")
+    regime: str = ""  # "expansion" | "late_cycle" | "contraction" | "recovery"
+    ideal_position: str = ""
+    conviction_multiplier: float = Field(default=1.0, ge=0.0, le=1.5)
+    key_assumption: str = ""
+
+
 class AnalysisPlan(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
-    """Output of the Query Interpreter — the research plan."""
+    """Output of the Query Interpreter — the research plan that everything cascades off."""
     query: str
     intent: QueryIntent
     tickers: list[str] = Field(default_factory=list)
@@ -36,14 +77,71 @@ class AnalysisPlan(BaseModel):
     themes: list[str] = Field(default_factory=list)
     data_requests: list[str] = Field(
         default_factory=list,
-        description="Specific instructions for the Research Analyst",
+        description="Legacy free-text instructions; superseded by data_priority but kept for backward compat",
     )
     risk_focus: list[str] = Field(default_factory=list)
     time_horizon: str = Field(default="weeks")
-    # Self-reported confidence in the plan classification. <40 means the
-    # query is ambiguous and downstream desks should soften assertions.
     plan_confidence: int = Field(default=70, ge=0, le=100)
     plan_confidence_reason: str = Field(default="")
+
+    # === Phase-2 enrichment fields — these are what makes the plan tailored ===
+
+    # The analytical shape of the question
+    question_type: QuestionType = QuestionType.ALPHA_FINDING
+
+    # 3-6 specific questions the Research Analyst MUST answer in data_summary.
+    # Used by Research's completeness check + cited by name in the CIO memo.
+    sub_questions: list[str] = Field(default_factory=list)
+
+    # Tickers explicitly named for benchmark/relative valuation, NOT trade ideas.
+    # Strategist uses these as a yardstick; Research calls peer_comparison with them.
+    comparison_set: list[str] = Field(default_factory=list)
+
+    # Ranked data fetch plan — overrides data_requests when present.
+    data_priority: list[DataPriorityItem] = Field(default_factory=list)
+
+    # Concrete data points that would invalidate the thesis. Risk Manager scores
+    # them; CIO frames "what would change our view" in the memo.
+    falsification_criteria: list[str] = Field(default_factory=list)
+
+    # Theme broken into sub-components ("AI capex" → {hyperscaler_capex_levels,
+    # training_vs_inference_mix, ...}). Research structures data_summary around it.
+    theme_decomposition: dict[str, list[str]] = Field(default_factory=dict)
+
+    # What this trade should beat (ETF or index ticker, e.g. "SMH" or "SPY")
+    benchmark: str = ""
+
+    # How the thesis varies by regime. Strategist sizes per regime; Decision Gate
+    # uses to override conviction if regime opposite to ideal.
+    regime_sensitivity: list[RegimeSensitivity] = Field(default_factory=list)
+
+    # Stock vs options vs pair trade vs spread vs hedge vs mixed.
+    # Steers the Strategist away from "all 5 outright longs" default.
+    instrument_preference: InstrumentPreference = InstrumentPreference.STOCK
+
+    # Structural diversity directive: e.g., ["3 longs", "1 pair_trade", "1 hedge"].
+    # Strategist diversity validator enforces against this.
+    idea_archetype: list[str] = Field(default_factory=list)
+
+    @field_validator("question_type", mode="before")
+    @classmethod
+    def coerce_question_type(cls, v):
+        if isinstance(v, str):
+            try:
+                return QuestionType(v.strip().lower())
+            except ValueError:
+                return QuestionType.ALPHA_FINDING
+        return v
+
+    @field_validator("instrument_preference", mode="before")
+    @classmethod
+    def coerce_instrument(cls, v):
+        if isinstance(v, str):
+            try:
+                return InstrumentPreference(v.strip().lower())
+            except ValueError:
+                return InstrumentPreference.STOCK
+        return v
 
 
 # === Research Data ===
@@ -72,6 +170,14 @@ class RiskFactor(BaseModel):
     mitigation: str = ""
 
 
+class FalsificationScore(BaseModel):
+    """Risk Manager's probability assessment for each plan.falsification_criterion."""
+    model_config = ConfigDict(extra="ignore")
+    criterion: str = ""
+    probability: str = "medium"  # low | medium | high
+    reasoning: str = ""
+
+
 class RiskAssessment(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -81,6 +187,8 @@ class RiskAssessment(BaseModel):
     risk_factors: list[RiskFactor] = Field(default_factory=list)
     overall_risk_level: str = "elevated"
     risk_narrative: str = ""
+    # New: per-criterion probability scoring against plan.falsification_criteria
+    falsification_probabilities: list[FalsificationScore] = Field(default_factory=list)
 
 
 # === Trade Ideas ===
@@ -129,6 +237,13 @@ class TradeIdea(BaseModel):
     price_corrected: bool = False
     live_price_used: Optional[float] = None
     original_entry_zone: Optional[str] = None
+    # Beta layering — systematic exposure decomposition
+    beta_to_spy: Optional[float] = None
+    sector: Optional[str] = None
+    regime_conditional_size_pct: Optional[float] = None
+    # Trade structure (set by Strategist when instrument_preference != stock)
+    structure_type: Optional[str] = None  # "outright" | "pair" | "spread" | "calls" | "puts" | "hedge"
+    pair_short_leg: Optional[str] = None  # ticker if this is a pair_trade
 
     @field_validator("price_corrected", mode="before")
     @classmethod
@@ -205,6 +320,21 @@ class IntelligenceMemo(BaseModel):
     grounding: dict = Field(default_factory=dict)  # {confidence, ungrounded_count, ...}
     plan_confidence: int = 0
     plan_confidence_reason: str = ""
+    # New: end-to-end pipeline quality + structural integrity signals
+    data_quality: str = "complete"  # complete | degraded | critical
+    sub_question_coverage: list[dict] = Field(default_factory=list)
+    sub_question_answered_pct: Optional[float] = None
+    diversity: dict = Field(default_factory=dict)  # {monolithic, reason, direction_split, ...}
+    falsification_probabilities: list[dict] = Field(default_factory=list)
+    # Plan shape fields surfaced for the UI
+    question_type: str = "alpha_finding"
+    benchmark: str = ""
+    instrument_preference: str = "stock"
+    idea_archetype: list[str] = Field(default_factory=list)
+    sub_questions: list[str] = Field(default_factory=list)
+    falsification_criteria: list[str] = Field(default_factory=list)
+    regime_sensitivity: list[dict] = Field(default_factory=list)
+    macro_context: dict = Field(default_factory=dict)
 
     @field_validator("intent", mode="before")
     @classmethod

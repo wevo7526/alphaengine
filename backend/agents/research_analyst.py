@@ -512,15 +512,98 @@ class ResearchAnalyst(BaseAgent):
 
     def build_input_prompt(self, context: dict) -> str:
         plan = context.get("plan", {})
+
+        # Pull the rich Phase-2 fields. data_priority supersedes the legacy
+        # data_requests when present.
+        priority_items = plan.get("data_priority") or []
+        sub_questions = plan.get("sub_questions") or []
+        comparison_set = plan.get("comparison_set") or []
+        question_type = plan.get("question_type") or ""
+        theme_decomp = plan.get("theme_decomposition") or {}
+        falsification = plan.get("falsification_criteria") or []
+        benchmark = plan.get("benchmark") or ""
+
+        # Format data_priority by rank — the Analyst allocates tools accordingly
+        priority_block = ""
+        if priority_items:
+            buckets: dict[int, list[str]] = {1: [], 2: [], 3: [], 4: []}
+            for item in priority_items:
+                if not isinstance(item, dict):
+                    continue
+                rk = int(item.get("rank") or 3)
+                rk = max(1, min(4, rk))
+                src = item.get("data_source") or ""
+                qry = item.get("query") or ""
+                jus = item.get("justification") or ""
+                buckets[rk].append(f"  [{src}] {qry}  ({jus})")
+            priority_lines = []
+            for rk in (1, 2, 3, 4):
+                if not buckets[rk]:
+                    continue
+                if rk == 4:
+                    priority_lines.append(f"\n  RANK 4 (SKIP — do NOT call these):")
+                else:
+                    priority_lines.append(f"\n  RANK {rk}{' (CRITICAL)' if rk == 1 else ''}:")
+                priority_lines.extend(buckets[rk])
+            priority_block = "\n=== DATA PRIORITY (allocate budget by rank) ===" + "".join(priority_lines)
+
+        sub_q_block = ""
+        if sub_questions:
+            sub_q_block = (
+                "\n=== SUB-QUESTIONS YOU MUST ANSWER ===\n"
+                "Your data_summary MUST address each of these explicitly. "
+                "If you can't answer one, say so and explain why.\n"
+                + "\n".join(f"  Q{i+1}: {q}" for i, q in enumerate(sub_questions))
+            )
+
+        comparison_block = ""
+        if comparison_set:
+            comparison_block = (
+                f"\n=== COMPARISON SET (peers for relative valuation, NOT trade candidates) ===\n"
+                f"  {', '.join(comparison_set)}\n"
+                "Call get_peer_comparison with these as the peer list to anchor valuation context."
+            )
+
+        theme_block = ""
+        if theme_decomp:
+            lines = []
+            for theme, subs in theme_decomp.items():
+                if isinstance(subs, list):
+                    lines.append(f"  {theme}: {', '.join(subs)}")
+            if lines:
+                theme_block = "\n=== THEME DECOMPOSITION (structure your data_summary around these) ===\n" + "\n".join(lines)
+
+        falsification_block = ""
+        if falsification:
+            falsification_block = (
+                "\n=== FALSIFICATION CRITERIA (look for evidence pro/con) ===\n"
+                + "\n".join(f"  - {c}" for c in falsification)
+            )
+
+        # Legacy fallback: if no data_priority was emitted, fall back to old free-text
+        legacy_requests_block = ""
+        if not priority_items and plan.get("data_requests"):
+            legacy_requests_block = (
+                "\nData Requests (legacy free-text):\n"
+                + "\n".join(f"  - {r}" for r in plan.get("data_requests", []))
+            )
+
         return (
             f"Execute the following research plan:\n\n"
             f"Query: {plan.get('query', '')}\n"
-            f"Intent: {plan.get('intent', '')}\n"
+            f"Intent: {plan.get('intent', '')} | Question type: {question_type}\n"
             f"Tickers: {', '.join(plan.get('tickers', []))}\n"
             f"Sectors: {', '.join(plan.get('sectors', []))}\n"
             f"Themes: {', '.join(plan.get('themes', []))}\n"
-            f"Time Horizon: {plan.get('time_horizon', 'weeks')}\n\n"
-            f"Data Requests:\n" +
-            "\n".join(f"  - {r}" for r in plan.get("data_requests", [])) +
-            "\n\nGather the requested data using your tools, then produce your JSON summary."
+            f"Time Horizon: {plan.get('time_horizon', 'weeks')}\n"
+            f"Benchmark: {benchmark or 'not specified'}\n"
+            f"{priority_block}"
+            f"{sub_q_block}"
+            f"{comparison_block}"
+            f"{theme_block}"
+            f"{falsification_block}"
+            f"{legacy_requests_block}"
+            f"\n\nGather data per the priority ranking, then produce your JSON summary. "
+            f"Your data_summary MUST be structured to answer the sub-questions explicitly "
+            f"(label them Q1/Q2/...) and cite the comparison_set tickers when discussing valuation."
         )

@@ -46,6 +46,8 @@ class ResearchDeskState(TypedDict):
     scorecard_data: dict | None
     portfolio_data: dict | None
     memo_data: dict | None
+    macro_context: dict | None
+    data_quality: str | None
     error: str | None
     current_phase: str
 
@@ -59,22 +61,98 @@ async def _with_timeout(coro, seconds: int, label: str):
         return None
 
 
+async def _fetch_macro_context() -> dict:
+    """
+    Fetch the current macro snapshot + regime classification so the Query
+    Interpreter can ground regime_sensitivity from the start. Cached via
+    FREDDataClient (1h TTL) so this is cheap on repeated runs.
+    """
+    try:
+        from data.fred_client import FREDDataClient
+        from quant.regime import classify_regime
+        fred = FREDDataClient()
+        snap = fred.get_macro_snapshot() or {}
+        vix = snap.get("vix", {}).get("value")
+        credit = snap.get("credit_spreads", {}).get("value")
+        yc = snap.get("yield_curve_spread", {}).get("value")
+        ffr = snap.get("fed_funds_rate", {}).get("value")
+        regime_data = classify_regime(vix or 20, credit or 3, yc or 0.5)
+        return {
+            "current_regime": regime_data.get("current_regime"),
+            "confidence": regime_data.get("confidence"),
+            "vix": vix,
+            "credit_spreads": credit,
+            "yield_curve": yc,
+            "fed_funds_rate": ffr,
+        }
+    except Exception as e:
+        logger.debug(f"[orchestrator] macro context fetch failed (non-fatal): {e}")
+        return {}
+
+
 async def run_interpreter(state: ResearchDeskState) -> ResearchDeskState:
     state["current_phase"] = "interpreting"
     logger.info(f"[orchestrator] Query Interpreter: {state['query']}")
     try:
+        # Pre-fetch macro context + scorecard so the Interpreter sees
+        # regime + track record from the start. Both are cheap (cached).
+        macro_ctx = await _fetch_macro_context()
+        sc = state.get("scorecard_data")
+        if sc is None:
+            sc = await _fetch_scorecard_for_calibration(state.get("user_id"))
+            state["scorecard_data"] = sc
+
         plan = await _with_timeout(
-            _query_interpreter.interpret(state["query"]),
-            seconds=30, label="Query Interpreter"
+            _query_interpreter.interpret(
+                state["query"],
+                macro_context=macro_ctx,
+                scorecard=sc,
+            ),
+            seconds=45, label="Query Interpreter"
         )
         if plan:
             state["plan_data"] = plan.model_dump(mode="json")
+            # Stash macro context for downstream desks (Strategist, CIO)
+            state["macro_context"] = macro_ctx
         else:
             state["error"] = "Query interpretation timed out"
     except Exception as e:
         logger.error(f"[orchestrator] Query Interpreter failed: {e}")
         state["error"] = f"Failed to interpret query: {e}"
     return state
+
+
+def _research_completeness_check(plan: dict, research: dict) -> dict:
+    """
+    Verify the Research Analyst answered each sub_question in data_summary.
+    Adds research["sub_question_coverage"] = list of {q, answered} for the
+    UI + CIO. Cheap heuristic: looks for 'Q1', 'Q2'... markers OR for
+    keyword overlap with the sub-question text.
+    """
+    sub_qs = (plan or {}).get("sub_questions") or []
+    if not sub_qs or not isinstance(research, dict):
+        return research
+    summary = (research.get("data_summary") or "").lower()
+    coverage = []
+    for i, q in enumerate(sub_qs, start=1):
+        marker = f"q{i}"
+        if marker in summary:
+            answered = True
+        else:
+            # keyword fallback — at least 3 of the question's distinguishing
+            # words should appear in the summary
+            words = [w for w in (q or "").lower().split() if len(w) > 4]
+            hits = sum(1 for w in words if w in summary)
+            answered = hits >= 3
+        coverage.append({"question": q, "answered": bool(answered)})
+    research["sub_question_coverage"] = coverage
+    answered_count = sum(1 for c in coverage if c["answered"])
+    research["sub_question_answered_pct"] = round(answered_count / len(coverage) * 100, 1)
+    if answered_count < len(coverage):
+        logger.info(
+            f"[orchestrator] Research answered {answered_count}/{len(coverage)} sub-questions"
+        )
+    return research
 
 
 async def run_research(state: ResearchDeskState) -> ResearchDeskState:
@@ -88,11 +166,15 @@ async def run_research(state: ResearchDeskState) -> ResearchDeskState:
     )
     if output is None:
         state["research_data"] = {"data_summary": "Research timed out — using limited data."}
+        state["data_quality"] = "degraded"
     elif output.error:
         logger.warning(f"[orchestrator] Research Analyst error: {output.error}")
         state["research_data"] = {"data_summary": f"Research failed: {output.error}"}
+        state["data_quality"] = "critical"
     else:
-        state["research_data"] = output.output
+        state["research_data"] = _research_completeness_check(
+            state.get("plan_data") or {}, output.output
+        )
     return state
 
 
@@ -152,17 +234,21 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
             "portfolio": state.get("portfolio_data"),
             "scorecard": state.get("scorecard_data"),
             "live_prices": live_prices,
+            "macro_context": state.get("macro_context"),
         }),
         seconds=90, label="Portfolio Strategist"
     )
 
     # Post-validate trade ideas against live prices — overrides any LLM
-    # hallucinations that snuck past the prompt rules.
+    # hallucinations that snuck past the prompt rules. Also assess diversity.
     if output and not output.error and isinstance(output.output, dict):
-        from agents.portfolio_strategist import validate_and_fix_trade_ideas
+        from agents.portfolio_strategist import validate_and_fix_trade_ideas, assess_diversity
         ideas = output.output.get("trade_ideas") or []
         if ideas and live_prices:
-            output.output["trade_ideas"] = validate_and_fix_trade_ideas(ideas, live_prices)
+            ideas = validate_and_fix_trade_ideas(ideas, live_prices)
+            output.output["trade_ideas"] = ideas
+        # Stash diversity assessment so the UI can flag monolithic baskets
+        output.output["_diversity"] = assess_diversity(ideas)
     if output is None or (output and output.error):
         err = output.error if output else "timed out"
         logger.warning(f"[orchestrator] Portfolio Strategist error: {err}")
@@ -387,6 +473,7 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
             "strategy": state["strategy_data"],
             "scorecard": scorecard,
             "prior_memos": prior_memos,
+            "macro_context": state.get("macro_context"),
         }),
         seconds=120, label="CIO Synthesizer"
     )
@@ -459,6 +546,8 @@ async def run_research_desk(query: str, user_id: str | None = None) -> Intellige
         "scorecard_data": None,
         "portfolio_data": None,
         "memo_data": None,
+        "macro_context": None,
+        "data_quality": None,
         "error": None,
         "current_phase": "idle",
     }
@@ -492,6 +581,28 @@ async def run_research_desk(query: str, user_id: str | None = None) -> Intellige
     # Plan confidence (from Query Interpreter)
     memo_data["plan_confidence"] = int(plan.get("plan_confidence", 0) or 0)
     memo_data["plan_confidence_reason"] = plan.get("plan_confidence_reason", "") or ""
+
+    # Plan-shape fields — surfaced in the memo so the UI can render them
+    memo_data["question_type"] = plan.get("question_type", "alpha_finding")
+    memo_data["benchmark"] = plan.get("benchmark", "")
+    memo_data["instrument_preference"] = plan.get("instrument_preference", "stock")
+    memo_data["idea_archetype"] = plan.get("idea_archetype", []) or []
+    memo_data["sub_questions"] = plan.get("sub_questions", []) or []
+    memo_data["falsification_criteria"] = plan.get("falsification_criteria", []) or []
+    memo_data["regime_sensitivity"] = plan.get("regime_sensitivity", []) or []
+    memo_data["macro_context"] = final_state.get("macro_context") or {}
+
+    # Quality + structural integrity signals
+    memo_data["data_quality"] = final_state.get("data_quality") or "complete"
+    research_obj = final_state.get("research_data") or {}
+    if isinstance(research_obj, dict):
+        memo_data["sub_question_coverage"] = research_obj.get("sub_question_coverage", []) or []
+        if research_obj.get("sub_question_answered_pct") is not None:
+            memo_data["sub_question_answered_pct"] = research_obj.get("sub_question_answered_pct")
+    if isinstance(strategy, dict):
+        memo_data["diversity"] = strategy.get("_diversity") or {}
+    if isinstance(risk, dict):
+        memo_data["falsification_probabilities"] = risk.get("falsification_probabilities", []) or []
 
     # Aggregate tool-grounding tripwire results across all desks. The worst
     # confidence wins (low > medium > high) and counts are summed so the UI

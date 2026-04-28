@@ -314,10 +314,37 @@ class RiskManager(BaseAgent):
             if lines:
                 structured_block = "\n=== STRUCTURED TICKER DATA ===\n" + "\n".join(lines) + "\n"
 
+        # Falsification criteria — score each one explicitly with a probability.
+        # Used by CIO to frame "what would change our view" in the memo.
+        falsification = plan.get("falsification_criteria") or []
+        falsification_block = ""
+        if falsification:
+            falsification_block = (
+                "\n=== FALSIFICATION CRITERIA TO SCORE ===\n"
+                "For EACH criterion below, assess the probability it materializes "
+                "in the time horizon. Add to your output as `falsification_probabilities`:\n"
+                "[{criterion, probability: 'low|medium|high', reasoning}]\n"
+                + "\n".join(f"  - {c}" for c in falsification)
+            )
+
+        question_type = plan.get("question_type") or ""
+        risk_focus = plan.get("risk_focus") or []
+        focus_directive = ""
+        if "concentration" in risk_focus or "correlation" in risk_focus:
+            focus_directive = "Call get_realized_correlation FIRST; concentration is the priority risk this query.\n"
+        elif "factor" in risk_focus:
+            focus_directive = "Call get_factor_loadings on the primary ticker FIRST; factor exposure is the priority.\n"
+        elif "tail" in risk_focus or question_type == "hedging":
+            focus_directive = "Call get_market_breadth FIRST; check macro stress indicators (VIX, credit) before per-ticker.\n"
+
         return (
-            f"Query: {plan.get('query', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Risk Focus: {', '.join(plan.get('risk_focus', []))}\n\n"
+            f"Query: {plan.get('query', '')} | Question type: {question_type} | "
+            f"Tickers: {', '.join(plan.get('tickers', []))} | Risk Focus: {', '.join(risk_focus)}\n\n"
             f"Research Summary:\n{summary}\n"
-            f"{structured_block}\n"
+            f"{structured_block}"
+            f"{falsification_block}\n"
+            f"{focus_directive}"
             f"Use get_realized_correlation, get_market_breadth, get_factor_loadings as needed.\n"
-            f"Evaluate the risks and produce your risk assessment JSON."
+            f"Evaluate the risks and produce your risk assessment JSON, including "
+            f"`falsification_probabilities` if the plan provided falsification_criteria."
         )

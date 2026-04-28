@@ -44,6 +44,47 @@ def _parse_entry_zone(raw: str | None) -> tuple[float | None, float | None]:
     return min(parsed[:2]), max(parsed[:2])
 
 
+def assess_diversity(trade_ideas: list[dict]) -> dict:
+    """
+    Assess structural diversity of the Strategist's output. Returns:
+        {monolithic: bool, reason: str, direction_split: {...}, sector_concentration: float}
+
+    A monolithic output (all longs OR >80% same sector) is an anti-pattern
+    for any 'risk-adjusted' / 'pair_trade' / 'hedging' query — orchestrator
+    flags it so the user sees the system caught the issue.
+    """
+    if not trade_ideas:
+        return {"monolithic": False, "reason": "no_ideas"}
+
+    directions = [(t or {}).get("direction", "") for t in trade_ideas]
+    long_count = sum(1 for d in directions if "bullish" in d)
+    short_count = sum(1 for d in directions if "bearish" in d)
+    neutral_count = sum(1 for d in directions if d == "neutral")
+
+    sectors = [(t or {}).get("sector") or "Unknown" for t in trade_ideas]
+    if sectors:
+        from collections import Counter
+        top_sector, top_count = Counter(sectors).most_common(1)[0]
+        sector_share = top_count / len(sectors)
+    else:
+        top_sector = "Unknown"
+        sector_share = 0.0
+
+    monolithic_reasons = []
+    if len(trade_ideas) >= 4 and long_count == len(trade_ideas):
+        monolithic_reasons.append("all-long structure (no shorts, pairs, or hedges)")
+    if len(trade_ideas) >= 4 and sector_share > 0.8:
+        monolithic_reasons.append(f"sector concentration {int(sector_share*100)}% in {top_sector}")
+
+    return {
+        "monolithic": bool(monolithic_reasons),
+        "reason": "; ".join(monolithic_reasons) if monolithic_reasons else "diverse",
+        "direction_split": {"long": long_count, "short": short_count, "neutral": neutral_count},
+        "sector_concentration_pct": round(sector_share * 100, 1),
+        "top_sector": top_sector,
+    }
+
+
 def validate_and_fix_trade_ideas(
     trade_ideas: list[dict],
     live_prices: dict[str, float],
@@ -310,6 +351,7 @@ class PortfolioStrategist(BaseAgent):
         portfolio = context.get("portfolio") or {}
         scorecard = context.get("scorecard") or {}
         live_prices: dict[str, float] = context.get("live_prices") or {}
+        macro = context.get("macro_context") or {}
 
         summary = research.get("data_summary", "No research data.")
         if len(summary) > 2000:
@@ -415,15 +457,105 @@ class PortfolioStrategist(BaseAgent):
                 + "\nDampen conviction in buckets <50%, reinforce in buckets >55%.\n"
             )
 
+        # Plan-shape directives — what the Interpreter explicitly asked for.
+        # These steer the Strategist away from "5 carbon-copy longs" defaults.
+        archetype = plan.get("idea_archetype") or []
+        instrument = plan.get("instrument_preference") or "stock"
+        benchmark = plan.get("benchmark") or ""
+        comparison_set = plan.get("comparison_set") or []
+        regime_sensitivity = plan.get("regime_sensitivity") or []
+
+        archetype_block = ""
+        if archetype:
+            archetype_block = (
+                "\n=== IDEA ARCHETYPE (structural diversity directive) ===\n"
+                + "\n".join(f"  - {a}" for a in archetype)
+                + "\nProduce IDEAS that match this structure. The Interpreter has determined "
+                "the ideal mix of longs/shorts/pairs/hedges; do not collapse to all-long.\n"
+            )
+
+        instrument_block = (
+            f"\n=== INSTRUMENT PREFERENCE: {instrument} ===\n"
+            + {
+                "stock": "Outright equity positions are appropriate.",
+                "options": "Prefer options structures (calls / puts / spreads) for convex payoffs. Cite strike + expiry.",
+                "pair_trade": "At least 2 of 5 ideas should be pair trades (long X / short Y). Cite both legs.",
+                "spread": "Use multi-leg structures (call spreads, put spreads, calendars). Cite both legs.",
+                "hedge": "All ideas are protective. Use puts, vol calls, defensive rotations, cross-asset hedges.",
+                "mixed": "Mix outright + options + pair + hedge per idea_archetype directive.",
+            }.get(instrument, "Outright equity positions.")
+            + "\n"
+        )
+
+        benchmark_block = ""
+        if benchmark:
+            benchmark_block = (
+                f"\n=== BENCHMARK: {benchmark} ===\n"
+                f"Frame each thesis as 'should outperform {benchmark} by X% over {plan.get('time_horizon','weeks')}'. "
+                f"Cite this in the thesis text.\n"
+            )
+
+        comparison_block_strat = ""
+        if comparison_set:
+            comparison_block_strat = (
+                f"\n=== COMPARISON SET (valuation yardstick — DO NOT trade these) ===\n"
+                f"  {', '.join(comparison_set)}\n"
+                "Use these for relative valuation framing in your thesis. NEVER write a "
+                "trade idea on a ticker from this list.\n"
+            )
+
+        regime_block = ""
+        if regime_sensitivity:
+            current_regime = (macro or {}).get("current_regime", "unknown")
+            lines = []
+            for rs in regime_sensitivity[:4]:
+                if not isinstance(rs, dict):
+                    continue
+                marker = "★" if rs.get("regime") == current_regime else " "
+                lines.append(
+                    f"  {marker} {rs.get('regime')}: {rs.get('ideal_position', '?')} "
+                    f"(conv ×{rs.get('conviction_multiplier', 1.0)}; assumes {rs.get('key_assumption', '?')})"
+                )
+            regime_block = (
+                f"\n=== REGIME SENSITIVITY (★ = current regime: {current_regime}) ===\n"
+                + "\n".join(lines)
+                + "\nSize and structure for the CURRENT regime. Apply the conviction multiplier "
+                "to your conviction scores.\n"
+            )
+
+        # Macro backdrop summary — beta context for systematic exposure
+        macro_block_strat = ""
+        if macro:
+            parts = []
+            if macro.get("current_regime"):
+                parts.append(f"regime={macro['current_regime']}")
+            if macro.get("vix") is not None:
+                parts.append(f"VIX={macro['vix']}")
+            if macro.get("credit_spreads") is not None:
+                parts.append(f"HY={macro['credit_spreads']}")
+            if macro.get("yield_curve") is not None:
+                parts.append(f"YC={macro['yield_curve']}")
+            if parts:
+                macro_block_strat = "\n=== MACRO BACKDROP ===\n  " + " · ".join(parts) + "\n"
+
         return (
             f"Query: {plan.get('query', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Horizon: {plan.get('time_horizon', 'weeks')}\n"
-            f"Regime: {risk.get('macro_regime', '?')} | Risk: {risk.get('overall_risk_level', '?')}\n\n"
+            f"Question type: {plan.get('question_type', 'alpha_finding')}\n"
+            f"Regime: {risk.get('macro_regime', '?')} | Risk: {risk.get('overall_risk_level', '?')}\n"
+            f"{macro_block_strat}"
             f"Research:\n{summary}\n"
             f"{ticker_block}"
             f"{prices_block}\n"
             f"Risk:\n{risk_narrative}\n"
             f"{portfolio_block}"
+            f"{archetype_block}"
+            f"{instrument_block}"
+            f"{benchmark_block}"
+            f"{comparison_block_strat}"
+            f"{regime_block}"
             f"{calibration_block}\n"
             f"Produce 5 trade ideas and portfolio strategy JSON. Anchor every entry/stop/target to the LIVE PRICES block above. "
-            f"You may call get_current_price for additional tickers not in the LIVE PRICES block, but do NOT override prices already given."
+            f"You may call get_current_price for additional tickers not in the LIVE PRICES block, but do NOT override prices already given. "
+            f"For each trade idea, include 'beta_to_spy' (estimated from research/known beta), 'sector', "
+            f"and 'regime_conditional_size_pct' (size at current regime per regime_sensitivity multiplier)."
         )

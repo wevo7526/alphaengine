@@ -38,6 +38,12 @@ export interface TradeIdea {
   price_corrected?: boolean;
   live_price_used?: number;
   original_entry_zone?: string | null;
+  // Beta layering / structural decomposition
+  beta_to_spy?: number | null;
+  sector?: string | null;
+  regime_conditional_size_pct?: number | null;
+  structure_type?: string | null;
+  pair_short_leg?: string | null;
 }
 
 export interface IntelligenceMemo {
@@ -71,6 +77,38 @@ export interface IntelligenceMemo {
   };
   plan_confidence?: number;
   plan_confidence_reason?: string;
+  // Phase-2 plan-shape signals surfaced for the UI
+  data_quality?: "complete" | "degraded" | "critical";
+  question_type?: string;
+  benchmark?: string;
+  instrument_preference?: string;
+  idea_archetype?: string[];
+  sub_questions?: string[];
+  sub_question_coverage?: { question: string; answered: boolean }[];
+  sub_question_answered_pct?: number;
+  falsification_criteria?: string[];
+  falsification_probabilities?: { criterion: string; probability: string; reasoning?: string }[];
+  diversity?: {
+    monolithic?: boolean;
+    reason?: string;
+    direction_split?: { long?: number; short?: number; neutral?: number };
+    sector_concentration_pct?: number;
+    top_sector?: string;
+  };
+  regime_sensitivity?: {
+    regime: string;
+    ideal_position?: string;
+    conviction_multiplier?: number;
+    key_assumption?: string;
+  }[];
+  macro_context?: {
+    current_regime?: string;
+    confidence?: number;
+    vix?: number | null;
+    credit_spreads?: number | null;
+    yield_curve?: number | null;
+    fed_funds_rate?: number | null;
+  };
 }
 
 export interface MacroIndicator {

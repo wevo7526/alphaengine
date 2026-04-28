@@ -142,6 +142,32 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
         )}
       </div>
 
+      {/* Beta layering row — systematic exposure decomposition */}
+      {(idea.beta_to_spy != null || idea.sector || idea.structure_type || idea.regime_conditional_size_pct != null) && (
+        <div className="flex items-center gap-3 text-[11px] mt-2 flex-wrap">
+          {idea.beta_to_spy != null && (
+            <span className="text-text-quaternary">
+              β-SPY <span className="font-mono text-text-tertiary">{Number(idea.beta_to_spy).toFixed(2)}</span>
+            </span>
+          )}
+          {idea.sector && (
+            <span className="text-text-quaternary">
+              Sector <span className="font-mono text-text-tertiary">{idea.sector}</span>
+            </span>
+          )}
+          {idea.structure_type && idea.structure_type !== "outright" && (
+            <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-accent/10 text-accent border border-accent/30">
+              {idea.structure_type}{idea.pair_short_leg ? ` (vs ${idea.pair_short_leg})` : ""}
+            </span>
+          )}
+          {idea.regime_conditional_size_pct != null && idea.regime_conditional_size_pct !== idea.position_size_pct && (
+            <span className="text-text-quaternary" title="Size adjusted for current regime per plan.regime_sensitivity">
+              Regime size <span className="font-mono text-text-tertiary">{Number(idea.regime_conditional_size_pct).toFixed(1)}%</span>
+            </span>
+          )}
+        </div>
+      )}
+
       {open && (
         <div className="mt-3 pt-3 border-t border-border-primary space-y-2 text-xs" style={{ animation: "fade-in 0.2s ease-out" }}>
           {idea.catalysts?.length > 0 && (
@@ -358,6 +384,42 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                     Plan {memo.plan_confidence}
                   </span>
                 )}
+                {/* Data quality: surface only when degraded/critical */}
+                {memo.data_quality && memo.data_quality !== "complete" && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider ${
+                      memo.data_quality === "critical"
+                        ? "bg-signal-red/10 text-signal-red border-signal-red/30"
+                        : "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
+                    }`}
+                    title={`Some pipeline desks ran in ${memo.data_quality} mode (timeouts or failures). Treat results with care.`}
+                  >
+                    Data {memo.data_quality}
+                  </span>
+                )}
+                {/* Sub-question coverage: flag if not all answered */}
+                {memo.sub_question_coverage && memo.sub_question_coverage.length > 0 && (() => {
+                  const total = memo.sub_question_coverage.length;
+                  const answered = memo.sub_question_coverage.filter((c) => c.answered).length;
+                  if (answered === total) return null;  // hide on full coverage
+                  return (
+                    <span
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
+                      title={`${answered}/${total} sub-questions addressed in research.`}
+                    >
+                      Q {answered}/{total}
+                    </span>
+                  );
+                })()}
+                {/* Diversity flag: surfaced if Strategist output is monolithic */}
+                {memo.diversity && memo.diversity.monolithic && (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
+                    title={memo.diversity.reason || "Trade ideas show low structural diversity"}
+                  >
+                    Concentrated
+                  </span>
+                )}
               </div>
             )}
             <h2 className="text-lg font-semibold text-text-primary leading-snug">
@@ -445,6 +507,136 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                 <span className="leading-relaxed">{f}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Plan Shape — surfaces what the Interpreter actually decided */}
+      {(memo.question_type || memo.benchmark || memo.instrument_preference || (memo.idea_archetype && memo.idea_archetype.length > 0)) && (
+        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+            Plan Shape
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[12px]">
+            {memo.question_type && (
+              <div>
+                <span className="text-text-quaternary">Question type</span>
+                <span className="ml-2 font-mono text-text-primary">{memo.question_type.replace(/_/g, " ")}</span>
+              </div>
+            )}
+            {memo.benchmark && (
+              <div>
+                <span className="text-text-quaternary">Benchmark</span>
+                <span className="ml-2 font-mono text-text-primary">{memo.benchmark}</span>
+              </div>
+            )}
+            {memo.instrument_preference && (
+              <div>
+                <span className="text-text-quaternary">Instrument</span>
+                <span className="ml-2 font-mono text-text-primary">{memo.instrument_preference.replace(/_/g, " ")}</span>
+              </div>
+            )}
+          </div>
+          {memo.idea_archetype && memo.idea_archetype.length > 0 && (
+            <div className="mt-3">
+              <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1.5">Archetype directive</p>
+              <div className="flex flex-wrap gap-1.5">
+                {memo.idea_archetype.map((a, i) => (
+                  <span key={i} className="text-[10px] font-mono px-2 py-0.5 rounded bg-bg-elevated text-text-secondary">
+                    {a}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sub-questions answered (if Research engaged with them) */}
+      {memo.sub_question_coverage && memo.sub_question_coverage.length > 0 && (
+        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+            Sub-Questions ({memo.sub_question_coverage.filter((c) => c.answered).length}/{memo.sub_question_coverage.length} addressed)
+          </h3>
+          <ul className="space-y-1.5">
+            {memo.sub_question_coverage.map((c, i) => (
+              <li key={i} className="flex items-start gap-2 text-[12px]">
+                <span className={`shrink-0 mt-0.5 text-[11px] font-mono ${c.answered ? "text-signal-green" : "text-signal-yellow"}`}>
+                  {c.answered ? "✓" : "?"}
+                </span>
+                <span className={c.answered ? "text-text-secondary" : "text-text-tertiary"}>{c.question}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Falsification — what would change the view */}
+      {memo.falsification_criteria && memo.falsification_criteria.length > 0 && (
+        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+            What Would Change Our View
+          </h3>
+          <ul className="space-y-1.5">
+            {memo.falsification_criteria.map((c, i) => {
+              const score = (memo.falsification_probabilities || []).find((fp) => fp.criterion === c);
+              const prob = score?.probability;
+              const probColor =
+                prob === "high"
+                  ? "text-signal-red"
+                  : prob === "low"
+                    ? "text-signal-green"
+                    : "text-signal-yellow";
+              return (
+                <li key={i} className="flex items-start gap-2 text-[12px]">
+                  {prob && (
+                    <span className={`shrink-0 mt-0.5 text-[10px] font-mono uppercase ${probColor}`}>
+                      [{prob}]
+                    </span>
+                  )}
+                  <span className="text-text-secondary">{c}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+
+      {/* Regime sensitivity */}
+      {memo.regime_sensitivity && memo.regime_sensitivity.length > 0 && (
+        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
+            Regime Sensitivity {memo.macro_context?.current_regime && (
+              <span className="ml-1 text-text-tertiary normal-case">(current: {memo.macro_context.current_regime})</span>
+            )}
+          </h3>
+          <div className="space-y-2">
+            {memo.regime_sensitivity.map((rs, i) => {
+              const isCurrent = rs.regime === memo.macro_context?.current_regime;
+              return (
+                <div
+                  key={i}
+                  className={`text-[12px] rounded-lg p-3 ${isCurrent ? "border border-accent/40 bg-accent/[0.04]" : "bg-bg-elevated"}`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className={`font-mono uppercase ${isCurrent ? "text-accent" : "text-text-tertiary"}`}>
+                      {rs.regime} {isCurrent && "★"}
+                    </span>
+                    {rs.conviction_multiplier !== undefined && (
+                      <span className="text-[10px] font-mono text-text-tertiary">
+                        size ×{rs.conviction_multiplier}
+                      </span>
+                    )}
+                  </div>
+                  {rs.ideal_position && (
+                    <p className="text-text-secondary leading-relaxed mb-1">{rs.ideal_position}</p>
+                  )}
+                  {rs.key_assumption && (
+                    <p className="text-[11px] text-text-quaternary italic">Assumes: {rs.key_assumption}</p>
+                  )}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

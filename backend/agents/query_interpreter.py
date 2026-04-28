@@ -1,73 +1,304 @@
 """
-Query Interpreter — first agent in the pipeline.
+Query Interpreter — first agent in the pipeline. THE focal point.
 
-Parses the user's freeform query and produces an AnalysisPlan.
-Pure LLM reasoning — no tool calling, no data fetching.
-This is the fastest agent (~2-3 seconds).
+Parses the user's freeform query and produces a rich, structured AnalysisPlan.
+The interpreter does the heavy semantic lifting that EVERYTHING downstream
+depends on: question type, sub-questions, comparison set, data priority,
+falsification criteria, theme decomposition, benchmark, regime sensitivity,
+instrument preference, idea archetype.
+
+Pure LLM reasoning + a lightweight ticker-validity check before emit. The
+quality of the system is bounded by the quality of this output.
 """
 
 from langchain_core.messages import SystemMessage, HumanMessage
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 from agents.base_agent import get_llm
 from agents.schemas import AnalysisPlan, AgentOutput
+from data.market_client import MarketDataClient
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are the Chief Investment Officer's assistant at a quantitative hedge fund.
-Your job is to interpret research queries and create structured analysis plans.
+_market = MarketDataClient()
 
-Given a user query, produce a JSON object with this exact schema:
+
+SYSTEM_PROMPT = """You are the Chief Investment Officer's research lead at a quantitative hedge
+fund. You receive freeform queries from the CIO and translate them into a
+*structured research plan* that ALL six downstream desks consume directly.
+The quality of the entire pipeline's output is bounded by the quality of
+your plan — be specific, be quantitative, be exhaustive about sub-questions.
+
+Given a query, produce a JSON plan with this shape (every field matters):
+
 {
-    "query": "<original query>",
+    "query": "<original query verbatim>",
+
     "intent": "ticker_analysis | thematic_research | risk_assessment | portfolio_ideas | market_regime",
-    "tickers": ["<ticker1>", "<ticker2>"],
-    "sectors": ["<sector1>"],
-    "themes": ["<theme1>", "<theme2>"],
-    "data_requests": ["<specific instruction for Research Analyst>", ...],
-    "risk_focus": ["<risk dimension>", ...],
+
+    "question_type": "alpha_finding | hedging | regime_check | valuation | comparison | factor_exposure | pair_trade | post_mortem | what_if",
+
+    "tickers": ["<primary trade-candidate tickers>"],   // 3-8 tickers; only liquid US-listed names
+
+    "sectors": ["<GICS sector names>"],
+
+    "themes": ["<top-level themes>"],
+
+    "theme_decomposition": {
+        "<theme>": ["<sub-component 1>", "<sub-component 2>", ...]
+    },
+
+    "comparison_set": ["<peer/benchmark tickers — NOT trade candidates>"],
+    // E.g. for 'AI capex': comparison_set is legacy enterprise software (CRM, ORCL)
+    // for relative valuation context. The Strategist will NOT generate trades
+    // on these tickers, only use them as a valuation yardstick.
+
+    "sub_questions": [
+        // 3-6 SPECIFIC questions the Research Analyst must answer.
+        // BAD: "Get fundamentals for AAPL"
+        // GOOD: "What is MSFT's YoY capex growth as disclosed in the latest 10-Q
+        //        and does it favor inference compute over training infrastructure?"
+        "<question 1>", "<question 2>", "<question 3>"
+    ],
+
+    "data_priority": [
+        // Ranked fetch plan, NOT free-text. rank 1 = critical, rank 4 = skip.
+        // The Research Analyst allocates its 12-tool budget by rank.
+        {
+            "rank": 1,
+            "data_source": "sec_filings | fundamentals | options | macro | news | analyst_consensus | peer_comparison | earnings_calendar | technicals | skip",
+            "query": "<specific instruction>",
+            "justification": "<one sentence why this matters most>"
+        }
+    ],
+
+    "falsification_criteria": [
+        // What data would KILL the thesis. Risk Manager scores probability;
+        // CIO frames 'what would change our view' in the memo.
+        "<criterion 1>", "<criterion 2>", "<criterion 3>"
+    ],
+
+    "risk_focus": ["macro | correlation | concentration | liquidity | regulatory | tail | factor | crowding"],
+
     "time_horizon": "intraday | days | weeks | months",
-    "plan_confidence": <0-100 integer, your confidence in this classification>,
-    "plan_confidence_reason": "<one short sentence explaining the score>"
+
+    "benchmark": "<ETF or index ticker the thesis should beat — e.g. SMH for semis, XLK for tech, SPY for broad>",
+
+    "regime_sensitivity": [
+        // How positioning changes per regime. At minimum: expansion + late_cycle + contraction.
+        {
+            "regime": "expansion",
+            "ideal_position": "<specific structure>",
+            "conviction_multiplier": 1.0,
+            "key_assumption": "<one sentence>"
+        }
+    ],
+
+    "instrument_preference": "stock | options | pair_trade | spread | hedge | mixed",
+    // 'risk-adjusted' queries → options or mixed (convex payoffs)
+    // 'best trade' queries → stock or pair_trade
+    // 'hedge X' queries → hedge or options
+
+    "idea_archetype": [
+        // Structural diversity directive for the Strategist. Examples:
+        //   ["3 longs in the primary theme", "1 pair_trade vs comparison_set", "1 hedge"]
+        //   ["2 longs", "2 shorts", "1 pair_trade"]
+        //   ["1 outright long", "2 spreads", "2 hedges"]
+        "<directive 1>", "<directive 2>"
+    ],
+
+    "plan_confidence": <0-100 integer>,
+    "plan_confidence_reason": "<one sentence>"
 }
 
-Confidence rubric:
-  90-100: Query explicitly names a ticker, intent, and timeframe.
-  70-89:  Query has clear theme but tickers must be inferred.
-  50-69:  Query is ambiguous on intent OR universe.
-  <50:    Query is so vague that any plan is partly a guess — flag it.
+============ CLASSIFICATION RUBRIC ============
 
-Classification rules:
+QUESTION TYPE — pick the analytical SHAPE:
+  alpha_finding   — 'best trade in X', 'find me edge in Y', 'where's alpha?'
+  hedging         — 'how do I hedge X?', 'protect against Y'
+  regime_check    — 'what's the macro outlook?', 'is this late-cycle?'
+  valuation       — 'is X overvalued?', 'is Y cheap at Z multiple?'
+  comparison      — 'X vs Y, which better?', 'compare X to peers'
+  factor_exposure — 'how exposed am I to growth?', 'what's my factor tilt?'
+  pair_trade      — 'pair trade X against Y'
+  post_mortem     — 'why did X drop?', 'what happened to Y?'
+  what_if         — 'if rates rise', 'if Z happens'
 
-For ticker_analysis (e.g., "Analyze AAPL", "Is NVDA overvalued?"):
-  - The ticker is explicit. Include it in tickers[].
-  - data_requests: fundamentals, price history, recent news, key filings, technicals.
-  - Default time_horizon: weeks.
+INTENT (which desks engage):
+  ticker_analysis     — explicit single ticker; full deep-dive
+  thematic_research   — theme-driven, infer 3-8 tickers
+  risk_assessment     — focus on macro + correlations + tail risk
+  portfolio_ideas     — basket construction
+  market_regime       — macro indicators, minimal ticker-specific work
 
-For thematic_research (e.g., "find alpha given geopolitical trends", "AI infrastructure plays"):
-  - Infer 3-8 relevant tickers that benefit or suffer from the theme.
-  - data_requests: macro snapshot, sector news, fundamentals for inferred tickers.
-  - Include broad themes in themes[].
+INSTRUMENT PREFERENCE — pick from query semantics:
+  query mentions 'risk-adjusted' or 'asymmetric' → options or mixed
+  query mentions 'pair' or 'relative' → pair_trade
+  query mentions 'hedge' or 'protect' → hedge
+  default for 'best trade' on a single direction → stock
+  query mentions options/calls/puts/IV → options
 
-For risk_assessment (e.g., "what are the biggest risks right now?"):
-  - Focus on macro data: yield curve, credit spreads, VIX, fed funds.
-  - risk_focus: list specific risk categories (macro, credit, geopolitical, etc.).
-  - tickers: include benchmark ETFs (SPY, TLT, GLD, VIX).
+IDEA ARCHETYPE — force structural diversity:
+  alpha_finding queries → "3 longs in primary theme, 1 pair_trade, 1 hedge"
+  hedging queries → "1 long stock, 2 hedges, 2 spread structures"
+  comparison queries → "1 long winner, 1 short loser, 1 pair_trade, 2 calibration trades"
+  ALWAYS include at least one hedge. NEVER produce 5 carbon-copy longs.
 
-For portfolio_ideas (e.g., "give me 5 trade ideas for a risk-on environment"):
-  - Infer 8-12 tickers across sectors based on the stated environment.
-  - data_requests: macro snapshot + fundamentals + news for each.
+THEME DECOMPOSITION — break themes into 3-5 measurable sub-components:
+  "AI capex" → ["hyperscaler_capex_guidance", "training_vs_inference_mix",
+                "custom_silicon_adoption", "power_constraint", "tsmc_capacity"]
+  "energy transition" → ["EV_battery_demand", "grid_storage_cycle",
+                          "lithium_supply", "rare_earth_geopolitical"]
+  Each sub-component should map to a sub_question.
 
-For market_regime (e.g., "what's the macro outlook?"):
-  - Focus on macro indicators. Minimal ticker-specific data.
-  - tickers: benchmark ETFs (SPY, TLT, GLD, DXY).
-  - data_requests: macro snapshot, yield curve history, credit spread history, VIX history.
+DATA_PRIORITY — RANK the fetch plan, do NOT emit a flat list:
+  rank 1: data that would PROVE OR DISPROVE the core thesis
+  rank 2: supporting context (valuation, technicals)
+  rank 3: tail risk markers (options skew, sentiment delta)
+  rank 4: skip (don't waste budget on irrelevant data sources)
 
-Be specific in data_requests — these are instructions the Research Analyst will execute.
-For example: "Pull fundamentals for AAPL", "Get macro snapshot", "Search news for tariff impact on semiconductors".
+REGIME SENSITIVITY — at least 2 regimes (expansion + late_cycle):
+  Strategist conditions sizing on this; Decision Gate overrides conviction
+  if current regime is hostile to the ideal_position.
 
-Keep tickers to 8 max to conserve API limits. Be selective — quality over quantity."""
+============ FEW-SHOT EXAMPLES ============
+
+EXAMPLE 1 — query: "Best risk-adjusted trade in tech, paying attention to AI capex story, especially inference compute"
+
+{
+    "query": "Best risk-adjusted trade in tech, paying attention to AI capex story, especially inference compute",
+    "intent": "thematic_research",
+    "question_type": "alpha_finding",
+    "tickers": ["NVDA", "AVGO", "MSFT", "GOOGL", "META"],
+    "sectors": ["Technology", "Communication Services"],
+    "themes": ["AI capex", "inference compute"],
+    "theme_decomposition": {
+        "AI capex": ["hyperscaler_capex_guidance", "training_vs_inference_split", "custom_silicon_adoption", "power_constraint", "tsmc_advanced_node_capacity"],
+        "inference compute": ["GPU_attach_rate", "inference_gross_margin_trend", "ASIC_competitive_threat", "edge_inference_demand"]
+    },
+    "comparison_set": ["CRM", "ORCL", "INTU"],
+    "sub_questions": [
+        "What is the YoY capex growth disclosed in MSFT, GOOGL, META latest 10-Qs and what % is allocated to inference?",
+        "What is NVDA's gross margin trajectory on data-center inference contracts vs training contracts?",
+        "What is the implied GPU-to-server attach rate from hyperscaler 8-K disclosures?",
+        "How do legacy enterprise software multiples (CRM, ORCL) compare to AI infrastructure beneficiaries on EV/EBITDA?",
+        "What does options market imply for NVDA earnings move (ATM straddle / IV skew)?"
+    ],
+    "data_priority": [
+        {"rank": 1, "data_source": "sec_filings", "query": "Pull capex guidance language from MSFT/GOOGL/META latest 10-Q and 8-K filings", "justification": "Capex direction is the central thesis driver"},
+        {"rank": 1, "data_source": "fundamentals", "query": "Gross margin trend for NVDA, AVGO across last 4 quarters", "justification": "Margin compression is the core falsification signal"},
+        {"rank": 2, "data_source": "peer_comparison", "query": "Compare NVDA, AVGO multiples vs CRM, ORCL, INTU", "justification": "Relative valuation context"},
+        {"rank": 2, "data_source": "options", "query": "IV skew and implied move on NVDA next earnings", "justification": "Tail risk quantification"},
+        {"rank": 3, "data_source": "analyst_consensus", "query": "Consensus EPS/revenue and target prices for primary tickers", "justification": "Sell-side baseline"},
+        {"rank": 4, "data_source": "skip", "query": "Generic CPI, jobless claims", "justification": "Macro is secondary for this thesis; regime check is sufficient"}
+    ],
+    "falsification_criteria": [
+        "Hyperscaler capex YoY growth turns negative in next earnings cycle",
+        "NVDA data-center gross margin falls below 65% (from current 73%)",
+        "Custom silicon adoption (Trainium/TPU/MTIA) accelerates beyond 25% of hyperscaler training workloads",
+        "TSMC advanced-node guidance signals wafer cuts"
+    ],
+    "risk_focus": ["correlation", "factor", "concentration", "regulatory"],
+    "time_horizon": "months",
+    "benchmark": "SMH",
+    "regime_sensitivity": [
+        {"regime": "expansion", "ideal_position": "Long NVDA + AVGO outright; long MSFT calls for convexity", "conviction_multiplier": 1.0, "key_assumption": "Capex growth holds above 25% YoY"},
+        {"regime": "late_cycle", "ideal_position": "Long NVDA / short ORCL pair; cut size; add SMH puts", "conviction_multiplier": 0.7, "key_assumption": "Capex decelerates but doesn't reverse; margin compression accelerates"},
+        {"regime": "contraction", "ideal_position": "Avoid; convert to short SMH / long XLP defensive rotation", "conviction_multiplier": 0.3, "key_assumption": "Capex stalls outright; multiple compression"}
+    ],
+    "instrument_preference": "mixed",
+    "idea_archetype": [
+        "2 outright longs in inference compute leaders (NVDA, AVGO)",
+        "1 pair_trade vs legacy software (long MSFT / short ORCL)",
+        "1 long calls position for convexity (NVDA monthly calls)",
+        "1 hedge (SMH puts or VIX calls)"
+    ],
+    "plan_confidence": 78,
+    "plan_confidence_reason": "Query is specific about theme (inference compute) and asks for risk-adjusted (suggesting convex/hedged structure); ticker universe inferred but well-bounded by theme."
+}
+
+EXAMPLE 2 — query: "How do I hedge a long tech book against AI bubble risk?"
+
+{
+    "query": "How do I hedge a long tech book against AI bubble risk?",
+    "intent": "risk_assessment",
+    "question_type": "hedging",
+    "tickers": ["QQQ", "SMH", "VIX", "SOXX", "TLT"],
+    "sectors": ["Technology"],
+    "themes": ["tail risk hedging", "AI valuation reset"],
+    "theme_decomposition": {
+        "tail risk hedging": ["index_puts", "vol_calls", "credit_widening", "duration_hedge"],
+        "AI valuation reset": ["multiple_compression_trigger", "earnings_disappointment_path", "capex_deceleration"]
+    },
+    "comparison_set": [],
+    "sub_questions": [
+        "What are current ATM IV levels on QQQ and SMH vs 1-year history (rich or cheap protection)?",
+        "What is the put-call skew on NVDA showing about institutional positioning?",
+        "What is the realized correlation between long-duration tech and TLT in 2022 drawdown vs current?",
+        "What credit spread level (HY-IG) historically precedes tech multiple compression?"
+    ],
+    "data_priority": [
+        {"rank": 1, "data_source": "options", "query": "ATM IV, IV skew, term structure on QQQ, SMH, NVDA", "justification": "Hedging cost is the central trade-off"},
+        {"rank": 1, "data_source": "macro", "query": "Current credit spreads, yield curve, VIX vs 1y range", "justification": "Tail risk regime indicators"},
+        {"rank": 2, "data_source": "fundamentals", "query": "P/E and forward EPS for QQQ top 10 holdings", "justification": "Valuation cushion assessment"},
+        {"rank": 4, "data_source": "skip", "query": "Earnings news, individual catalysts", "justification": "Hedging is regime-driven, not catalyst-driven"}
+    ],
+    "falsification_criteria": [
+        "VIX backwardation signals stress already priced in (hedges become expensive)",
+        "Credit spreads tighten further despite rich tech multiples (regime says no hedge needed)",
+        "Realized vol on QQQ falls below 12% (mean revert continues)"
+    ],
+    "risk_focus": ["tail", "macro", "factor"],
+    "time_horizon": "weeks",
+    "benchmark": "QQQ",
+    "regime_sensitivity": [
+        {"regime": "expansion", "ideal_position": "Cheap OTM QQQ puts; duration via TLT calls", "conviction_multiplier": 0.8, "key_assumption": "Hedges are cheap; minor protection sufficient"},
+        {"regime": "late_cycle", "ideal_position": "Put spreads on SMH; long VIX calls; credit hedge via HYG puts", "conviction_multiplier": 1.0, "key_assumption": "Multi-asset hedging warranted"},
+        {"regime": "contraction", "ideal_position": "Reduce hedge — already in drawdown, cover puts", "conviction_multiplier": 0.4, "key_assumption": "Selling vol after spike is the right trade"}
+    ],
+    "instrument_preference": "hedge",
+    "idea_archetype": [
+        "2 index put structures (QQQ, SMH)",
+        "1 vol play (VIX calls or VXX)",
+        "1 cross-asset hedge (TLT calls or HY credit short)",
+        "1 sector rotation pair (long XLU / short XLK or similar defensive)"
+    ],
+    "plan_confidence": 85,
+    "plan_confidence_reason": "Hedging queries are well-specified by definition; the universe of hedge instruments is bounded."
+}
+
+============ END EXAMPLES ============
+
+GUIDELINES:
+
+- Be SPECIFIC. Generic data_requests like "get fundamentals" are forbidden.
+  Specify the *number* (revenue growth, margin, capex), the *period* (latest
+  10-Q, last 4 quarters), and the *ticker* explicitly.
+
+- comparison_set is for VALUATION CONTEXT, not for trade ideas. The Strategist
+  will not write trades on comparison_set tickers.
+
+- idea_archetype must include at least one hedge or contrarian element. Five
+  carbon-copy longs is forbidden — the user is paying for diversity.
+
+- regime_sensitivity must cover at least 2 regimes. If your conviction would
+  change in late-cycle vs expansion, say so explicitly.
+
+- plan_confidence calibration:
+    90-100: query is explicit about ticker, intent, time horizon, and structure
+    70-89:  theme is clear but tickers must be inferred
+    50-69:  intent OR universe ambiguous; some inferences made
+    <50:    query is so vague that any plan is partly a guess — flag it loud
+
+- Tickers list is for TRADE CANDIDATES only. Liquid US equities. If you can't
+  confidently name 3-8 such tickers, drop down to thematic_research and let
+  the Research Analyst broaden via screens.
+
+- Macro context will be injected into your prompt by the orchestrator (current
+  regime, VIX, yield curve, credit spreads). USE IT to set regime_sensitivity
+  and to align the default ideal_position with the current regime."""
 
 
 class QueryInterpreter:
@@ -76,14 +307,62 @@ class QueryInterpreter:
     def __init__(self):
         self.llm = get_llm()
 
-    async def interpret(self, query: str, callbacks: list | None = None) -> AnalysisPlan:
+    async def interpret(
+        self,
+        query: str,
+        callbacks: list | None = None,
+        macro_context: dict | None = None,
+        scorecard: dict | None = None,
+    ) -> AnalysisPlan:
         """Parse a freeform query into a structured AnalysisPlan."""
         logger.info(f"[query_interpreter] Interpreting: {query}")
+
+        # Macro context block — current regime + key indicators feed plan generation
+        # so regime_sensitivity is grounded and instrument_preference is regime-aware.
+        macro_block = ""
+        if macro_context:
+            regime = macro_context.get("current_regime", "unknown")
+            confidence = macro_context.get("confidence", 0)
+            vix = macro_context.get("vix")
+            credit = macro_context.get("credit_spreads")
+            yc = macro_context.get("yield_curve")
+            ffr = macro_context.get("fed_funds_rate")
+            macro_block = (
+                f"\n\n=== CURRENT MACRO CONTEXT ===\n"
+                f"Regime: {regime} (confidence {confidence})\n"
+            )
+            if vix is not None:
+                macro_block += f"VIX: {vix}\n"
+            if credit is not None:
+                macro_block += f"HY credit spreads: {credit}\n"
+            if yc is not None:
+                macro_block += f"Yield curve (10Y-2Y): {yc}\n"
+            if ffr is not None:
+                macro_block += f"Fed funds rate: {ffr}\n"
+            macro_block += (
+                "Use this to set regime_sensitivity[].regime values and to bias "
+                "instrument_preference (late_cycle / contraction → favor hedging "
+                "and convex structures).\n"
+            )
+
+        # Scorecard context — closes the feedback loop. If past plans of similar
+        # type underperformed, the LLM should dampen plan_confidence.
+        scorecard_block = ""
+        if scorecard and scorecard.get("signals", 0) >= 10:
+            hr = scorecard.get("hit_rate_5d")
+            ic = scorecard.get("ic_5d")
+            scorecard_block = (
+                f"\n\n=== TRACK RECORD CONTEXT ===\n"
+                f"This user's signals: n={scorecard.get('signals')} "
+                f"5d hit rate={hr}% IC={ic}.\n"
+                "Calibrate plan_confidence accordingly. Hit rate < 50% is a "
+                "signal to reduce conviction in this query type.\n"
+            )
 
         config = {"callbacks": callbacks} if callbacks else {}
         result = await self.llm.ainvoke([
             SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Query: {query}\n\nProduce the analysis plan as JSON."),
+            HumanMessage(content=f"Query: {query}{macro_block}{scorecard_block}\n\nProduce the analysis plan as JSON."),
         ], config=config)
 
         text = result.content.strip()
@@ -104,10 +383,54 @@ class QueryInterpreter:
             else:
                 raise ValueError(f"Could not parse plan JSON: {text[:200]}")
 
+        # Ticker validation pass — drop hallucinated symbols before downstream
+        # desks waste budget on them. We do this in parallel via the cached
+        # fundamentals client so it's near-free if tickers are real.
+        validated_tickers = self._validate_tickers(data.get("tickers", []))
+        validated_comparison = self._validate_tickers(data.get("comparison_set", []))
+        if len(validated_tickers) < len(data.get("tickers", [])):
+            dropped = set(t.upper() for t in data.get("tickers", [])) - set(validated_tickers)
+            logger.warning(f"[query_interpreter] dropped invalid tickers: {dropped}")
+        data["tickers"] = validated_tickers
+        data["comparison_set"] = validated_comparison
+
         plan = AnalysisPlan(**data)
         logger.info(
-            f"[query_interpreter] Plan: intent={plan.intent.value}, "
-            f"tickers={plan.tickers}, themes={plan.themes}, "
-            f"{len(plan.data_requests)} data requests"
+            f"[query_interpreter] Plan: type={plan.question_type.value} intent={plan.intent.value} "
+            f"tickers={plan.tickers} comparison={plan.comparison_set} "
+            f"sub_qs={len(plan.sub_questions)} priority_items={len(plan.data_priority)} "
+            f"falsification={len(plan.falsification_criteria)} archetype={plan.idea_archetype} "
+            f"benchmark={plan.benchmark} instrument={plan.instrument_preference.value} "
+            f"confidence={plan.plan_confidence}"
         )
         return plan
+
+    def _validate_tickers(self, tickers: list) -> list[str]:
+        """
+        Validate tickers in parallel. A ticker is valid if get_fundamentals
+        returns a non-empty dict with a current_price. Cached, so subsequent
+        calls within the same session are free.
+
+        Drops invalid tickers silently (logged at WARN) so downstream desks
+        don't waste their budget on hallucinated symbols.
+        """
+        if not tickers:
+            return []
+        cleaned = list(dict.fromkeys(
+            (t or "").strip().upper() for t in tickers if t and isinstance(t, str)
+        ))[:12]
+
+        def _check(tk: str) -> tuple[str, bool]:
+            try:
+                data = _market.get_fundamentals(tk) or {}
+                ok = bool(data.get("current_price") and data.get("current_price") > 0)
+                return tk, ok
+            except Exception:
+                return tk, False
+
+        results: dict[str, bool] = {}
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for tk, ok in pool.map(_check, cleaned):
+                results[tk] = ok
+
+        return [tk for tk, ok in results.items() if ok]
