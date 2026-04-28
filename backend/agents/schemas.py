@@ -123,6 +123,25 @@ class AnalysisPlan(BaseModel):
     # Strategist diversity validator enforces against this.
     idea_archetype: list[str] = Field(default_factory=list)
 
+    # SECONDARY UNIVERSE — non-Mag7 candidates the Research Analyst MUST
+    # evaluate alongside the primary tickers. This is what breaks the
+    # mega-cap monoculture. The Interpreter populates this with mid-cap
+    # tickers from the same theme/sector that aren't already in `tickers`.
+    # Strategist is required to draw at least N ideas from this list when
+    # idea_archetype calls for "non-consensus" or "small-cap" or when
+    # idea count >= 8.
+    secondary_universe: list[str] = Field(default_factory=list)
+
+    # Target number of trade ideas the Strategist should produce. Default 10
+    # for alpha_finding queries (was 5). Hedging queries may want fewer.
+    target_idea_count: int = Field(default=10, ge=3, le=15)
+
+    # Style label coverage required across the trade ideas. Strategist must
+    # produce at least one idea per label listed here. Examples:
+    #   ["growth", "value", "quality", "momentum", "low_vol", "contrarian",
+    #    "small_cap", "pair_trade", "hedge", "convexity"]
+    required_style_labels: list[str] = Field(default_factory=list)
+
     @field_validator("question_type", mode="before")
     @classmethod
     def coerce_question_type(cls, v):
@@ -244,6 +263,17 @@ class TradeIdea(BaseModel):
     # Trade structure (set by Strategist when instrument_preference != stock)
     structure_type: Optional[str] = None  # "outright" | "pair" | "spread" | "calls" | "puts" | "hedge"
     pair_short_leg: Optional[str] = None  # ticker if this is a pair_trade
+    # Hedge-fund-style classification — surfaced as a colored pill on the
+    # trade card and used by the diversity validator to enforce coverage.
+    # Canonical values:
+    #   growth | value | quality | momentum | low_vol | gard (growth-at-reasonable-price)
+    #   defensive | cyclical | special_situation | event_driven | macro
+    #   contrarian | mean_reversion | secular_winner | spinoff | small_cap
+    #   international | yield | hedge | volatility
+    style_label: Optional[str] = None
+    # Market-cap bucket so Strategist can be forced to break out of mega-cap mono-culture
+    # Values: mega_cap | large_cap | mid_cap | small_cap | micro_cap | etf
+    market_cap_bucket: Optional[str] = None
 
     @field_validator("price_corrected", mode="before")
     @classmethod
@@ -335,6 +365,10 @@ class IntelligenceMemo(BaseModel):
     falsification_criteria: list[str] = Field(default_factory=list)
     regime_sensitivity: list[dict] = Field(default_factory=list)
     macro_context: dict = Field(default_factory=dict)
+    # Wider-net signals
+    secondary_universe: list[str] = Field(default_factory=list)
+    target_idea_count: int = 10
+    required_style_labels: list[str] = Field(default_factory=list)
 
     @field_validator("intent", mode="before")
     @classmethod

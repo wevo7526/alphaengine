@@ -2488,7 +2488,12 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
             )
             portfolio_for_strategy = await _fetch_portfolio_snapshot(user_id)
             scorecard_for_strategy = await _fetch_scorecard_for_calibration(user_id)
-            live_prices_for_strategy = await _fetch_live_prices_for(plan_data.get("tickers", []))
+            # Pre-fetch prices for primary + top 8 secondary so the Strategist
+            # has anchoring data for every candidate it might pick from.
+            primary_tk = list(plan_data.get("tickers", []) or [])
+            secondary_tk = list((plan_data.get("secondary_universe", []) or [])[:8])
+            all_pricing = list(dict.fromkeys(primary_tk + secondary_tk))
+            live_prices_for_strategy = await _fetch_live_prices_for(all_pricing)
         except Exception as e:
             logger.debug(f"[stream] Strategist prefetch skipped: {e}")
 
@@ -2514,7 +2519,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
                     }
                     # Post-validate trade ideas against live prices +
-                    # diversity assessment.
+                    # diversity assessment (with required style labels).
                     if isinstance(strategy_data, dict):
                         try:
                             from agents.portfolio_strategist import (
@@ -2524,7 +2529,10 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                             if live_prices_for_strategy:
                                 ideas = validate_and_fix_trade_ideas(ideas, live_prices_for_strategy)
                                 strategy_data["trade_ideas"] = ideas
-                            strategy_data["_diversity"] = assess_diversity(ideas)
+                            strategy_data["_diversity"] = assess_diversity(
+                                ideas,
+                                required_style_labels=plan_data.get("required_style_labels", []),
+                            )
                         except Exception as e:
                             logger.debug(f"[stream] trade-idea validator skipped: {e}")
                 else:
@@ -2677,6 +2685,9 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         memo_data["falsification_criteria"] = plan_data.get("falsification_criteria", []) or []
         memo_data["regime_sensitivity"] = plan_data.get("regime_sensitivity", []) or []
         memo_data["macro_context"] = macro_context_for_interp or {}
+        memo_data["secondary_universe"] = plan_data.get("secondary_universe", []) or []
+        memo_data["target_idea_count"] = int(plan_data.get("target_idea_count", 10) or 10)
+        memo_data["required_style_labels"] = plan_data.get("required_style_labels", []) or []
 
         # Quality + structural integrity signals
         if isinstance(research_data, dict):

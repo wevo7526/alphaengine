@@ -44,6 +44,9 @@ export interface TradeIdea {
   regime_conditional_size_pct?: number | null;
   structure_type?: string | null;
   pair_short_leg?: string | null;
+  // Hedge-fund style classification + market-cap bucket — surfaced as colored pills
+  style_label?: string | null;
+  market_cap_bucket?: string | null;
 }
 
 export interface IntelligenceMemo {
@@ -94,7 +97,14 @@ export interface IntelligenceMemo {
     direction_split?: { long?: number; short?: number; neutral?: number };
     sector_concentration_pct?: number;
     top_sector?: string;
+    mega_cap_share_pct?: number;
+    styles_covered?: string[];
+    missing_styles?: string[];
   };
+  // Wider-net fields surfaced from the Interpreter
+  secondary_universe?: string[];
+  target_idea_count?: number;
+  required_style_labels?: string[];
   regime_sensitivity?: {
     regime: string;
     ideal_position?: string;

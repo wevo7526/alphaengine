@@ -220,11 +220,17 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     if state.get("scorecard_data") is None:
         state["scorecard_data"] = await _fetch_scorecard_for_calibration(state.get("user_id"))
 
-    # Pre-fetch CURRENT prices for every plan ticker so the Strategist gets
-    # them in the prompt as authoritative data. Prevents the LLM from
-    # inventing entry/stop/target levels when its own tool history blurs.
-    plan_tickers = (state.get("plan_data") or {}).get("tickers", []) or []
-    live_prices = await _fetch_live_prices_for(plan_tickers)
+    # Pre-fetch CURRENT prices for every plan ticker AND every secondary
+    # universe candidate so the Strategist has authoritative data for every
+    # potential trade idea source. Prevents LLM from inventing prices and
+    # gives mid-cap candidates the same anchoring rigor as mega-caps.
+    plan_dict_for_prices = state.get("plan_data") or {}
+    plan_tickers = plan_dict_for_prices.get("tickers", []) or []
+    secondary = plan_dict_for_prices.get("secondary_universe", []) or []
+    # Cap secondary at 8 so we don't blow the API budget on a 12-name pool
+    # the Strategist may not even draw from.
+    all_pricing = list(dict.fromkeys(list(plan_tickers) + list(secondary[:8])))
+    live_prices = await _fetch_live_prices_for(all_pricing)
 
     output = await _with_timeout(
         _portfolio_strategist.analyze({
@@ -240,15 +246,19 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     )
 
     # Post-validate trade ideas against live prices — overrides any LLM
-    # hallucinations that snuck past the prompt rules. Also assess diversity.
+    # hallucinations that snuck past the prompt rules. Also assess diversity
+    # against required_style_labels from the plan.
     if output and not output.error and isinstance(output.output, dict):
         from agents.portfolio_strategist import validate_and_fix_trade_ideas, assess_diversity
+        plan_dict = state.get("plan_data") or {}
         ideas = output.output.get("trade_ideas") or []
         if ideas and live_prices:
             ideas = validate_and_fix_trade_ideas(ideas, live_prices)
             output.output["trade_ideas"] = ideas
         # Stash diversity assessment so the UI can flag monolithic baskets
-        output.output["_diversity"] = assess_diversity(ideas)
+        output.output["_diversity"] = assess_diversity(
+            ideas, required_style_labels=plan_dict.get("required_style_labels", [])
+        )
     if output is None or (output and output.error):
         err = output.error if output else "timed out"
         logger.warning(f"[orchestrator] Portfolio Strategist error: {err}")
@@ -591,6 +601,9 @@ async def run_research_desk(query: str, user_id: str | None = None) -> Intellige
     memo_data["falsification_criteria"] = plan.get("falsification_criteria", []) or []
     memo_data["regime_sensitivity"] = plan.get("regime_sensitivity", []) or []
     memo_data["macro_context"] = final_state.get("macro_context") or {}
+    memo_data["secondary_universe"] = plan.get("secondary_universe", []) or []
+    memo_data["target_idea_count"] = int(plan.get("target_idea_count", 10) or 10)
+    memo_data["required_style_labels"] = plan.get("required_style_labels", []) or []
 
     # Quality + structural integrity signals
     memo_data["data_quality"] = final_state.get("data_quality") or "complete"

@@ -44,14 +44,20 @@ def _parse_entry_zone(raw: str | None) -> tuple[float | None, float | None]:
     return min(parsed[:2]), max(parsed[:2])
 
 
-def assess_diversity(trade_ideas: list[dict]) -> dict:
+def assess_diversity(
+    trade_ideas: list[dict],
+    required_style_labels: list[str] | None = None,
+) -> dict:
     """
-    Assess structural diversity of the Strategist's output. Returns:
-        {monolithic: bool, reason: str, direction_split: {...}, sector_concentration: float}
+    Assess structural diversity of the Strategist's output.
 
-    A monolithic output (all longs OR >80% same sector) is an anti-pattern
-    for any 'risk-adjusted' / 'pair_trade' / 'hedging' query — orchestrator
-    flags it so the user sees the system caught the issue.
+    Flags a basket as monolithic if any of:
+      - all longs (no shorts/pairs/hedges) and >=4 ideas
+      - >80% same sector and >=4 ideas
+      - >=70% mega_cap and >=8 ideas (universe monoculture)
+      - required_style_labels not covered (style monoculture)
+
+    Returns the diagnostic for the UI badge.
     """
     if not trade_ideas:
         return {"monolithic": False, "reason": "no_ideas"}
@@ -62,19 +68,38 @@ def assess_diversity(trade_ideas: list[dict]) -> dict:
     neutral_count = sum(1 for d in directions if d == "neutral")
 
     sectors = [(t or {}).get("sector") or "Unknown" for t in trade_ideas]
+    cap_buckets = [(t or {}).get("market_cap_bucket") or "unknown" for t in trade_ideas]
+    style_labels = [(t or {}).get("style_label") for t in trade_ideas if (t or {}).get("style_label")]
+
+    from collections import Counter
     if sectors:
-        from collections import Counter
         top_sector, top_count = Counter(sectors).most_common(1)[0]
         sector_share = top_count / len(sectors)
     else:
         top_sector = "Unknown"
         sector_share = 0.0
 
+    mega_count = sum(1 for c in cap_buckets if c == "mega_cap")
+    mega_share = mega_count / len(cap_buckets) if cap_buckets else 0.0
+
+    style_set = set(style_labels)
+    required_set = set(required_style_labels or [])
+    missing_styles = sorted(required_set - style_set) if required_set else []
+
     monolithic_reasons = []
     if len(trade_ideas) >= 4 and long_count == len(trade_ideas):
         monolithic_reasons.append("all-long structure (no shorts, pairs, or hedges)")
     if len(trade_ideas) >= 4 and sector_share > 0.8:
         monolithic_reasons.append(f"sector concentration {int(sector_share*100)}% in {top_sector}")
+    if len(trade_ideas) >= 8 and mega_share > 0.7:
+        monolithic_reasons.append(
+            f"mega-cap monoculture ({int(mega_share*100)}% mega-caps; "
+            "draw more ideas from secondary_universe)"
+        )
+    if missing_styles:
+        monolithic_reasons.append(
+            f"missing required styles: {', '.join(missing_styles)}"
+        )
 
     return {
         "monolithic": bool(monolithic_reasons),
@@ -82,6 +107,9 @@ def assess_diversity(trade_ideas: list[dict]) -> dict:
         "direction_split": {"long": long_count, "short": short_count, "neutral": neutral_count},
         "sector_concentration_pct": round(sector_share * 100, 1),
         "top_sector": top_sector,
+        "mega_cap_share_pct": round(mega_share * 100, 1),
+        "styles_covered": sorted(style_set),
+        "missing_styles": missing_styles,
     }
 
 
@@ -208,6 +236,32 @@ def get_recent_prices(ticker: str) -> list:
 SYSTEM_PROMPT = """You are a senior portfolio manager at a quantitative hedge fund. You translate
 research analysis and risk assessments into specific, actionable trade ideas.
 
+UNIVERSE DISCIPLINE — A hedge fund desk doesn't pay you to recommend MSFT
+long for the millionth time. The plan ships TWO universes:
+  PRIMARY (plan.tickers): the consensus / mega-cap set
+  SECONDARY (plan.secondary_universe): mid-cap and second-tier names that
+                                       offer alpha away from the herd
+
+When `plan.target_idea_count >= 8`, you MUST draw at least 3 of your trade
+ideas from the SECONDARY universe. This is non-negotiable — the diversity
+validator will flag your output and the user will see a "Mega-cap monoculture"
+warning if you don't comply.
+
+When `plan.target_idea_count` is set, produce EXACTLY that many ideas
+(default 10 for alpha-finding queries, was 5).
+
+STYLE COVERAGE — `plan.required_style_labels` lists style buckets you MUST
+cover. Each trade idea carries a `style_label` from this canonical set:
+  growth | value | quality | momentum | low_vol | gard | defensive
+  cyclical | special_situation | event_driven | macro | contrarian
+  mean_reversion | secular_winner | small_cap | international | yield
+  hedge | volatility
+
+Every trade idea must have a `style_label` AND a `market_cap_bucket`
+(mega_cap | large_cap | mid_cap | small_cap | etf). The Research Analyst
+provides these per-ticker in `research.ticker_data[T].style_label` —
+default to that, but you may override with reasoning.
+
 PRICING DISCIPLINE — READ FIRST. The "LIVE PRICES" block in the user prompt
 contains tool-fetched current prices. You MUST anchor every entry/stop/target
 to those exact numbers. Do NOT invent prices. Do NOT pull prices from the
@@ -257,9 +311,11 @@ Position sizing rules:
 - Higher conviction = larger position
 - Counter-trend trades require 2x evidence
 
-Always produce exactly 5 trade ideas across different tickers and sectors to give the
-CIO a diversified set of options. Include both long and short ideas when the environment
-warrants it. Rank by conviction — best idea first.
+Produce EXACTLY `plan.target_idea_count` trade ideas (default 10 for alpha-finding,
+8 for hedging, 6 for comparison). Cover the styles in `plan.required_style_labels`.
+Draw at least 3 ideas from `plan.secondary_universe` (non-mega-cap names).
+Include shorts and pair trades — never produce all-longs unless the regime + plan
+strongly justify it. Rank by conviction — best idea first.
 
 For each trade idea:
 - thesis: MUST be 2-3 sentences explaining WHY this trade, not just WHAT. Include a specific
@@ -269,7 +325,7 @@ For each trade idea:
 - catalysts: 3+ specific, dated events (earnings dates, product launches, FOMC meetings)
 - risks: 3+ specific risks with quantified impact where possible
 
-Always produce exactly 5 hedging recommendations. Each hedge should be a specific,
+Always produce exactly 5 hedging recommendations (separate from trade_ideas). Each hedge should be a specific,
 actionable instruction with the instrument, strike/level, rationale, and approximate
 cost or premium. Examples:
   - "Buy SPY May 520 puts ($4.20 premium) to hedge portfolio beta — protects against 5% drawdown"
@@ -293,7 +349,13 @@ Respond with JSON:
             "position_size_pct": 3.0,
             "time_horizon": "weeks",
             "catalysts": ["Q2 earnings July 25", "WWDC announcements"],
-            "risks": ["China trade tensions", "Macro slowdown"]
+            "risks": ["China trade tensions", "Macro slowdown"],
+            "style_label": "quality",
+            "market_cap_bucket": "mega_cap",
+            "sector": "Technology",
+            "beta_to_spy": 1.15,
+            "structure_type": "outright",
+            "regime_conditional_size_pct": 3.0
         }}
     ],
     # Existing portfolio context will be injected into your prompt under
@@ -319,17 +381,28 @@ Respond with JSON:
     "strategy_narrative": "<1-2 paragraph strategy explanation>"
 }}"""
 
-OUTPUT_INSTRUCTIONS = """TOOL BUDGET: Up to 8 tool calls. Allocate as follows:
+OUTPUT_INSTRUCTIONS = """TOOL BUDGET: Up to 14 tool calls. Allocate as follows:
   - The LIVE PRICES block already gives you tool-fetched prices for every
-    plan ticker. Do NOT re-fetch those.
-  - For any ticker you want to write an idea on that is NOT in LIVE PRICES,
-    call get_current_price ONCE to get its price.
+    primary ticker. Do NOT re-fetch those.
+  - For SECONDARY universe tickers you want to write ideas on that are NOT
+    in LIVE PRICES, call get_current_price ONCE per ticker (budget 6-8 calls).
   - get_recent_prices is for support/resistance only — call sparingly (1-2 max).
-  - After you have prices for all 5 ideas, STOP and emit the JSON.
+  - After you have prices for all target_idea_count ideas, STOP and emit JSON.
 
-Produce exactly 5 trade ideas and 5 hedging recommendations. Every entry/stop/
-target MUST anchor to a tool-fetched price (LIVE PRICES or your own get_current_price
-call) — no exceptions."""
+Produce EXACTLY plan.target_idea_count trade ideas (default 10) and exactly 5
+hedging recommendations. Every entry/stop/target MUST anchor to a tool-fetched
+price (LIVE PRICES or your own get_current_price call) — no exceptions.
+
+Every trade idea MUST include:
+  - style_label (one of the canonical values)
+  - market_cap_bucket (mega_cap | large_cap | mid_cap | small_cap | etf)
+  - sector
+  - beta_to_spy (numeric estimate)
+  - structure_type (outright | pair | spread | calls | puts | hedge)
+
+At least 3 ideas must have market_cap_bucket != 'mega_cap' (drawn from
+secondary_universe or other non-mega-cap names supported by research).
+The required_style_labels list MUST be fully covered across the ideas."""
 
 
 class PortfolioStrategist(BaseAgent):
@@ -339,7 +412,7 @@ class PortfolioStrategist(BaseAgent):
     # Bumped from default 6: with up to 5 trade ideas needing live prices,
     # plus the prompt's instruction to call get_current_price for any ticker
     # not in the LIVE PRICES block, the Strategist needs more headroom.
-    max_iterations = 10
+    max_iterations = 16  # 14 tool calls + final synthesis pass; 10 ideas need more price calls
 
     def get_tools(self):
         return [get_current_price, get_recent_prices]
@@ -464,6 +537,9 @@ class PortfolioStrategist(BaseAgent):
         benchmark = plan.get("benchmark") or ""
         comparison_set = plan.get("comparison_set") or []
         regime_sensitivity = plan.get("regime_sensitivity") or []
+        secondary_universe = plan.get("secondary_universe") or []
+        target_count = int(plan.get("target_idea_count") or 10)
+        required_styles = plan.get("required_style_labels") or []
 
         archetype_block = ""
         if archetype:
@@ -538,9 +614,44 @@ class PortfolioStrategist(BaseAgent):
             if parts:
                 macro_block_strat = "\n=== MACRO BACKDROP ===\n  " + " · ".join(parts) + "\n"
 
+        # Secondary universe — non-mega-cap candidates the Research Analyst
+        # has surfaced. Strategist MUST draw from this list, not just primary.
+        secondary_block = ""
+        if secondary_universe:
+            min_secondary = max(3, target_count // 3)  # at least 1/3 of ideas from secondary, min 3
+            secondary_block = (
+                f"\n=== SECONDARY UNIVERSE (non-mega-cap alpha candidates) ===\n"
+                f"  {', '.join(secondary_universe)}\n"
+                f"REQUIRED: at least {min_secondary} of your {target_count} trade ideas must come "
+                f"from this secondary list (or other non-mega-cap names supported by research). "
+                f"Use research.ticker_data to inform conviction; if a secondary name lacks "
+                f"research data, call get_current_price first then justify from public knowledge.\n"
+            )
+
+        # Style coverage — every idea has style_label; required labels MUST appear
+        style_block = ""
+        if required_styles:
+            style_block = (
+                f"\n=== REQUIRED STYLE COVERAGE ===\n"
+                f"  Required labels: {', '.join(required_styles)}\n"
+                f"  Canonical style_label values: growth | value | quality | momentum | low_vol | "
+                f"gard | defensive | cyclical | special_situation | event_driven | macro | "
+                f"contrarian | mean_reversion | secular_winner | small_cap | international | "
+                f"yield | hedge | volatility\n"
+                f"  EVERY trade idea must have a `style_label` AND `market_cap_bucket` "
+                f"(mega_cap | large_cap | mid_cap | small_cap | etf). "
+                f"Together your {target_count} ideas must cover EVERY label in the required list above.\n"
+            )
+
+        idea_count_directive = (
+            f"\nProduce EXACTLY {target_count} trade ideas. The current default for alpha-finding "
+            f"is 10 (was 5). Include diverse styles and at least 3 mid/small-cap names per the "
+            f"secondary universe above.\n"
+        )
+
         return (
-            f"Query: {plan.get('query', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Horizon: {plan.get('time_horizon', 'weeks')}\n"
-            f"Question type: {plan.get('question_type', 'alpha_finding')}\n"
+            f"Query: {plan.get('query', '')} | Primary tickers: {', '.join(plan.get('tickers', []))} | Horizon: {plan.get('time_horizon', 'weeks')}\n"
+            f"Question type: {plan.get('question_type', 'alpha_finding')} | Target ideas: {target_count}\n"
             f"Regime: {risk.get('macro_regime', '?')} | Risk: {risk.get('overall_risk_level', '?')}\n"
             f"{macro_block_strat}"
             f"Research:\n{summary}\n"
@@ -548,14 +659,19 @@ class PortfolioStrategist(BaseAgent):
             f"{prices_block}\n"
             f"Risk:\n{risk_narrative}\n"
             f"{portfolio_block}"
+            f"{secondary_block}"
+            f"{style_block}"
             f"{archetype_block}"
             f"{instrument_block}"
             f"{benchmark_block}"
             f"{comparison_block_strat}"
             f"{regime_block}"
-            f"{calibration_block}\n"
-            f"Produce 5 trade ideas and portfolio strategy JSON. Anchor every entry/stop/target to the LIVE PRICES block above. "
-            f"You may call get_current_price for additional tickers not in the LIVE PRICES block, but do NOT override prices already given. "
-            f"For each trade idea, include 'beta_to_spy' (estimated from research/known beta), 'sector', "
-            f"and 'regime_conditional_size_pct' (size at current regime per regime_sensitivity multiplier)."
+            f"{calibration_block}"
+            f"{idea_count_directive}\n"
+            f"Anchor every entry/stop/target to the LIVE PRICES block above. "
+            f"You may call get_current_price for additional tickers (especially secondary universe names) "
+            f"but do NOT override prices already given. "
+            f"For each trade idea, include 'beta_to_spy', 'sector', 'style_label', 'market_cap_bucket', "
+            f"and 'regime_conditional_size_pct' (size at current regime per regime_sensitivity multiplier). "
+            f"Pair trades must populate 'pair_short_leg' with the short ticker and 'structure_type' = 'pair'."
         )

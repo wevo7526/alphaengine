@@ -368,6 +368,43 @@ def get_peer_comparison(ticker: str, peers: str | None = None) -> dict:
 
 
 @tool
+def screen_secondary_universe(
+    sectors: str = "",
+    themes: str = "",
+    exclude: str = "",
+    cap: int = 12,
+) -> dict:
+    """
+    Surface non-mega-cap CANDIDATES for trade ideas to break Mag7 monoculture.
+
+    Returns up to `cap` mid/small-cap or second-tier large-cap tickers from
+    the curated SECONDARY_BY_SECTOR + SECONDARY_BY_THEME pools. Mega-caps
+    (AAPL/MSFT/NVDA/etc.) are excluded automatically.
+
+    Args:
+      sectors: comma-separated GICS sector names (e.g. "Technology,Healthcare")
+      themes:  comma-separated theme keys (e.g. "ai_capex,obesity_glp1,cybersecurity")
+      exclude: comma-separated tickers to skip (typically the primary `tickers`)
+      cap: max candidates to return
+
+    Use this BEFORE writing trade ideas. The hedge fund desk hires you to find
+    alpha — that means surfacing names the user hasn't heard of, not echoing
+    consensus mega-cap longs back to them.
+    """
+    from agents.universe import secondary_candidates
+    sec_list = [s.strip() for s in (sectors or "").split(",") if s.strip()]
+    theme_list = [t.strip() for t in (themes or "").split(",") if t.strip()]
+    excl = [e.strip().upper() for e in (exclude or "").split(",") if e.strip()]
+    candidates = secondary_candidates(sectors=sec_list, themes=theme_list, exclude=excl, cap=cap)
+    return {
+        "sectors_used": sec_list,
+        "themes_used": theme_list,
+        "candidates": candidates,
+        "count": len(candidates),
+    }
+
+
+@tool
 def get_short_interest(ticker: str) -> dict:
     """
     Short interest signal: shortRatio (days-to-cover), float shares, short %
@@ -418,7 +455,8 @@ You have access to:
 
 IMPORTANT RULES:
 1. Execute ONLY the data_requests from the plan. Do not fetch data not asked for.
-2. For ticker-specific data, only pull for tickers listed in the plan.
+2. For ticker-specific data, pull for tickers listed in the plan AND for high-conviction
+   names from screen_secondary_universe (see rule 11 below).
 3. Start with macro_snapshot if the plan requests it — it's cached and cheap.
 4. Limit NewsAPI calls — 100/day budget. One call per ticker max.
 5. Alpha Vantage: only use if specifically needed for technical confirmation.
@@ -428,36 +466,64 @@ IMPORTANT RULES:
 9. Use get_analyst_consensus for any "Street is bullish/bearish" claim.
 10. Use get_peer_comparison instead of judging valuation in isolation.
 
+11. *** WIDER-NET MANDATE *** — A hedge fund desk doesn't pay you to echo
+    consensus mega-cap longs back. CALL `screen_secondary_universe` early
+    in your run (use sectors + themes from the plan) to surface non-Mag7
+    candidates. Then run `get_fundamentals` on 2-3 of those candidates.
+    Your data_summary MUST mention at least 2 non-mega-cap tickers as
+    candidates with a specific quantitative observation about each.
+
+12. *** STYLE LABELING *** — For EVERY ticker you analyze (primary OR
+    secondary), populate `ticker_data[ticker]["style_label"]` with one of:
+       growth | value | quality | momentum | low_vol | gard
+       defensive | cyclical | special_situation | event_driven | macro
+       contrarian | mean_reversion | secular_winner | spinoff | small_cap
+       international | yield | hedge | volatility
+    AND populate `ticker_data[ticker]["market_cap_bucket"]` with one of:
+       mega_cap (>$200B) | large_cap ($50-200B) | mid_cap ($10-50B)
+       small_cap ($2-10B) | micro_cap (<$2B) | etf
+    These labels are consumed by the Strategist to enforce style diversity.
+
 After gathering data, produce a JSON summary with:
 {{
     "macro_data": {{...}},
-    "ticker_data": {{"AAPL": {{"fundamentals": {{...}}, "price_summary": "...", "news_summary": "..."}}, ...}},
+    "ticker_data": {{"AAPL": {{"fundamentals": {{...}}, "price_summary": "...", "news_summary": "...", "style_label": "growth", "market_cap_bucket": "mega_cap"}}, ...}},
     "news_data": [{{...}}],
     "filing_data": [{{...}}],
     "thematic_data": {{"key_findings": [...]}},
-    "data_summary": "<narrative summary of all data gathered, citing specific numbers>"
+    "secondary_candidates_evaluated": ["TICK1", "TICK2", ...],  # the non-mega-cap tickers you actually examined
+    "data_summary": "<narrative summary of all data gathered, citing specific numbers AND naming at least 2 non-mega-cap candidates>"
 }}
 
 The data_summary is critical — it's what downstream agents (Risk Manager, Portfolio Strategist)
 will primarily read. Make it thorough, quantitative, and specific."""
 
-OUTPUT_INSTRUCTIONS = """TOOL BUDGET: 12 tool calls MAX. Plan a budget per ticker before calling.
+OUTPUT_INSTRUCTIONS = """TOOL BUDGET: 16 tool calls MAX. Plan deliberately.
 
-Suggested allocation for a 3-ticker analysis:
-  1 macro_snapshot (covers all macro)
-  3 fundamentals (one per ticker)
-  3 news (one per ticker — get_ticker_news returns descriptions)
-  1 get_earnings_calendar on the primary ticker (verifies catalyst dates)
-  1 get_analyst_consensus on the primary ticker (target prices, recommendation)
-  1 get_peer_comparison on the primary ticker (relative valuation)
-  1 get_options_analysis on the primary ticker (vol + flow signal)
-  1 buffer for SEC filings or short interest if research demands it
+Suggested allocation for a typical alpha-finding query (3-4 primary tickers
++ wider net):
+  1  macro_snapshot
+  1  screen_secondary_universe (CRITICAL — surfaces non-Mag7 candidates)
+  3-4 fundamentals on primary tickers
+  2-3 fundamentals on top secondary candidates
+  2  news (primary + 1 secondary)
+  1  get_earnings_calendar on the primary ticker
+  1  get_analyst_consensus on the primary ticker
+  1  get_peer_comparison on the primary ticker
+  1  get_options_analysis on the primary ticker
+  1  buffer for SEC filings or short interest
 
-Skip Alpha Vantage unless specifically needed (25/day budget — preserve it).
-Skip get_filing_section unless thesis requires reading actual filing prose.
+Hard rules:
+  - You MUST call screen_secondary_universe at least once.
+  - You MUST run get_fundamentals on at least 2 secondary (non-mega-cap)
+    candidates and report their style_label + market_cap_bucket in ticker_data.
+  - Skip Alpha Vantage unless specifically needed (25/day budget).
+  - Skip get_filing_section unless thesis requires reading actual filing prose.
 
-After 12 tool calls, STOP and emit JSON. Your data_summary is the critical
-output — 3-4 paragraphs, every number sourced from a tool call, no guesses."""
+After 16 tool calls, STOP and emit JSON. Your data_summary is the critical
+output — 4-5 paragraphs, every number sourced from a tool call, AND it MUST
+name at least 2 non-mega-cap tickers as alpha candidates with a specific
+quantitative observation per name."""
 
 
 class ResearchAnalyst(BaseAgent):
@@ -478,7 +544,7 @@ class ResearchAnalyst(BaseAgent):
         agent = create_tool_calling_agent(self.llm, tools, prompt)
         return AgentExecutor(
             agent=agent, tools=tools, verbose=False,
-            max_iterations=13,  # 12 tool calls + final synthesis pass
+            max_iterations=17,  # 16 tool calls + final synthesis pass
             handle_parsing_errors=True,
         )
 
@@ -508,6 +574,7 @@ class ResearchAnalyst(BaseAgent):
             get_analyst_consensus,
             get_peer_comparison,
             get_short_interest,
+            screen_secondary_universe,
         ]
 
     def build_input_prompt(self, context: dict) -> str:

@@ -9,6 +9,37 @@ import { CorrelationHeatmap } from "./CorrelationHeatmap";
 import { OptionsPanel } from "./OptionsPanel";
 import { api } from "@/lib/api";
 
+// Style classification → tailwind classes. Hedge-fund convention: growth in
+// teal (capital appreciation), value in green (cheapness), defensive in
+// blue (boring/safe), contrarian/short in red, hedge in yellow (risk).
+const STYLE_LABEL_CLASSES: Record<string, string> = {
+  growth: "bg-accent/10 text-accent border-accent/30",
+  value: "bg-signal-green/10 text-signal-green border-signal-green/30",
+  quality: "bg-signal-green/10 text-signal-green border-signal-green/30",
+  momentum: "bg-accent/10 text-accent border-accent/30",
+  low_vol: "bg-text-tertiary/10 text-text-secondary border-border-primary",
+  gard: "bg-accent/10 text-accent border-accent/30",
+  defensive: "bg-text-tertiary/10 text-text-secondary border-border-primary",
+  cyclical: "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30",
+  special_situation: "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30",
+  event_driven: "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30",
+  macro: "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30",
+  contrarian: "bg-signal-red/10 text-signal-red border-signal-red/30",
+  mean_reversion: "bg-signal-red/10 text-signal-red border-signal-red/30",
+  secular_winner: "bg-accent/10 text-accent border-accent/30",
+  small_cap: "bg-accent/10 text-accent border-accent/30",
+  international: "bg-text-tertiary/10 text-text-secondary border-border-primary",
+  yield: "bg-signal-green/10 text-signal-green border-signal-green/30",
+  hedge: "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30",
+  volatility: "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30",
+};
+
+function styleLabelClasses(label: string | null | undefined): string {
+  if (!label) return "bg-bg-elevated text-text-tertiary border-border-primary";
+  const key = label.toLowerCase().replace(/\s/g, "_");
+  return STYLE_LABEL_CLASSES[key] || "bg-bg-elevated text-text-tertiary border-border-primary";
+}
+
 const ACTION_MAP: Record<string, { label: string; color: string }> = {
   strong_bullish: { label: "LONG", color: "bg-signal-green/10 text-signal-green border-signal-green/20" },
   bullish: { label: "LONG", color: "bg-signal-green/10 text-signal-green border-signal-green/20" },
@@ -141,6 +172,28 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
           </div>
         )}
       </div>
+
+      {/* Style + market-cap pills — hedge-fund classification, surfaced prominently */}
+      {(idea.style_label || idea.market_cap_bucket) && (
+        <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+          {idea.style_label && (
+            <span
+              className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border font-medium ${styleLabelClasses(idea.style_label)}`}
+              title="Hedge-fund style classification"
+            >
+              {idea.style_label.replace(/_/g, " ")}
+            </span>
+          )}
+          {idea.market_cap_bucket && idea.market_cap_bucket !== "mega_cap" && (
+            <span
+              className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border bg-accent/10 text-accent border-accent/30 font-medium"
+              title="Non-mega-cap alpha — sourced from the Interpreter's secondary_universe"
+            >
+              {idea.market_cap_bucket.replace(/_/g, " ")}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Beta layering row — systematic exposure decomposition */}
       {(idea.beta_to_spy != null || idea.sector || idea.structure_type || idea.regime_conditional_size_pct != null) && (
@@ -517,10 +570,10 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
           <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
             Plan Shape
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-[12px]">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]">
             {memo.question_type && (
               <div>
-                <span className="text-text-quaternary">Question type</span>
+                <span className="text-text-quaternary">Question</span>
                 <span className="ml-2 font-mono text-text-primary">{memo.question_type.replace(/_/g, " ")}</span>
               </div>
             )}
@@ -536,6 +589,12 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                 <span className="ml-2 font-mono text-text-primary">{memo.instrument_preference.replace(/_/g, " ")}</span>
               </div>
             )}
+            {memo.target_idea_count !== undefined && memo.target_idea_count > 0 && (
+              <div>
+                <span className="text-text-quaternary">Ideas</span>
+                <span className="ml-2 font-mono text-text-primary">{memo.target_idea_count}</span>
+              </div>
+            )}
           </div>
           {memo.idea_archetype && memo.idea_archetype.length > 0 && (
             <div className="mt-3">
@@ -544,6 +603,43 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                 {memo.idea_archetype.map((a, i) => (
                   <span key={i} className="text-[10px] font-mono px-2 py-0.5 rounded bg-bg-elevated text-text-secondary">
                     {a}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {memo.required_style_labels && memo.required_style_labels.length > 0 && (
+            <div className="mt-3">
+              <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1.5">Required style coverage</p>
+              <div className="flex flex-wrap gap-1.5">
+                {memo.required_style_labels.map((s, i) => {
+                  const covered = memo.diversity?.styles_covered?.includes(s);
+                  return (
+                    <span
+                      key={i}
+                      className={`text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border font-medium ${
+                        covered
+                          ? styleLabelClasses(s)
+                          : "bg-signal-red/10 text-signal-red border-signal-red/30"
+                      }`}
+                      title={covered ? "Covered in trade ideas" : "MISSING — Strategist did not produce a trade with this label"}
+                    >
+                      {covered ? "✓ " : "✗ "}{s.replace(/_/g, " ")}
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          {memo.secondary_universe && memo.secondary_universe.length > 0 && (
+            <div className="mt-3">
+              <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1.5">
+                Secondary universe (non-mega-cap candidates)
+              </p>
+              <div className="flex flex-wrap gap-1">
+                {memo.secondary_universe.map((tk, i) => (
+                  <span key={i} className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-bg-elevated text-text-secondary">
+                    {tk}
                   </span>
                 ))}
               </div>

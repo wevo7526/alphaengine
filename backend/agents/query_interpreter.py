@@ -102,11 +102,30 @@ Given a query, produce a JSON plan with this shape (every field matters):
     // 'hedge X' queries → hedge or options
 
     "idea_archetype": [
-        // Structural diversity directive for the Strategist. Examples:
-        //   ["3 longs in the primary theme", "1 pair_trade vs comparison_set", "1 hedge"]
-        //   ["2 longs", "2 shorts", "1 pair_trade"]
-        //   ["1 outright long", "2 spreads", "2 hedges"]
+        // Structural diversity directive for the Strategist. For
+        // alpha_finding queries, generate a 10-idea breakdown with
+        // explicit style coverage, NOT 5 carbon-copy mega-cap longs.
+        // Examples:
+        //   alpha_finding (10 ideas):
+        //     ["3 longs in primary mega-caps", "3 longs in secondary mid-cap candidates",
+        //      "1 pair_trade", "1 contrarian short", "1 hedge", "1 convexity (calls)"]
+        //   hedging (6 ideas):
+        //     ["1 long high-quality", "2 hedges (index puts + vol calls)",
+        //      "1 pair_trade defensive vs cyclical", "2 cross-asset (TLT, gold)"]
         "<directive 1>", "<directive 2>"
+    ],
+
+    "target_idea_count": 10,
+    // Default 10 for alpha_finding queries. Drop to 6-8 for hedging
+    // queries where there are fewer instruments to choose from.
+
+    "required_style_labels": [
+        // Style labels the Strategist MUST cover across the trade ideas.
+        // For alpha_finding: ["growth", "value", "quality", "momentum",
+        //                     "low_vol", "contrarian", "small_cap", "hedge"]
+        // For hedging: ["hedge", "low_vol", "yield", "macro", "volatility"]
+        // For comparison: ["growth", "value", "pair_trade"]
+        "growth", "value", "quality", ...
     ],
 
     "plan_confidence": <0-100 integer>,
@@ -140,11 +159,47 @@ INSTRUMENT PREFERENCE — pick from query semantics:
   default for 'best trade' on a single direction → stock
   query mentions options/calls/puts/IV → options
 
-IDEA ARCHETYPE — force structural diversity:
-  alpha_finding queries → "3 longs in primary theme, 1 pair_trade, 1 hedge"
-  hedging queries → "1 long stock, 2 hedges, 2 spread structures"
-  comparison queries → "1 long winner, 1 short loser, 1 pair_trade, 2 calibration trades"
-  ALWAYS include at least one hedge. NEVER produce 5 carbon-copy longs.
+IDEA ARCHETYPE — force structural AND universe diversity:
+
+  Default target_idea_count for alpha_finding is 10 (was 5). The hedge fund
+  desk demands breadth, not 5 echoes of the same mega-cap thesis.
+
+  alpha_finding (10 ideas) →
+    "3 longs in primary mega-caps,
+     3 longs in mid-cap secondary candidates,
+     1 pair_trade (long quality / short cyclical),
+     1 contrarian short,
+     1 hedge (index puts or vol calls),
+     1 convexity play (long calls or spread)"
+
+  hedging (6-8 ideas) →
+    "1 long high-quality core,
+     2 hedges (index puts + vol calls),
+     1 pair_trade (defensive vs cyclical),
+     2 cross-asset hedges (TLT calls, gold, DXY),
+     1 single-name short in highest-beta name"
+
+  comparison (5-6 ideas) →
+    "1 long winner, 1 short loser, 1 pair_trade,
+     2 relative-value calibration trades, 1 hedge"
+
+  ALWAYS include at least one hedge AND at least one non-mega-cap long.
+  NEVER produce 5 carbon-copy mega-cap longs — that's not a hedge fund desk,
+  that's an index fund.
+
+REQUIRED_STYLE_LABELS — enforce style coverage across ideas:
+  Pick from: growth | value | quality | momentum | low_vol | gard | defensive
+  | cyclical | special_situation | event_driven | contrarian | mean_reversion
+  | secular_winner | small_cap | international | yield | hedge | volatility
+
+  alpha_finding default required: ["growth", "value", "quality", "momentum",
+                                    "small_cap", "contrarian", "hedge"]
+  hedging default required: ["hedge", "low_vol", "yield", "macro", "volatility"]
+
+SECONDARY_UNIVERSE — leave EMPTY in your output. The system will populate
+this server-side from the curated mid-cap pool keyed off your sectors and
+themes. You don't need to know specific tickers; just emit good sectors
+and themes and the orchestrator handles the rest.
 
 THEME DECOMPOSITION — break themes into 3-5 measurable sub-components:
   "AI capex" → ["hyperscaler_capex_guidance", "training_vs_inference_mix",
@@ -211,10 +266,15 @@ EXAMPLE 1 — query: "Best risk-adjusted trade in tech, paying attention to AI c
     "instrument_preference": "mixed",
     "idea_archetype": [
         "2 outright longs in inference compute leaders (NVDA, AVGO)",
+        "1 long quality mega-cap (MSFT)",
+        "3 mid-cap secondary candidates (mix of small_cap + secular_winner styles)",
         "1 pair_trade vs legacy software (long MSFT / short ORCL)",
+        "1 contrarian play (short overcrowded name)",
         "1 long calls position for convexity (NVDA monthly calls)",
         "1 hedge (SMH puts or VIX calls)"
     ],
+    "target_idea_count": 10,
+    "required_style_labels": ["growth", "quality", "momentum", "secular_winner", "small_cap", "contrarian", "hedge"],
     "plan_confidence": 78,
     "plan_confidence_reason": "Query is specific about theme (inference compute) and asks for risk-adjusted (suggesting convex/hedged structure); ticker universe inferred but well-bounded by theme."
 }
@@ -262,9 +322,13 @@ EXAMPLE 2 — query: "How do I hedge a long tech book against AI bubble risk?"
     "idea_archetype": [
         "2 index put structures (QQQ, SMH)",
         "1 vol play (VIX calls or VXX)",
-        "1 cross-asset hedge (TLT calls or HY credit short)",
-        "1 sector rotation pair (long XLU / short XLK or similar defensive)"
+        "2 cross-asset hedges (TLT calls + DXY long via UUP)",
+        "1 credit hedge (short HYG / long LQD)",
+        "1 sector rotation pair (long XLU / short XLK)",
+        "1 defensive single-name (high-quality consumer staple)"
     ],
+    "target_idea_count": 8,
+    "required_style_labels": ["hedge", "low_vol", "yield", "macro", "volatility", "defensive"],
     "plan_confidence": 85,
     "plan_confidence_reason": "Hedging queries are well-specified by definition; the universe of hedge instruments is bounded."
 }
@@ -394,12 +458,52 @@ class QueryInterpreter:
         data["tickers"] = validated_tickers
         data["comparison_set"] = validated_comparison
 
+        # Server-side population of secondary_universe so the LLM doesn't have
+        # to know specific mid-cap tickers. We pull from the curated pool by
+        # the LLM-emitted sectors + themes, excluding anything already in
+        # the primary tickers + comparison_set.
+        try:
+            from agents.universe import secondary_candidates
+            sectors = data.get("sectors") or []
+            # Theme keys can come in many forms; lower/snake them
+            raw_themes = data.get("themes") or []
+            theme_keys = []
+            for t in raw_themes:
+                key = (t or "").lower().strip().replace(" ", "_").replace("-", "_")
+                if key:
+                    theme_keys.append(key)
+            exclude = list(validated_tickers) + list(validated_comparison)
+            secondary = secondary_candidates(
+                sectors=sectors,
+                themes=theme_keys,
+                exclude=exclude,
+                cap=12,
+            )
+            data["secondary_universe"] = secondary
+        except Exception as e:
+            logger.debug(f"[query_interpreter] secondary universe population skipped: {e}")
+            data["secondary_universe"] = []
+
+        # Defaults for new fields if the LLM didn't emit them
+        if "target_idea_count" not in data or not data.get("target_idea_count"):
+            qt = (data.get("question_type") or "alpha_finding")
+            data["target_idea_count"] = 10 if qt == "alpha_finding" else 8 if qt == "hedging" else 6
+        if "required_style_labels" not in data or not data.get("required_style_labels"):
+            qt = (data.get("question_type") or "alpha_finding")
+            if qt == "alpha_finding":
+                data["required_style_labels"] = ["growth", "value", "quality", "small_cap", "contrarian", "hedge"]
+            elif qt == "hedging":
+                data["required_style_labels"] = ["hedge", "low_vol", "yield", "macro", "volatility"]
+            else:
+                data["required_style_labels"] = ["quality", "value", "hedge"]
+
         plan = AnalysisPlan(**data)
         logger.info(
             f"[query_interpreter] Plan: type={plan.question_type.value} intent={plan.intent.value} "
-            f"tickers={plan.tickers} comparison={plan.comparison_set} "
-            f"sub_qs={len(plan.sub_questions)} priority_items={len(plan.data_priority)} "
-            f"falsification={len(plan.falsification_criteria)} archetype={plan.idea_archetype} "
+            f"primary={plan.tickers} secondary={plan.secondary_universe} "
+            f"comparison={plan.comparison_set} sub_qs={len(plan.sub_questions)} "
+            f"priority_items={len(plan.data_priority)} target_ideas={plan.target_idea_count} "
+            f"required_styles={plan.required_style_labels} archetype={plan.idea_archetype} "
             f"benchmark={plan.benchmark} instrument={plan.instrument_preference.value} "
             f"confidence={plan.plan_confidence}"
         )
