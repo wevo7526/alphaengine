@@ -12,10 +12,52 @@ from scipy.optimize import minimize
 import logging
 
 from data.market_client import MarketDataClient
+from quant import limits as _limits
 
 logger = logging.getLogger(__name__)
 
 _market = MarketDataClient()
+
+
+def _regularize_cov(cov: np.ndarray) -> tuple[np.ndarray, dict]:
+    """
+    Tikhonov regularization for ill-conditioned covariance matrices.
+
+    When cond(Sigma) > OPTIMIZER_RIDGE_TRIGGER_COND (default 1e10), inverting
+    Sigma in Black-Litterman or solving the SLSQP quadratic with it produces
+    numerically meaningless weights. We add `lambda * trace(Sigma)/n * I` to
+    the diagonal — a Ledoit-Wolf-style shrinkage toward the identity scaled
+    by the average variance, which raises the smallest eigenvalues without
+    distorting relative risk much. Returns the (possibly regularized) matrix
+    plus a diagnostic dict for transparency.
+    """
+    n = cov.shape[0]
+    info: dict = {"applied": False}
+    try:
+        cond = float(np.linalg.cond(cov))
+    except Exception:
+        cond = float("inf")
+    info["condition_number_before"] = cond if math.isfinite(cond) else None
+
+    if not math.isfinite(cond) or cond > _limits.OPTIMIZER_RIDGE_TRIGGER_COND:
+        avg_var = float(np.trace(cov) / n) if n > 0 else 0.0
+        # Use a small absolute floor when avg_var is ~0, so a degenerate
+        # all-zero diagonal still gets nudged off the rank-deficient corner.
+        ridge_scale = max(avg_var, 1e-8)
+        ridge = _limits.OPTIMIZER_RIDGE_LAMBDA * ridge_scale
+        cov_reg = cov + ridge * np.eye(n)
+        try:
+            cond_after = float(np.linalg.cond(cov_reg))
+        except Exception:
+            cond_after = float("inf")
+        info.update({
+            "applied": True,
+            "ridge_lambda": _limits.OPTIMIZER_RIDGE_LAMBDA,
+            "ridge_added_to_diag": round(ridge, 8),
+            "condition_number_after": cond_after if math.isfinite(cond_after) else None,
+        })
+        return cov_reg, info
+    return cov, info
 
 DIRECTION_MAP = {
     "strong_bearish": -1.0, "bearish": -0.5, "neutral": 0.0,
@@ -60,6 +102,7 @@ def mean_variance_optimize(
     mu = np.array([expected_returns.get(t, 0) for t in tickers])
     cov = np.array(matrix)
     cov = np.where(cov == None, 0, cov).astype(float)
+    cov, ridge_info = _regularize_cov(cov)
     w_current = np.array([(current_weights or {}).get(t, 0.0) for t in tickers])
     tc = transaction_cost_bps / 10000.0
 
@@ -103,6 +146,7 @@ def mean_variance_optimize(
         "turnover_pct": _clean(round(turnover * 100, 2)),
         "tx_cost_drag_pct": _clean(round(tc_drag * 100, 4)),
         "max_position_cap_pct": round(cap * 100, 2),
+        "ridge_regularization": ridge_info,
         "method": "mean_variance",
     }
 
@@ -115,11 +159,16 @@ def black_litterman(
     risk_aversion: float = 2.5,
     tau: float = 0.05,
     max_position_size: float = 0.05,
+    market_caps: dict[str, float] | None = None,
 ) -> dict:
     """
     Black-Litterman model.
     views = {ticker: expected_excess_return} from agent signals
     view_confidences = {ticker: confidence 0-1} from conviction
+    market_caps = {ticker: market_cap_in_USD} — used to compute the
+        equilibrium prior. If omitted, falls back to equal weights (which
+        is theoretically incorrect but avoids breaking callers that don't
+        have cap data; the result is flagged via market_proxy="equal_weight").
     """
     matrix = cov_matrix.get("matrix", [])
     if not tickers or not matrix:
@@ -128,9 +177,22 @@ def black_litterman(
     n = len(tickers)
     Sigma = np.array(matrix)
     Sigma = np.where(Sigma == None, 0, Sigma).astype(float)
+    Sigma, ridge_info = _regularize_cov(Sigma)
 
-    # Market cap weights (equal weight as proxy if no market cap data)
-    w_market = np.ones(n) / n
+    # Market cap weights — proper BL prior. Fall back to equal weight only
+    # when caps are missing or all zero (can happen for thinly-covered tickers).
+    market_proxy = "market_cap"
+    if market_caps:
+        caps = np.array([float(market_caps.get(t, 0.0) or 0.0) for t in tickers])
+        cap_sum = float(caps.sum())
+        if cap_sum > 0:
+            w_market = caps / cap_sum
+        else:
+            w_market = np.ones(n) / n
+            market_proxy = "equal_weight_fallback"
+    else:
+        w_market = np.ones(n) / n
+        market_proxy = "equal_weight"
 
     # Equilibrium returns: pi = risk_aversion * Sigma @ w_market
     pi = risk_aversion * Sigma @ w_market
@@ -140,7 +202,13 @@ def black_litterman(
     if not view_tickers:
         # No views — return equilibrium
         weights = {tickers[i]: round(float(w_market[i]), 4) for i in range(n)}
-        return {"weights": weights, "method": "equilibrium", "note": "No agent views available"}
+        return {
+            "weights": weights,
+            "method": "equilibrium",
+            "note": "No agent views available",
+            "market_proxy": market_proxy,
+            "ridge_regularization": ridge_info,
+        }
 
     k = len(view_tickers)
     P = np.zeros((k, n))  # Pick matrix
@@ -204,6 +272,8 @@ def black_litterman(
         "expected_vol_pct": _clean(round(port_vol * 100, 2)),
         "sharpe": _clean(round(port_ret / port_vol, 3)) if port_vol > 0 else None,
         "posterior_returns": {tickers[i]: _clean(round(float(mu_bl[i]) * 100, 2)) for i in range(n)},
+        "market_proxy": market_proxy,
+        "ridge_regularization": ridge_info,
         "method": "black_litterman",
     }
 

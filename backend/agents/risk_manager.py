@@ -93,10 +93,11 @@ def get_realized_correlation(tickers: str, period: str = "3mo") -> dict:
 @tool
 def get_factor_loadings(ticker: str, period: str = "6mo") -> dict:
     """
-    Compute factor exposures for a single ticker against FF5+Momentum
-    proxy ETFs. Returns market beta, size/value/profitability/investment/
-    momentum betas, alpha, alpha p-value, and a `style_flag` summarizing
-    the strongest factor exposure.
+    Compute factor exposures for a single ticker against FF5-style + Low-Vol
+    + Momentum proxy ETFs. Returns market beta, size/value/profitability/
+    low_vol/momentum betas, alpha, alpha p-value, plus a `style_flag`
+    summarizing the strongest factor exposure. (USMV-based low_vol stands
+    in for the FF CMA "investment" factor — see quant.factors.)
 
     Use this to back up "this is a high-beta tech name" claims with actual
     regression numbers.

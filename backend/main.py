@@ -893,10 +893,13 @@ async def factor_analysis(tickers: str = "SPY", model: str = "single"):
 
     `model` selects:
       "single"   — CAPM single-factor (market). Fast.
-      "ff5_mom"  — FF5+Momentum, computed from ETF proxies (SPY, IWM, IWD/IWF,
-                   QUAL, USMV, MTUM). Slower (1 extra ETF data fetch) but
-                   surfaces size/value/profitability/investment/momentum exposure.
-                   Returns alpha p-value with `alpha_significant_at_5pct` flag.
+      "ff5_mom"  — FF5-style + Low-Vol + Momentum, computed from ETF proxies
+                   (SPY, IWM, IWD/IWF, QUAL, USMV, MTUM). Slower (extra ETF
+                   data fetches) but surfaces size/value/profitability/
+                   low_vol/momentum exposure. USMV-based low_vol stands in
+                   for the FF CMA "investment" factor (no public CMA proxy).
+                   Returns alpha p-value with `alpha_significant_at_5pct`
+                   plus VIF diagnostics and a `multicollinearity_flag`.
     """
     from quant.factors import (
         compute_factor_loadings,

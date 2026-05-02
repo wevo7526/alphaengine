@@ -7,12 +7,70 @@ implied move computation. All computed from live options chain data.
 
 import numpy as np
 import math
+from datetime import datetime, date
 from scipy.stats import norm
 import logging
 
 from data.market_client import MarketDataClient
 
 logger = logging.getLogger(__name__)
+
+
+def _years_to_expiry(expiration: str | None) -> float:
+    """
+    Convert an expiration string (YYYY-MM-DD or similar) to years to expiry.
+    Falls back to 30/365 only when the date is missing/unparseable so call
+    sites still degrade gracefully rather than crashing on weekend data.
+    """
+    if not expiration or expiration == "unknown":
+        return 30.0 / 365.0
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y"):
+        try:
+            exp_dt = datetime.strptime(expiration, fmt).date()
+            break
+        except ValueError:
+            exp_dt = None
+    if exp_dt is None:
+        return 30.0 / 365.0
+    days = (exp_dt - date.today()).days
+    # Clamp positive: same-day or expired chains use 1 day floor so BSM math
+    # doesn't divide by zero. Caps at 5y for sanity.
+    days = max(1, min(int(days), 365 * 5))
+    return days / 365.0
+
+
+def _compute_max_pain(calls: list[dict], puts: list[dict]) -> float | None:
+    """
+    True max-pain: the strike S* at expiry that minimizes total intrinsic
+    value paid out by option writers (= maximum pain to option holders).
+
+        total_payout(S*) = sum_K [ (S* - K)+ * call_OI(K) + (K - S*)+ * put_OI(K) ]
+
+    Previous implementation returned argmax(total_OI) which is "OI peak,"
+    not max-pain. Real desks use this to anticipate pinning behavior into
+    expiry — pinning toward the max-pain strike is a market-maker hedging
+    artifact, not OI concentration.
+    """
+    strikes = sorted({c.get("strike") for c in calls if c.get("strike") is not None}
+                     | {p.get("strike") for p in puts if p.get("strike") is not None})
+    if not strikes:
+        return None
+    call_oi = {c.get("strike"): (c.get("openInterest", 0) or 0) for c in calls}
+    put_oi = {p.get("strike"): (p.get("openInterest", 0) or 0) for p in puts}
+
+    best_strike = strikes[0]
+    best_payout = float("inf")
+    for s_star in strikes:
+        payout = 0.0
+        for k in strikes:
+            if s_star > k:
+                payout += (s_star - k) * call_oi.get(k, 0)
+            elif k > s_star:
+                payout += (k - s_star) * put_oi.get(k, 0)
+        if payout < best_payout:
+            best_payout = payout
+            best_strike = s_star
+    return float(best_strike)
 
 
 def _clean(val):
@@ -125,9 +183,10 @@ def analyze_options(ticker: str) -> dict:
     # ATM IV
     atm_iv = atm_call.get("impliedVolatility", 0) if atm_call else 0
 
-    # Greeks for ATM call
-    T = 30 / 365  # Approximate days to expiry
-    r = 0.0364  # Fed funds rate approximation
+    # Greeks for ATM call — T from actual expiration date, r from FRED 3M yield.
+    T = _years_to_expiry(expiration)
+    from quant.performance import _resolve_rfr
+    r = _resolve_rfr(None)
     greeks = calculate_greeks(current_price, atm_strike, T, r, atm_iv, "call") if atm_iv > 0 else {}
 
     # Unusual activity detection (volume/OI > 2x)
@@ -149,15 +208,18 @@ def analyze_options(ticker: str) -> dict:
                     })
     unusual.sort(key=lambda x: x["vol_oi_ratio"], reverse=True)
 
-    # Max pain (strike with highest total OI)
-    oi_by_strike = {}
+    # Max pain — strike that minimizes option-writer payout at expiry.
+    # Also compute the OI-peak strike as a separate field so the old
+    # "OI concentration" view is still available without mislabeling.
+    max_pain_strike = _compute_max_pain(calls, puts) or atm_strike
+    oi_by_strike: dict[float, float] = {}
     for c in calls:
         s = c.get("strike", 0)
         oi_by_strike[s] = oi_by_strike.get(s, 0) + (c.get("openInterest", 0) or 0)
     for p in puts:
         s = p.get("strike", 0)
         oi_by_strike[s] = oi_by_strike.get(s, 0) + (p.get("openInterest", 0) or 0)
-    max_pain_strike = max(oi_by_strike, key=oi_by_strike.get) if oi_by_strike else atm_strike
+    oi_peak_strike = max(oi_by_strike, key=oi_by_strike.get) if oi_by_strike else atm_strike
 
     # IV skew: put IV vs call IV at ATM
     call_iv = atm_call.get("impliedVolatility", 0) if atm_call else 0
@@ -222,6 +284,11 @@ def analyze_options(ticker: str) -> dict:
         "atm_iv": round(atm_iv * 100, 1),
         "iv_skew": iv_skew,
         "max_pain": max_pain_strike,
+        "oi_peak_strike": oi_peak_strike,
+        "greeks_inputs": {
+            "years_to_expiry": round(T, 4),
+            "risk_free_rate": round(r, 4),
+        },
         "greeks": greeks,
         "unusual_activity": unusual[:5],
         "total_call_volume": total_call_vol,

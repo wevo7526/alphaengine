@@ -140,14 +140,28 @@ def run_rules_based_backtest(
                 continue
             execution_price = history[i]["close"]  # fill at today's close
 
-            # RSI (14-period) on yesterday's close history
-            deltas = np.diff(closes_prior[-15:])
-            gains = np.where(deltas > 0, deltas, 0)
-            losses = np.where(deltas < 0, -deltas, 0)
-            avg_gain = np.mean(gains)
-            avg_loss = np.mean(losses)
-            rs = avg_gain / avg_loss if avg_loss > 0 else 100
-            rsi = 100 - (100 / (1 + rs))
+            # Wilder's RSI (14-period). Uses exponential smoothing with
+            # alpha = 1/period — the canonical definition published in
+            # "New Concepts in Technical Trading Systems" (1978) and the
+            # version every charting platform reports. The previous
+            # Cutler-style simple mean overweights the most recent 14 bars
+            # equally, producing more whipsaws and a different signal than
+            # what a trader would actually see on TradingView/ThinkorSwim.
+            period = 14
+            deltas = np.diff(closes_prior)
+            if len(deltas) < period:
+                continue
+            gains = np.where(deltas > 0, deltas, 0.0)
+            losses = np.where(deltas < 0, -deltas, 0.0)
+            # Seed: simple mean over the first `period` deltas
+            avg_gain = float(np.mean(gains[:period]))
+            avg_loss = float(np.mean(losses[:period]))
+            # Smooth: avg = (prev_avg * (period - 1) + current) / period
+            for j in range(period, len(deltas)):
+                avg_gain = (avg_gain * (period - 1) + gains[j]) / period
+                avg_loss = (avg_loss * (period - 1) + losses[j]) / period
+            rs = avg_gain / avg_loss if avg_loss > 0 else 100.0
+            rsi = 100.0 - (100.0 / (1.0 + rs))
 
             # SMA(50) on yesterday's history
             ma50 = float(np.mean(closes_prior[-50:])) if len(closes_prior) >= 50 else float(closes_prior[-1])

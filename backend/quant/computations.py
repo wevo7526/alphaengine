@@ -109,7 +109,12 @@ def compute_drawdown(ticker: str, period: str = "6mo") -> dict:
 
 def compute_volatility_metrics(ticker: str, period: str = "6mo") -> dict:
     """
-    Compute realized vol, Sharpe-like ratio, and basic risk stats.
+    Compute realized vol, Sharpe ratio, and basic risk stats.
+
+    Sharpe is the proper (excess-return / vol) calculation — RFR pulled from
+    the FRED 3-month yield via quant.performance._resolve_rfr. Previously
+    this divided raw mean return by vol and called it Sharpe, which inflates
+    the number by ~rfr/vol whenever rates are non-zero.
     """
     history = _market.get_price_history(ticker, period=period)
     if not history or len(history) < 10:
@@ -121,7 +126,13 @@ def compute_volatility_metrics(ticker: str, period: str = "6mo") -> dict:
     arr = np.array(daily_returns)
     realized_vol = float(np.std(arr) * np.sqrt(252) * 100)
     mean_return = float(np.mean(arr) * 252 * 100)
-    sharpe = mean_return / realized_vol if realized_vol > 0 else 0
+
+    # Sharpe with proper risk-free rate (annualized excess return / annualized vol).
+    from quant.performance import _resolve_rfr
+    rfr = _resolve_rfr(None)
+    excess_ann_pct = mean_return - rfr * 100
+    sharpe = excess_ann_pct / realized_vol if realized_vol > 0 else 0
+
     skew = float(((arr - arr.mean()) ** 3).mean() / (arr.std() ** 3)) if arr.std() > 0 else 0
     max_daily_loss = float(arr.min() * 100)
     max_daily_gain = float(arr.max() * 100)
@@ -134,6 +145,7 @@ def compute_volatility_metrics(ticker: str, period: str = "6mo") -> dict:
         "realized_vol_annualized": round(realized_vol, 2),
         "annualized_return": round(mean_return, 2),
         "sharpe_ratio": round(sharpe, 2),
+        "risk_free_rate": round(rfr, 4),
         "skewness": round(skew, 2),
         "var_95_daily": round(var_95, 2),
         "max_daily_loss": round(max_daily_loss, 2),

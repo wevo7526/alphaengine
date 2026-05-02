@@ -6,6 +6,7 @@ to classify the market into probabilistic regime states.
 Pure math — zero LLM calls, reproducible, auditable.
 """
 
+import math
 import numpy as np
 import logging
 import time
@@ -46,6 +47,7 @@ _fitted_model = None
 _fitted_scaler = None
 _fitted_labels: dict = dict(_DEFAULT_REGIME_LABELS)
 _fit_timestamp = 0
+_fit_diagnostics: dict = {}  # converged, iterations, log_likelihood
 _FIT_TTL = 86400  # Refit daily
 
 # Hysteresis state — last classified regime + how many days we've been in it.
@@ -62,23 +64,76 @@ _MIN_REGIME_DAYS = 5
 _REGIME_FLIP_MARGIN = 0.10  # new regime prob must exceed current by 10pp
 
 
+# Rule-based regime thresholds. Pulled to module-level so the satisfaction
+# scoring uses the same anchors as the discrete classification.
+_RB_VIX_RISK_ON = 18.0
+_RB_VIX_RISK_OFF = 28.0
+_RB_CREDIT_RISK_ON = 3.5
+_RB_CREDIT_RISK_OFF = 5.0
+_RB_YC_RISK_ON = 0.0       # positive curve = expansion
+_RB_YC_RISK_OFF = -0.2     # inverted curve = recession signal
+
+
+def _logistic(x: float) -> float:
+    """Numerically-safe sigmoid (avoids overflow on large negative x)."""
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    ex = math.exp(x)
+    return ex / (1.0 + ex)
+
+
 def _rule_based_regime(vix: float, credit_spread: float, yield_curve: float) -> dict:
-    """Simple rule-based fallback when HMM isn't available."""
-    if vix < 18 and credit_spread < 3.5 and yield_curve > 0:
+    """
+    Rule-based fallback regime classifier.
+
+    Probabilities are derived from how strongly the inputs satisfy each
+    regime's threshold pattern, not stipulated as fixed (0.75/0.10/0.15)
+    constants. Each indicator contributes a sigmoid satisfaction score —
+    when the value sits exactly on the threshold the score is 0.5; when
+    well past it, the score saturates near 1.0. Average across indicators
+    gives the per-regime score; a residual transition score absorbs
+    ambiguity, then everything is normalized to a probability simplex.
+
+    The discrete "current_regime" still uses the original hard rules so
+    behavior is unchanged at the boundary; only the probability vector is
+    now data-driven.
+    """
+    # Satisfaction scores in [0, 1] for each regime
+    on_vix = _logistic((_RB_VIX_RISK_ON - vix) / 4.0)
+    on_credit = _logistic((_RB_CREDIT_RISK_ON - credit_spread) / 0.5)
+    on_yc = _logistic((yield_curve - _RB_YC_RISK_ON) / 0.2)
+    risk_on_score = (on_vix + on_credit + on_yc) / 3.0
+
+    off_vix = _logistic((vix - _RB_VIX_RISK_OFF) / 4.0)
+    off_credit = _logistic((credit_spread - _RB_CREDIT_RISK_OFF) / 0.5)
+    off_yc = _logistic((_RB_YC_RISK_OFF - yield_curve) / 0.2)
+    risk_off_score = (off_vix + off_credit + off_yc) / 3.0
+
+    # Transition is the residual ambiguity: when neither extreme is well-met,
+    # we're in transition. Floor at 0.05 so a clear regime never gives 0.
+    transition_score = max(0.05, 1.0 - max(risk_on_score, risk_off_score))
+
+    total = risk_on_score + risk_off_score + transition_score
+    probs = {
+        "risk_on": round(risk_on_score / total, 3),
+        "risk_off": round(risk_off_score / total, 3),
+        "transition": round(transition_score / total, 3),
+    }
+
+    # Discrete classification keeps the original boolean rules so hysteresis
+    # and downstream logic see the same regime labels they always did.
+    if vix < _RB_VIX_RISK_ON and credit_spread < _RB_CREDIT_RISK_ON and yield_curve > _RB_YC_RISK_ON:
         regime = "risk_on"
-        probs = {"risk_on": 0.75, "risk_off": 0.10, "transition": 0.15}
-    elif vix > 28 or credit_spread > 5 or yield_curve < -0.2:
+    elif vix > _RB_VIX_RISK_OFF or credit_spread > _RB_CREDIT_RISK_OFF or yield_curve < _RB_YC_RISK_OFF:
         regime = "risk_off"
-        probs = {"risk_on": 0.10, "risk_off": 0.75, "transition": 0.15}
     else:
         regime = "transition"
-        probs = {"risk_on": 0.30, "risk_off": 0.30, "transition": 0.40}
 
     return {
         "current_regime": regime,
         "probabilities": probs,
         "method": "rule_based",
-        "confidence": max(probs.values()),
+        "confidence": float(probs[regime]),
     }
 
 
@@ -88,7 +143,7 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
     macro_history = [{date, vix, credit_spread, yield_curve}, ...]
     Returns True if fitting succeeded.
     """
-    global _fitted_model, _fitted_scaler, _fitted_labels, _fit_timestamp
+    global _fitted_model, _fitted_scaler, _fitted_labels, _fit_timestamp, _fit_diagnostics
 
     _ensure_ml_imports()
     if not HMM_AVAILABLE:
@@ -119,6 +174,23 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
         )
         model.fit(X)
 
+        # Convergence diagnostic — hmmlearn exposes the EM monitor on the
+        # fitted model. Surface this so the caller can downgrade to rule-based
+        # or trigger an alert if a fit converged poorly.
+        try:
+            converged = bool(getattr(model.monitor_, "converged", False))
+            iterations = int(getattr(model.monitor_, "iter", 0))
+            log_likelihood = float(model.score(X))
+        except Exception:
+            converged = False
+            iterations = 0
+            log_likelihood = float("nan")
+        if not converged:
+            logger.warning(
+                f"HMM did not converge after {iterations} iterations — "
+                "regime classifications will fall back to rule-based"
+            )
+
         # Label regimes by VIX mean: lowest VIX = risk_on, highest = risk_off
         means = model.means_
         vix_means = means[:, 0]  # First feature is VIX (scaled)
@@ -132,13 +204,24 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
 
         # Atomic swap under lock — concurrent readers see either the old
         # complete state or the new complete state, never a half-mutated mix.
+        # If EM didn't converge we still cache the model (the rule-based
+        # fallback is only triggered when converged=False at predict time).
         with _state_lock:
-            _fitted_model = model
-            _fitted_scaler = scaler
-            _fitted_labels = new_labels
-            _fit_timestamp = time.time()
-        logger.info("HMM regime model fitted successfully")
-        return True
+            if converged:
+                _fitted_model = model
+                _fitted_scaler = scaler
+                _fitted_labels = new_labels
+                _fit_timestamp = time.time()
+            _fit_diagnostics = {
+                "converged": converged,
+                "iterations": iterations,
+                "log_likelihood": log_likelihood if math.isfinite(log_likelihood) else None,
+                "n_observations": int(len(features)),
+                "fit_at": time.time(),
+            }
+        if converged:
+            logger.info(f"HMM regime model fitted (iter={iterations}, ll={log_likelihood:.2f})")
+        return bool(converged)
     except Exception as e:
         logger.error(f"HMM fitting failed: {e}")
         return False
@@ -322,6 +405,12 @@ def get_regime_history(macro_history: list[dict]) -> list[dict]:
     except Exception as e:
         logger.error(f"Regime history failed: {e}")
         return []
+
+
+def get_fit_diagnostics() -> dict:
+    """Return the HMM fit diagnostics — converged flag, iterations, LL."""
+    with _state_lock:
+        return dict(_fit_diagnostics)
 
 
 def regime_size_multiplier(regime: str | None, confidence: float | None = None) -> dict:

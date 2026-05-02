@@ -155,8 +155,9 @@ def compute_portfolio_var(
     port_var_quad = float(w @ cov @ w)
     port_vol_annual = np.sqrt(port_var_quad) if port_var_quad > 0 else 0.0
 
-    z_scores = {0.95: 1.645, 0.99: 2.326}
-    z = z_scores.get(confidence, 1.645)
+    # Inverse-normal z so non-{0.95, 0.99} confidences (e.g., 0.999) compute
+    # correctly instead of silently falling back to 1.645.
+    z = _limits.z_for_confidence(confidence)
 
     # 1. Parametric Gaussian VaR
     daily_var_pct = z * port_vol_annual / np.sqrt(252) * np.sqrt(horizon_days)
@@ -307,10 +308,12 @@ def assess_liquidity(
          position represent? <0.1 days is fine, 0.1-1 day is sized,
          >1 day is illiquid for our universe (a quant desk would call this
          a "big" position).
-      2. Days-to-liquidate: at 25% participation, how many days to exit?
-         (proposed_position_shares / (0.25 * ADV_shares))
+      2. Days-to-liquidate: at LIQUIDITY_PARTICIPATION_RATE participation
+         (default 25%, configurable via env), how many days to exit?
+         (proposed_position_shares / (rate * ADV_shares))
       3. Bid-ask spread cost: half-spread in basis points as estimated
-         round-trip slippage on entry+exit.
+         round-trip slippage on entry+exit. Wide spreads (above
+         LIQUIDITY_SPREAD_WARN_BPS) trigger a warn.
 
     Returns recommendation: "ok" / "warn" / "block" with reasons. The gate
     can hard-block on any participation > block_pct_of_adv.
@@ -319,6 +322,8 @@ def assess_liquidity(
         max_pct_of_adv = _limits.LIQUIDITY_MAX_PCT_OF_ADV
     if block_pct_of_adv is None:
         block_pct_of_adv = _limits.LIQUIDITY_BLOCK_PCT_OF_ADV
+    participation_rate = _limits.LIQUIDITY_PARTICIPATION_RATE
+    spread_warn_bps = _limits.LIQUIDITY_SPREAD_WARN_BPS
 
     info: dict = {
         "proposed_notional": round(float(proposed_notional or 0), 2),
@@ -334,9 +339,9 @@ def assess_liquidity(
         adv_dollars = avg_daily_volume_shares * current_price
         if adv_dollars > 0:
             pct_adv = proposed_notional / adv_dollars
-        # Days to liquidate at 25% participation
+        # Days to liquidate at the configured participation rate
         if avg_daily_volume_shares > 0:
-            days_to_liquidate = position_shares / (0.25 * avg_daily_volume_shares)
+            days_to_liquidate = position_shares / (participation_rate * avg_daily_volume_shares)
         info["pct_of_adv"] = round(float(pct_adv), 4) if pct_adv is not None else None
         info["days_to_liquidate"] = round(float(days_to_liquidate), 2) if days_to_liquidate is not None else None
         info["adv_dollars"] = round(float(adv_dollars), 2)
@@ -365,10 +370,10 @@ def assess_liquidity(
                 f"Position is {pct_adv*100:.1f}% of ADV (>{max_pct_of_adv*100:.0f}%) — "
                 f"sizeable for this name"
             )
-    if spread_bps is not None and spread_bps > 50:
+    if spread_bps is not None and spread_bps > spread_warn_bps:
         if recommendation == "ok":
             recommendation = "warn"
-        reasons.append(f"Wide bid-ask: {spread_bps:.0f}bp")
+        reasons.append(f"Wide bid-ask: {spread_bps:.0f}bp (>{spread_warn_bps:.0f}bp)")
 
     info["recommendation"] = recommendation
     info["reasons"] = reasons
@@ -447,8 +452,7 @@ def compute_marginal_var(
     cov = np.array(matrix)
     cov = np.nan_to_num(cov.astype(float), nan=0.0)
 
-    z_scores = {0.95: 1.645, 0.99: 2.326}
-    z = z_scores.get(confidence, 1.645)
+    z = _limits.z_for_confidence(confidence)
 
     # VaR before — existing book as-is
     w_before = np.array([current_weights.get(t, 0) for t in tickers])

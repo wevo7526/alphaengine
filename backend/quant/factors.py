@@ -49,17 +49,24 @@ def _numpy_ols(y: np.ndarray, X: np.ndarray) -> dict:
 
 def build_proxy_factor_returns(period: str = "1y") -> dict[str, list[float]] | None:
     """
-    Construct FF5 + Momentum factor return proxies from liquid ETF returns. Closes
+    Construct multi-factor return proxies from liquid ETF returns. Closes
     the gap from "code exists, no data source" to "live multi-factor model"
     without depending on the Kenneth French data library.
 
     Factor proxies (long-short or single-leg where the long leg dominates):
-        market = SPY excess return
-        size   = IWM - SPY               (small minus big)
-        value  = IWD - IWF               (Russell value minus Russell growth)
+        market        = SPY excess return
+        size          = IWM - SPY        (small minus big)
+        value         = IWD - IWF        (Russell value minus Russell growth)
         profitability = QUAL - SPY       (MSCI Quality factor minus market)
-        investment    = USMV - SPY       (low-vol minus market — proxy for CMA)
+        low_vol       = USMV - SPY       (low-vol minus market)
         momentum      = MTUM - SPY       (MSCI Momentum minus market)
+
+    Note on naming: this used to label USMV-SPY as "investment" (the
+    Fama-French CMA factor). USMV is a low-volatility ETF, which is a
+    distinct factor from CMA (conservative-minus-aggressive investment).
+    Calling it CMA misrepresented the regression: keeping the same proxy
+    but the honest name. A true CMA proxy would require Compustat/CapEx
+    data not available from public ETFs.
 
     Returns None when not enough data — caller falls back to single-factor.
     """
@@ -98,7 +105,7 @@ def build_proxy_factor_returns(period: str = "1y") -> dict[str, list[float]] | N
     if "QUAL" in series:
         factors["profitability"] = list(np.array(series["QUAL"][-n:]) - spy)
     if "USMV" in series:
-        factors["investment"] = list(np.array(series["USMV"][-n:]) - spy)
+        factors["low_vol"] = list(np.array(series["USMV"][-n:]) - spy)
     if "MTUM" in series:
         factors["momentum"] = list(np.array(series["MTUM"][-n:]) - spy)
     return factors
@@ -172,6 +179,38 @@ def compute_factor_loadings(
     }
 
 
+def _compute_vif(X: np.ndarray, factor_names: list[str]) -> dict[str, float]:
+    """
+    Variance inflation factor for each column of X. VIF_j = 1 / (1 - R_j^2)
+    where R_j^2 is the R-squared from regressing factor j on all other factors.
+
+    VIF > 10 (rule of thumb) signals multicollinearity. Several of our
+    proxies are constructed as `X - SPY`, so they can share variance with
+    "market"; surfacing VIF lets the consumer judge whether the loadings
+    are individually identified.
+    """
+    n_features = X.shape[1]
+    vifs: dict[str, float] = {}
+    for j in range(n_features):
+        y_j = X[:, j]
+        X_others = np.delete(X, j, axis=1)
+        if X_others.shape[1] == 0:
+            vifs[factor_names[j]] = 1.0
+            continue
+        try:
+            X_const = np.column_stack([np.ones(len(y_j)), X_others])
+            betas, *_ = np.linalg.lstsq(X_const, y_j, rcond=None)
+            y_hat = X_const @ betas
+            ss_res = float(np.sum((y_j - y_hat) ** 2))
+            ss_tot = float(np.sum((y_j - y_j.mean()) ** 2))
+            r_sq = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+            vif = 1.0 / max(1e-9, 1.0 - r_sq) if r_sq < 0.9999 else float("inf")
+            vifs[factor_names[j]] = vif if math.isfinite(vif) else float("inf")
+        except Exception:
+            vifs[factor_names[j]] = float("nan")
+    return vifs
+
+
 def compute_multi_factor_loadings(
     portfolio_returns: list[float],
     factor_returns: dict[str, list[float]],
@@ -196,6 +235,14 @@ def compute_multi_factor_loadings(
 
     X = np.column_stack([np.array(factor_returns[f][-min_len:]) for f in factor_names])
 
+    # Multicollinearity diagnostic — flag factors with VIF above threshold.
+    from quant import limits as _limits
+    vifs: dict[str, float] = {}
+    high_vif: list[str] = []
+    if X.shape[1] >= 2:
+        vifs = _compute_vif(X, factor_names)
+        high_vif = [f for f, v in vifs.items() if math.isfinite(v) and v > _limits.VIF_MAX_THRESHOLD]
+
     if STATSMODELS_AVAILABLE:
         X_const = sm.add_constant(X)
         model = sm.OLS(y_excess, X_const).fit(cov_type="HAC", cov_kwds={"maxlags": 5})
@@ -218,7 +265,10 @@ def compute_multi_factor_loadings(
             "adj_r_squared": _clean(round(float(model.rsquared_adj), 3)),
             "residual_vol": _clean(round(float(np.std(model.resid) * np.sqrt(252) * 100), 2)),
             "n_observations": int(min_len),
-            "model": "FF5 + Momentum" if len(factor_names) >= 5 else f"{len(factor_names)}-factor",
+            "model": _model_label(factor_names),
+            "vifs": {k: _clean(round(v, 2)) if math.isfinite(v) else None for k, v in vifs.items()},
+            "high_vif_factors": high_vif,
+            "multicollinearity_flag": bool(high_vif),
         }
     else:
         result = _numpy_ols(y_excess, X)
@@ -230,7 +280,25 @@ def compute_multi_factor_loadings(
             "alpha": _clean(round(float(result["betas"][0] * 252 * 100), 2)),
             "factor_betas": betas,
             "r_squared": _clean(round(float(result["r_squared"]), 3)),
+            "model": _model_label(factor_names),
+            "vifs": {k: _clean(round(v, 2)) if math.isfinite(v) else None for k, v in vifs.items()},
+            "high_vif_factors": high_vif,
+            "multicollinearity_flag": bool(high_vif),
         }
+
+
+def _model_label(factor_names: list[str]) -> str:
+    """
+    Honest label for the regression — names what's in the model rather than
+    branding it "FF5 + Momentum" when one of the legs is a low-vol proxy
+    standing in for the (unavailable) CMA factor.
+    """
+    core_set = set(factor_names)
+    if {"market", "size", "value", "profitability", "low_vol", "momentum"}.issubset(core_set):
+        return "FF5-style + Low-Vol + Momentum"
+    if {"market", "size", "value", "momentum"}.issubset(core_set):
+        return "Carhart 4-factor"
+    return f"{len(factor_names)}-factor"
 
 
 def performance_attribution(
