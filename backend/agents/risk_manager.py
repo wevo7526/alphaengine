@@ -184,6 +184,37 @@ def get_market_breadth() -> dict:
     }
 
 
+@tool
+def get_upcoming_macro_events(lookforward_days: int = 30, region: str = "") -> dict:
+    """
+    Upcoming scheduled macro events from the curated calendar (FOMC, CPI, NFP,
+    ECB, OPEC). Returns events within `lookforward_days` of today, sorted
+    ascending. Use this BEFORE finalizing time-horizon judgements: an FOMC or
+    CPI print within a position's holding window is a material risk that
+    standard vol modeling won't capture.
+
+    `region`: optional filter ("US", "EU", "OPEC"). Empty = all regions.
+
+    Returns {events: [...], n_events, coverage_end_date, lookforward_days}.
+    If `coverage_end_date` is in the past, the seed calendar is stale and
+    needs refresh — flag this in your risk_factors output.
+    """
+    from data.events import get_upcoming_events, coverage_end_date
+    region_filter = region.strip().upper() or None
+    events = get_upcoming_events(
+        lookforward_days=lookforward_days,
+        region=region_filter,
+    )
+    cov_end = coverage_end_date()
+    return {
+        "events": list(events),
+        "n_events": len(events),
+        "coverage_end_date": cov_end.isoformat() if cov_end else None,
+        "lookforward_days": lookforward_days,
+        "region_filter": region_filter,
+    }
+
+
 SYSTEM_PROMPT = """You are the Chief Risk Officer at a quantitative hedge fund. You evaluate
 all research through a risk lens before any capital is deployed.
 
@@ -194,10 +225,17 @@ not narrative:
   - get_factor_loadings(ticker)        — FF5+Momentum betas with t-stats.
   - get_market_breadth()                — % sectors and mega-caps above 50DMA.
   - get_macro_snapshot() / get_vix_history(days)
+  - get_upcoming_macro_events(lookforward_days, region) — scheduled FOMC,
+    CPI, NFP, ECB, OPEC events within the plan's time horizon.
 
 Call get_realized_correlation FIRST when there are 2+ tickers in the analysis.
 Call get_market_breadth ONCE per analysis as part of the macro read. Call
 get_factor_loadings on tickers whose style/factor positioning is non-obvious.
+Call get_upcoming_macro_events with lookforward_days matched to the plan's
+time horizon ("days"=5, "weeks"=21, "months"=60). If a Tier-1 event (FOMC,
+CPI, NFP, OPEC) falls inside any position's holding window, FLAG IT as a
+material event risk in risk_factors — standard vol models don't capture
+scheduled-event jumps and Risk owes the PM that flag.
 
 Given the analysis plan and gathered research data, assess:
 
@@ -266,9 +304,9 @@ class RiskManager(BaseAgent):
     agent_name = "risk_manager"
     system_prompt = SYSTEM_PROMPT
     output_instructions = OUTPUT_INSTRUCTIONS
-    # Hard cap. With 5 tools available a runaway agent would otherwise burn
-    # the 90s budget. 5 iterations = up to 4 tool calls + final synthesis.
-    max_iterations = 5
+    # Hard cap. With 6 tools available a runaway agent would otherwise burn
+    # the 90s budget. 6 iterations = up to 5 tool calls + final synthesis.
+    max_iterations = 6
 
     def get_tools(self):
         return [
@@ -277,6 +315,7 @@ class RiskManager(BaseAgent):
             get_realized_correlation,
             get_factor_loadings,
             get_market_breadth,
+            get_upcoming_macro_events,
         ]
 
     def build_input_prompt(self, context: dict) -> str:

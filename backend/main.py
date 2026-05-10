@@ -478,6 +478,39 @@ async def news_feed(ticker: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/data/events")
+async def upcoming_events(
+    lookforward_days: int = 30,
+    event_types: str = "",
+    region: str = "",
+):
+    """
+    Upcoming scheduled macro events from the curated calendar (FOMC, CPI,
+    NFP, ECB, OPEC). Filters: comma-separated `event_types` and single `region`.
+
+    Returns {events, n_events, coverage_end_date, lookforward_days, stale}.
+    `stale=True` when coverage_end_date is before today (seed needs refresh).
+    """
+    from data.events import get_upcoming_events, coverage_end_date
+    types_list = [t.strip().upper() for t in event_types.split(",") if t.strip()] or None
+    region_filter = region.strip().upper() or None
+    events = get_upcoming_events(
+        lookforward_days=lookforward_days,
+        event_types=types_list,
+        region=region_filter,
+    )
+    cov_end = coverage_end_date()
+    today = datetime.now(timezone.utc).date()
+    return {
+        "events": events,
+        "n_events": len(events),
+        "coverage_end_date": cov_end.isoformat() if cov_end else None,
+        "stale": bool(cov_end and cov_end < today),
+        "lookforward_days": lookforward_days,
+        "filters": {"event_types": types_list, "region": region_filter},
+    }
+
+
 # === QUANT COMPUTATION ENDPOINTS ===
 
 @app.get("/api/quant/correlation")
@@ -716,6 +749,78 @@ async def stress_panel(req: Request):
         })
 
     return run_full_stress_panel(positions, portfolio_base=100000)
+
+
+@app.post("/api/quant/scenario/custom")
+async def custom_scenario(payload: dict, req: Request):
+    """
+    Run a custom cross-asset stress scenario on the authenticated user's
+    open book (or an ad-hoc position set). Per-position betas to rates /
+    credit / commodities / FX are fit at request time from 1y daily
+    history — no hardcoded sector tables on this path.
+
+    Body:
+        {
+            "shock": {
+                "rates_shock_bps":   <int|float, default 0>,
+                "credit_shock_bps":  <int|float, default 0>,
+                "oil_shock_pct":     <float, default 0>,
+                "gold_shock_pct":    <float, default 0>,
+                "fx_shock_pct":      <float, default 0>
+            },
+            "positions": [ ... ]  (optional; defaults to user's open book)
+        }
+    """
+    from db.models import TradeRecord
+    from quant.stress import custom_macro_scenario
+
+    user_id = require_user_id(req)
+    shock = payload.get("shock") or {}
+    positions = payload.get("positions") or []
+
+    if not positions:
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(TradeRecord).where(
+                        TradeRecord.status == "open",
+                        TradeRecord.user_id == user_id,
+                    )
+                )
+                trades = result.scalars().all()
+        except Exception as e:
+            logger.error(f"custom_scenario: failed to load trades: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+        if not trades:
+            raise HTTPException(status_code=400, detail="No open positions and no positions passed in body")
+        positions = [
+            {
+                "ticker": t.ticker,
+                "size_pct": float(t.position_size_pct or 0),
+                "direction": t.direction or "bullish",
+            }
+            for t in trades
+        ]
+
+    return custom_macro_scenario(positions, shock, portfolio_base=100000)
+
+
+@app.get("/api/quant/cross-asset-correlation")
+async def cross_asset_correlation(tickers: str = "", include_macro: bool = True, period: str = "6mo"):
+    """
+    Cross-asset correlation matrix: user-supplied equity tickers PLUS the
+    rates / credit / commodities / FX / vol ETF proxies. The macro PM's
+    view of how their book correlates with the rest of the tape.
+    """
+    from quant.computations import compute_cross_asset_correlation
+
+    eq_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    if not eq_list:
+        # Default to a small representative set
+        eq_list = ["SPY", "QQQ"]
+    return compute_cross_asset_correlation(
+        eq_list, include_macro=include_macro, period=period,
+    )
 
 
 # Helper for internal use

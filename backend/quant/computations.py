@@ -154,6 +154,116 @@ def compute_volatility_metrics(ticker: str, period: str = "6mo") -> dict:
     })
 
 
+CROSS_ASSET_UNIVERSE: dict[str, list[str]] = {
+    "rates": ["TLT", "IEF", "SHY", "TIP"],
+    "credit": ["LQD", "HYG", "JNK", "EMB"],
+    "commodities": ["GLD", "SLV", "USO", "UNG", "DBC"],
+    "fx": ["UUP", "FXE", "FXY"],
+    "vol": ["VXX"],
+}
+
+
+def get_cross_asset_tickers(categories: list[str] | None = None) -> list[str]:
+    """
+    Return the cross-asset proxy ticker list. By default returns all
+    categories; pass `categories=['rates','credit']` for a subset.
+    """
+    if categories is None:
+        cats = list(CROSS_ASSET_UNIVERSE.keys())
+    else:
+        cats = [c for c in categories if c in CROSS_ASSET_UNIVERSE]
+    out: list[str] = []
+    for c in cats:
+        out.extend(CROSS_ASSET_UNIVERSE[c])
+    return out
+
+
+def compute_cross_asset_correlation(
+    equity_tickers: list[str],
+    include_macro: bool = True,
+    period: str = "6mo",
+    macro_categories: list[str] | None = None,
+) -> dict:
+    """
+    Cross-asset correlation matrix: equity holdings + (optionally) the
+    rates / credit / commodity / FX / vol ETF proxies. Macro PMs read
+    this matrix to see how their equity book correlates with the rest
+    of the macro tape.
+
+    Returns:
+      {
+        tickers: [...],            # ordered list (equities first)
+        macro_tickers: [...],      # subset of `tickers` that are proxies
+        categories: {ticker: category_label},
+        matrix: [[...], ...],      # square correlation matrix
+        n_observations: int,
+      }
+    Empty result on insufficient data — never None.
+    """
+    tickers = [t.strip().upper() for t in equity_tickers if t and t.strip()]
+    macro_tickers: list[str] = []
+    categories_map: dict[str, str] = {t: "equity" for t in tickers}
+
+    if include_macro:
+        for cat, cat_tickers in CROSS_ASSET_UNIVERSE.items():
+            if macro_categories is not None and cat not in macro_categories:
+                continue
+            for t in cat_tickers:
+                if t not in tickers:  # avoid duplicates if user already has TLT
+                    tickers.append(t)
+                    macro_tickers.append(t)
+                    categories_map[t] = cat
+
+    if len(tickers) < 2:
+        return {"tickers": tickers, "matrix": [], "error": "Need 2+ tickers"}
+
+    prices: dict[str, list[float]] = {}
+    for t in tickers:
+        try:
+            history = _market.get_price_history(t, period=period)
+        except Exception as e:
+            logger.debug(f"cross-asset corr: price fetch {t} failed: {e}")
+            continue
+        if history and len(history) > 5:
+            prices[t] = [bar["close"] for bar in history if bar.get("close") is not None]
+
+    valid_tickers = [t for t in tickers if t in prices and len(prices[t]) > 5]
+    if len(valid_tickers) < 2:
+        return {
+            "tickers": valid_tickers,
+            "matrix": [],
+            "error": "Insufficient price data",
+        }
+
+    min_len = min(len(prices[t]) for t in valid_tickers)
+    returns: dict[str, list[float]] = {}
+    for t in valid_tickers:
+        p = prices[t][-min_len:]
+        returns[t] = [(p[i] - p[i - 1]) / p[i - 1] for i in range(1, len(p)) if p[i - 1] != 0]
+
+    n = len(valid_tickers)
+    matrix = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            ri = np.array(returns[valid_tickers[i]])
+            rj = np.array(returns[valid_tickers[j]])
+            min_pair = min(len(ri), len(rj))
+            if min_pair < 5 or np.std(ri[:min_pair]) == 0 or np.std(rj[:min_pair]) == 0:
+                matrix[i][j] = None  # type: ignore
+                continue
+            corr = float(np.corrcoef(ri[:min_pair], rj[:min_pair])[0, 1])
+            matrix[i][j] = round(corr, 3) if not math.isnan(corr) else None
+
+    return _clean_dict({
+        "tickers": valid_tickers,
+        "macro_tickers": [t for t in macro_tickers if t in valid_tickers],
+        "categories": {t: categories_map.get(t, "equity") for t in valid_tickers},
+        "matrix": matrix,
+        "n_observations": min_len - 1,
+        "period": period,
+    })
+
+
 def get_macro_time_series() -> dict:
     """
     Get time series data for macro charts: yield curve, VIX, credit spreads.

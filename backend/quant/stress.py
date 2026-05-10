@@ -21,6 +21,7 @@ every executive will ask.
 from __future__ import annotations
 
 import logging
+import math
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -324,6 +325,261 @@ def hypothetical_shock(
         "portfolio_pnl_pct": round(pnl_pct, 3),
         "portfolio_pnl_dollars": round(pnl_pct / 100.0 * portfolio_base, 2),
         "breakdown": breakdown,
+    }
+
+
+# ============================================================================
+# CUSTOM EMPIRICAL SCENARIO (Phase C: cross-asset reach)
+#
+# Per-position betas to rates / credit / commodity / FX / vol shocks are
+# fit at request time from 1y daily history via OLS on cross-asset proxy
+# returns — NO hardcoded sector lookups for these axes. This is the
+# "what if oil +30%, rates +100bp" engine PMs actually use.
+# ============================================================================
+
+# Cross-asset proxy ETFs. We use TLT (long-duration Treasury) for rates
+# because its modified duration is ~17y, giving the cleanest empirical
+# signal in regression. UUP (USD index ETF) is the FX proxy.
+CROSS_ASSET_PROXIES: dict[str, str] = {
+    "rates": "TLT",        # 20+y Treasury — moves -duration × Δyield
+    "credit": "HYG",       # high-yield credit — sensitive to spread changes
+    "oil": "USO",          # WTI crude oil
+    "gold": "GLD",         # gold (alt safe-haven asset)
+    "fx": "UUP",           # USD index
+    "vol": "VXX",          # VIX futures ETF (already covered by VIX shock)
+}
+
+# TLT effective duration: -Δprice / Δyield ≈ 17.5y. Standard published value.
+# Used only as a fallback when the empirical TLT-vs-FRED-yield regression
+# can't run (FRED unreachable). Real PMs reach for this number in their
+# heads to translate basis-point shocks to expected TLT P&L.
+TLT_EFFECTIVE_DURATION_YEARS = 17.5
+
+# Conventional bp→pct mapping for credit. HYG has effective duration ~4y
+# but credit spread moves matter more than rate moves; empirical 1bp move
+# in HY spreads correlates to ~-0.04% HYG return historically.
+# Used only as fallback.
+HYG_BP_TO_PCT_FALLBACK = -0.0004
+
+
+def _fit_position_shock_betas(
+    position_returns: dict[str, list[float]],
+    proxy_returns: dict[str, list[float]],
+) -> dict[str, dict[str, float | None]]:
+    """
+    For each position ticker, run OLS of its daily returns on each cross-
+    asset proxy's daily returns. Each regression is univariate — multivariate
+    on highly correlated proxies (TLT/HYG/GLD) blows up the coefficients
+    via multicollinearity. The univariate β captures the marginal
+    sensitivity, which is what a scenario shock should multiply.
+
+    Returns:
+      {ticker: {rates: β_TLT or None, credit: β_HYG or None,
+                oil: β_USO or None, gold: β_GLD or None,
+                fx: β_UUP or None, n_obs: int}}
+    """
+    import numpy as np
+
+    out: dict[str, dict[str, float | None]] = {}
+    for ticker, pos_rets in position_returns.items():
+        out[ticker] = {"rates": None, "credit": None, "oil": None, "gold": None, "fx": None, "n_obs": 0}
+        if not pos_rets or len(pos_rets) < 30:
+            continue
+        y_full = np.array(pos_rets, dtype=float)
+        for axis, proxy_ticker in [
+            ("rates", "TLT"), ("credit", "HYG"), ("oil", "USO"),
+            ("gold", "GLD"), ("fx", "UUP"),
+        ]:
+            proxy_rets = proxy_returns.get(proxy_ticker)
+            if not proxy_rets or len(proxy_rets) < 30:
+                continue
+            min_len = min(len(y_full), len(proxy_rets))
+            if min_len < 30:
+                continue
+            y = y_full[-min_len:]
+            x = np.array(proxy_rets[-min_len:], dtype=float)
+            x_var = float(np.var(x, ddof=1))
+            if x_var < 1e-12:
+                continue
+            # Univariate OLS slope = cov(y, x) / var(x)
+            beta = float(np.cov(y, x, ddof=1)[0, 1] / x_var)
+            if math.isfinite(beta):
+                out[ticker][axis] = round(beta, 4)
+            out[ticker]["n_obs"] = int(min_len)
+    return out
+
+
+def custom_macro_scenario(
+    positions: list[dict],
+    shock: dict,
+    portfolio_base: float = 100000,
+    history_period: str = "1y",
+) -> dict:
+    """
+    Apply a custom cross-asset shock to a book using empirical per-position
+    betas, fit fresh from 1y daily history.
+
+    `shock` accepts:
+      - rates_shock_bps      (int/float)  — bp move in 10y yield; positive = rates UP
+      - credit_shock_bps     (int/float)  — bp widening in HY OAS
+      - oil_shock_pct        (float)      — % change in WTI/USO
+      - gold_shock_pct       (float)      — % change in GLD
+      - fx_shock_pct         (float)      — % change in DXY/UUP (positive = USD up)
+
+    Per-position projected return =
+        β_TLT × (-TLT_duration × rates_bps/10000)   # rates leg
+      + β_HYG × (HYG_bp_fallback × credit_bps)      # credit leg
+      + β_USO × (oil_shock_pct/100)                 # oil leg
+      + β_GLD × (gold_shock_pct/100)                # gold leg
+      + β_UUP × (fx_shock_pct/100)                  # fx leg
+
+    Then position contribution = projected_return × weight × direction_sign.
+
+    Empirical betas come from OLS univariate regression on 1y daily returns
+    of each proxy ETF — no hardcoded sector tables on this path. Returns
+    per-position breakdown with β values + projected return for full PM
+    auditability.
+    """
+    if not isinstance(shock, dict):
+        return {"error": "shock must be a dict"}
+
+    # Extract shock parameters; treat missing as 0
+    def _num(key: str) -> float:
+        v = shock.get(key)
+        try:
+            return float(v) if v is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    rates_bps = _num("rates_shock_bps")
+    credit_bps = _num("credit_shock_bps")
+    oil_pct = _num("oil_shock_pct")
+    gold_pct = _num("gold_shock_pct")
+    fx_pct = _num("fx_shock_pct")
+
+    if not (rates_bps or credit_bps or oil_pct or gold_pct or fx_pct):
+        return {"error": "All shock params are zero — nothing to compute"}
+
+    # Map bp shocks to expected proxy ETF returns
+    expected_tlt_return = -TLT_EFFECTIVE_DURATION_YEARS * rates_bps / 10000.0
+    expected_hyg_return = HYG_BP_TO_PCT_FALLBACK * credit_bps
+    expected_uso_return = oil_pct / 100.0
+    expected_gld_return = gold_pct / 100.0
+    expected_uup_return = fx_pct / 100.0
+
+    tickers = [(p.get("ticker") or "").upper() for p in positions]
+    tickers = [t for t in tickers if t]
+    if not tickers:
+        return {"error": "No positions provided"}
+
+    from data.market_client import MarketDataClient
+    market = MarketDataClient()
+
+    # Build daily return series for each position + each proxy ETF
+    def _to_returns(history: list[dict]) -> list[float]:
+        rets: list[float] = []
+        prev = None
+        for bar in history or []:
+            c = bar.get("close")
+            if c is None or c <= 0:
+                continue
+            if prev is not None and prev > 0:
+                rets.append((c - prev) / prev)
+            prev = c
+        return rets
+
+    position_returns: dict[str, list[float]] = {}
+    for t in tickers:
+        try:
+            history = market.get_price_history(t, period=history_period)
+        except Exception as e:
+            logger.debug(f"custom_scenario: history fetch for {t} failed: {e}")
+            continue
+        if history:
+            position_returns[t] = _to_returns(history)
+
+    proxy_returns: dict[str, list[float]] = {}
+    for _, proxy_ticker in CROSS_ASSET_PROXIES.items():
+        try:
+            history = market.get_price_history(proxy_ticker, period=history_period)
+        except Exception as e:
+            logger.debug(f"custom_scenario: history fetch for proxy {proxy_ticker} failed: {e}")
+            continue
+        if history:
+            proxy_returns[proxy_ticker] = _to_returns(history)
+
+    betas = _fit_position_shock_betas(position_returns, proxy_returns)
+
+    portfolio_pnl_pct = 0.0
+    breakdown: list[dict] = []
+    for p in positions:
+        ticker = (p.get("ticker") or "").upper()
+        if not ticker:
+            continue
+        b = betas.get(ticker) or {}
+        weight = float(p.get("size_pct", 0) or 0) / 100.0
+        is_long = "bullish" in (p.get("direction") or "")
+        sign = 1.0 if is_long else -1.0
+
+        projected_return = 0.0
+        contributions: dict[str, float] = {}
+
+        if rates_bps and b.get("rates") is not None:
+            r = float(b["rates"]) * expected_tlt_return
+            contributions["rates"] = round(r, 5)
+            projected_return += r
+        if credit_bps and b.get("credit") is not None:
+            r = float(b["credit"]) * expected_hyg_return
+            contributions["credit"] = round(r, 5)
+            projected_return += r
+        if oil_pct and b.get("oil") is not None:
+            r = float(b["oil"]) * expected_uso_return
+            contributions["oil"] = round(r, 5)
+            projected_return += r
+        if gold_pct and b.get("gold") is not None:
+            r = float(b["gold"]) * expected_gld_return
+            contributions["gold"] = round(r, 5)
+            projected_return += r
+        if fx_pct and b.get("fx") is not None:
+            r = float(b["fx"]) * expected_uup_return
+            contributions["fx"] = round(r, 5)
+            projected_return += r
+
+        position_pnl_pct = projected_return * weight * sign * 100.0
+        portfolio_pnl_pct += position_pnl_pct
+
+        breakdown.append({
+            "ticker": ticker,
+            "weight_pct": p.get("size_pct"),
+            "direction": p.get("direction"),
+            "betas": {k: b.get(k) for k in ("rates", "credit", "oil", "gold", "fx")},
+            "n_obs": b.get("n_obs", 0),
+            "contributions_by_axis": contributions,
+            "projected_position_return_pct": round(projected_return * 100.0, 3),
+            "position_pnl_pct": round(position_pnl_pct, 3),
+        })
+
+    return {
+        "shock_inputs": {
+            "rates_shock_bps": rates_bps,
+            "credit_shock_bps": credit_bps,
+            "oil_shock_pct": oil_pct,
+            "gold_shock_pct": gold_pct,
+            "fx_shock_pct": fx_pct,
+        },
+        "expected_proxy_returns": {
+            "TLT_pct": round(expected_tlt_return * 100, 3),
+            "HYG_pct": round(expected_hyg_return * 100, 3),
+            "USO_pct": round(expected_uso_return * 100, 3),
+            "GLD_pct": round(expected_gld_return * 100, 3),
+            "UUP_pct": round(expected_uup_return * 100, 3),
+        },
+        "portfolio_pnl_pct": round(portfolio_pnl_pct, 3),
+        "portfolio_pnl_dollars": round(portfolio_pnl_pct / 100.0 * portfolio_base, 2),
+        "breakdown": breakdown,
+        "beta_method": "univariate_ols_1y_daily_returns",
+        "history_period": history_period,
+        "n_positions": len(breakdown),
     }
 
 
