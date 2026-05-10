@@ -40,6 +40,59 @@ class MemoRepository:
                 for r in result.scalars().all()
             ]
 
+    @staticmethod
+    async def get_recent_tickers_for_user(
+        user_id: str | None, days: int = 14, limit_memos: int = 50,
+    ) -> list[str]:
+        """
+        Return the set of tickers the user has seen in memos within the last
+        `days` days. Used by the screening layer to penalize already-proposed
+        names (anti-repetition) — a name appearing for the 3rd time in 14 days
+        is signal-stale, not fresh alpha. Returns [] when no memos found.
+
+        Aggregates tickers from both `tickers_analyzed` and `trade_ideas[].ticker`
+        because the user may have seen a name as supporting context (analyzed)
+        or as an actionable idea — either way it's in their recent attention.
+        """
+        from datetime import datetime, timezone, timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(days=int(max(1, days)))
+        async with async_session() as session:
+            query = (
+                select(IntelligenceMemoRecord)
+                .order_by(desc(IntelligenceMemoRecord.created_at))
+                .limit(limit_memos)
+            )
+            if user_id:
+                query = query.where(IntelligenceMemoRecord.user_id == user_id)
+            try:
+                result = await session.execute(query)
+            except Exception as e:
+                logger.warning(f"get_recent_tickers_for_user query failed: {e}")
+                return []
+            seen: set[str] = set()
+            for r in result.scalars().all():
+                created = getattr(r, "created_at", None)
+                if created is not None:
+                    # SQLAlchemy may return naive datetimes from SQLite even
+                    # though the column is TIMESTAMPTZ on Postgres. Normalize.
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    if created < cutoff:
+                        continue
+                analyzed = getattr(r, "tickers_analyzed", None) or []
+                if isinstance(analyzed, list):
+                    for t in analyzed:
+                        if isinstance(t, str) and t.strip():
+                            seen.add(t.strip().upper())
+                ideas = getattr(r, "trade_ideas", None) or []
+                if isinstance(ideas, list):
+                    for idea in ideas:
+                        if isinstance(idea, dict):
+                            t = idea.get("ticker")
+                            if isinstance(t, str) and t.strip():
+                                seen.add(t.strip().upper())
+            return sorted(seen)
+
 
 class TradeRepository:
     @staticmethod

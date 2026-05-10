@@ -249,16 +249,31 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     # hallucinations that snuck past the prompt rules. Also assess diversity
     # against required_style_labels from the plan.
     if output and not output.error and isinstance(output.output, dict):
-        from agents.portfolio_strategist import validate_and_fix_trade_ideas, assess_diversity
+        from agents.portfolio_strategist import (
+            validate_and_fix_trade_ideas,
+            assess_diversity,
+            validate_tier_compliance,
+            classify_tier,
+        )
         plan_dict = state.get("plan_data") or {}
         ideas = output.output.get("trade_ideas") or []
         if ideas and live_prices:
             ideas = validate_and_fix_trade_ideas(ideas, live_prices)
             output.output["trade_ideas"] = ideas
-        # Stash diversity assessment so the UI can flag monolithic baskets
+        # Backfill tier classification on any idea the LLM didn't tier itself.
+        # `classify_tier` is read-only — it inspects screen_source +
+        # market_cap_bucket and assigns the discovery tier (1-4 or None).
+        for idea in ideas:
+            if isinstance(idea, dict) and idea.get("tier") is None:
+                t = classify_tier(idea)
+                if t is not None:
+                    idea["tier"] = t
+        # Stash diversity assessment + tier compliance so the UI can flag
+        # both monolithic baskets and Tier-1 over-concentration.
         output.output["_diversity"] = assess_diversity(
             ideas, required_style_labels=plan_dict.get("required_style_labels", [])
         )
+        output.output["_tier_compliance"] = validate_tier_compliance(ideas)
     if output is None or (output and output.error):
         err = output.error if output else "timed out"
         logger.warning(f"[orchestrator] Portfolio Strategist error: {err}")

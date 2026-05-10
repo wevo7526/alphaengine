@@ -462,6 +462,173 @@ def analyze_pair_candidate(ticker_a: str, ticker_b: str, period: str = "1y") -> 
     return analyze_pair(ticker_a, ticker_b, period=period)
 
 
+# ─── Hidden-gem discovery screens ────────────────────────────────────────
+# Each tool wraps a screen from data.screens; they all return a list of
+# candidates with structured `evidence` and plain-English `reasons` so the
+# Strategist can cite specific receipts (SEC accession #s, fund CIKs, etc.).
+
+@tool
+def run_insider_cluster_screen(
+    tickers: str,
+    lookback_days: int = 30,
+    min_unique_buyers: int = 3,
+) -> dict:
+    """
+    Find tickers with cluster insider buying — at least `min_unique_buyers`
+    distinct insiders making open-market Form-4 purchases in the last
+    `lookback_days`. CEO/CFO buys weighted 2x.
+
+    `tickers`: comma-separated list of tickers to scan (e.g., "PLTR,DDOG,NET").
+    Returns {candidates: [...], n_candidates, screen_params}.
+    Use this for thematic queries where you want to find names with strong
+    inside-money conviction beyond consensus picks.
+    """
+    from data.screens import screen_insider_clusters
+    universe = [t.strip().upper() for t in (tickers or "").split(",") if t.strip()]
+    if not universe:
+        return {"candidates": [], "n_candidates": 0, "error": "no tickers provided"}
+    candidates = screen_insider_clusters(
+        universe=universe,
+        lookback_days=lookback_days,
+        min_unique_buyers=min_unique_buyers,
+    )
+    return {
+        "candidates": candidates[:15],
+        "n_candidates": len(candidates),
+        "screen_params": {
+            "lookback_days": lookback_days,
+            "min_unique_buyers": min_unique_buyers,
+        },
+    }
+
+
+@tool
+def run_13f_initiation_screen(
+    min_position_pct: float = 0.01,
+    min_funds_initiating: int = 1,
+) -> dict:
+    """
+    Find names newly initiated by smart-money funds in their latest 13F
+    (vs prior quarter's 13F). Smart-money fund list is curated in
+    data/smart_money.py (Berkshire, Pershing, Tiger Global, Akre, Baupost,
+    Greenlight, Third Point, Glenview, Coatue, Pabrai, etc.).
+
+    `min_position_pct`: minimum size of position as fraction of fund's book
+    to count as a meaningful initiation (default 1%).
+    `min_funds_initiating`: filter out names initiated by only one fund (set
+    to 2 for higher-conviction multi-fund signal).
+
+    13F data has a 45-day lag — these aren't real-time. The value is in
+    surfacing names not yet in consensus headlines. Returns {candidates,
+    n_candidates, screen_params}.
+    """
+    from data.screens import screen_13f_new_initiations
+    candidates = screen_13f_new_initiations(
+        min_position_pct=min_position_pct,
+        min_funds_initiating=min_funds_initiating,
+    )
+    return {
+        "candidates": candidates[:15],
+        "n_candidates": len(candidates),
+        "screen_params": {
+            "min_position_pct": min_position_pct,
+            "min_funds_initiating": min_funds_initiating,
+        },
+    }
+
+
+@tool
+def run_post_earnings_drift_screen(
+    tickers: str,
+    min_surprise_pct: float = 15.0,
+    max_analyst_count: int = 10,
+) -> dict:
+    """
+    Find post-earnings-announcement drift (PEAD) candidates: companies that
+    beat earnings estimates by ≥`min_surprise_pct` with thin analyst coverage
+    (≤`max_analyst_count`). PEAD is strongest in under-covered names —
+    classic hidden-gem screen.
+
+    `tickers`: comma-separated list to scan (e.g., "PLTR,DDOG,NET,CRWD").
+    Returns {candidates, n_candidates, screen_params}.
+    """
+    from data.screens import screen_post_earnings_drift
+    universe = [t.strip().upper() for t in (tickers or "").split(",") if t.strip()]
+    if not universe:
+        return {"candidates": [], "n_candidates": 0, "error": "no tickers provided"}
+    candidates = screen_post_earnings_drift(
+        universe=universe,
+        min_surprise_pct=min_surprise_pct,
+        max_analyst_count=max_analyst_count,
+    )
+    return {
+        "candidates": candidates[:15],
+        "n_candidates": len(candidates),
+        "screen_params": {
+            "min_surprise_pct": min_surprise_pct,
+            "max_analyst_count": max_analyst_count,
+        },
+    }
+
+
+@tool
+def run_52w_low_insider_screen(
+    tickers: str,
+    within_pct: float = 5.0,
+    insider_lookback_days: int = 30,
+) -> dict:
+    """
+    Turnaround / contrarian setup: price within `within_pct` of 52-week
+    low AND insider buying in the last `insider_lookback_days`. The
+    insider-buy filter is critical — without it the 52w-low screen is a
+    value-trap factory.
+
+    `tickers`: comma-separated list to scan.
+    Returns {candidates, n_candidates, screen_params}.
+    """
+    from data.screens import screen_52w_low_with_insider_buys
+    universe = [t.strip().upper() for t in (tickers or "").split(",") if t.strip()]
+    if not universe:
+        return {"candidates": [], "n_candidates": 0, "error": "no tickers provided"}
+    candidates = screen_52w_low_with_insider_buys(
+        universe=universe,
+        within_pct=within_pct,
+        insider_lookback_days=insider_lookback_days,
+    )
+    return {
+        "candidates": candidates[:15],
+        "n_candidates": len(candidates),
+        "screen_params": {
+            "within_pct": within_pct,
+            "insider_lookback_days": insider_lookback_days,
+        },
+    }
+
+
+@tool
+def run_sector_adjacent_screen(theme: str) -> dict:
+    """
+    Return picks-and-shovels names for a known theme. No API calls — uses
+    a curated mapping from data.screens.SECTOR_ADJACENT.
+
+    Available themes include: ai_capex, ai_inference, energy_transition,
+    obesity_glp1, data_centers_power, cybersecurity, uranium_nuclear,
+    fintech_disruptors, regional_banks.
+
+    Use this when the user query mentions one of these themes — surfaces
+    the non-obvious beneficiaries (e.g., for ai_capex returns VRT cooling,
+    ETN power, COHR optical, VST/TLN/CEG nuclear) rather than the
+    consensus mega-cap names.
+    """
+    from data.screens import screen_sector_adjacent_to_theme
+    candidates = screen_sector_adjacent_to_theme(theme=theme)
+    return {
+        "candidates": candidates,
+        "n_candidates": len(candidates),
+        "theme": theme,
+    }
+
+
 SYSTEM_PROMPT = """You are a senior research analyst at a quantitative hedge fund. You have been
 given an analysis plan and your job is to execute it by gathering all relevant data.
 
@@ -508,6 +675,33 @@ IMPORTANT RULES:
        small_cap ($2-10B) | micro_cap (<$2B) | etf
     These labels are consumed by the Strategist to enforce style diversity.
 
+13. *** HIDDEN-GEM DISCOVERY *** — On any query where the plan's
+    `discovery_aggressiveness` is "high" OR the slate target is 8+ ideas,
+    you MUST call AT LEAST TWO of the following discovery screens before
+    drafting candidates:
+       - run_insider_cluster_screen(tickers="...")
+            → cluster Form-4 buys, CEO/CFO weighted
+       - run_13f_initiation_screen()
+            → smart-money funds initiating new positions (Berkshire,
+              Pershing, Akre, Coatue, etc.)
+       - run_post_earnings_drift_screen(tickers="...")
+            → big earnings surprise + thin analyst coverage (PEAD)
+       - run_52w_low_insider_screen(tickers="...")
+            → contrarian setups with insider conviction
+       - run_sector_adjacent_screen(theme="...")
+            → curated picks-and-shovels for known themes
+    For any name you propose to the Strategist as a discovery candidate,
+    record its `screen_source` in ticker_data so the Strategist can claim
+    Tier-4 (special situation) status on it.
+
+14. *** TIER COMPLIANCE *** — The Strategist runs a structural gate on
+    slates of 8+ ideas: at most 30% Tier-1 (mega-cap, market_cap > $200B)
+    AND at least 30% Tier-3/4 (small-cap by market_cap_bucket, or
+    `screen_source` set from any discovery screen). Your ticker_data must
+    include enough Tier-3/4 candidates to satisfy this gate — otherwise
+    the Strategist will reject its own first draft and re-prompt, wasting
+    tool budget downstream.
+
 After gathering data, produce a JSON summary with:
 {{
     "macro_data": {{...}},
@@ -522,32 +716,40 @@ After gathering data, produce a JSON summary with:
 The data_summary is critical — it's what downstream agents (Risk Manager, Portfolio Strategist)
 will primarily read. Make it thorough, quantitative, and specific."""
 
-OUTPUT_INSTRUCTIONS = """TOOL BUDGET: 16 tool calls MAX. Plan deliberately.
+OUTPUT_INSTRUCTIONS = """TOOL BUDGET: 18 tool calls MAX. Plan deliberately.
 
 Suggested allocation for a typical alpha-finding query (3-4 primary tickers
-+ wider net):
++ wider net + ≥2 discovery screens):
   1  macro_snapshot
   1  screen_secondary_universe (CRITICAL — surfaces non-Mag7 candidates)
+  2  discovery screens (insider/13F/PEAD/52w-low/sector-adjacent — pick 2)
   3-4 fundamentals on primary tickers
-  2-3 fundamentals on top secondary candidates
-  2  news (primary + 1 secondary)
+  2-3 fundamentals on top secondary + screen candidates
+  2  news (primary + 1 secondary or screen-surfaced name)
   1  get_earnings_calendar on the primary ticker
   1  get_analyst_consensus on the primary ticker
   1  get_peer_comparison on the primary ticker
   1  get_options_analysis on the primary ticker
-  1  buffer for SEC filings or short interest
+  1  buffer for SEC filings, short interest, or pair analysis
 
 Hard rules:
   - You MUST call screen_secondary_universe at least once.
+  - You MUST call AT LEAST TWO discovery screens (run_insider_cluster_screen,
+    run_13f_initiation_screen, run_post_earnings_drift_screen,
+    run_52w_low_insider_screen, run_sector_adjacent_screen) when the plan's
+    discovery_aggressiveness is "high" OR slate target is 8+ ideas.
   - You MUST run get_fundamentals on at least 2 secondary (non-mega-cap)
     candidates and report their style_label + market_cap_bucket in ticker_data.
+  - For ANY name surfaced by a discovery screen, record `screen_source`
+    in ticker_data so the Strategist can tag it as Tier-4 (special situation).
   - Skip Alpha Vantage unless specifically needed (25/day budget).
   - Skip get_filing_section unless thesis requires reading actual filing prose.
 
-After 16 tool calls, STOP and emit JSON. Your data_summary is the critical
+After 18 tool calls, STOP and emit JSON. Your data_summary is the critical
 output — 4-5 paragraphs, every number sourced from a tool call, AND it MUST
 name at least 2 non-mega-cap tickers as alpha candidates with a specific
-quantitative observation per name."""
+quantitative observation per name, citing screen evidence when applicable
+(e.g., "screen_insider_clusters surfaced TICKER with 4 unique buyers totaling $X")."""
 
 
 class ResearchAnalyst(BaseAgent):
@@ -568,7 +770,7 @@ class ResearchAnalyst(BaseAgent):
         agent = create_tool_calling_agent(self.llm, tools, prompt)
         return AgentExecutor(
             agent=agent, tools=tools, verbose=False,
-            max_iterations=17,  # 16 tool calls + final synthesis pass
+            max_iterations=19,  # 18 tool calls + final synthesis pass
             handle_parsing_errors=True,
         )
 
@@ -600,6 +802,14 @@ class ResearchAnalyst(BaseAgent):
             get_short_interest,
             screen_secondary_universe,
             analyze_pair_candidate,
+            # Hidden-gem discovery screens (Phase B). These are L/S-grade
+            # screens that surface non-consensus alpha candidates from SEC
+            # data with structured evidence per candidate.
+            run_insider_cluster_screen,
+            run_13f_initiation_screen,
+            run_post_earnings_drift_screen,
+            run_52w_low_insider_screen,
+            run_sector_adjacent_screen,
         ]
 
     def build_input_prompt(self, context: dict) -> str:

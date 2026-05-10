@@ -53,6 +53,12 @@ export interface TradeIdea {
   alpha_share?: number | null;
   factor_share?: number | null;
   idiosyncratic_sharpe?: number | null;
+  // Discovery tier: 1=mega-cap, 2=mid-cap, 3=small-cap, 4=special-situation.
+  // Strategist mandate: <=30% Tier-1, >=30% Tier-3/4 on slates >=8.
+  tier?: number | null;
+  // Which screen surfaced this name (insider_clusters, 13f_new_initiations,
+  // post_earnings_drift, 52w_low_insider_buy, sector_adjacent, multi).
+  screen_source?: string | null;
 }
 
 export interface IntelligenceMemo {

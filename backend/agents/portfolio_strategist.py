@@ -113,6 +113,147 @@ def assess_diversity(
     }
 
 
+# Discovery tier thresholds. Tier 1 = mega-cap (market_cap > $200B);
+# Tier 2 = mid-cap ($10B - $200B); Tier 3 = small-cap ($1B - $10B);
+# Tier 4 = special-situation (any cap; flagged by a screen source like
+# 13f_new_initiations or insider_clusters even when not in the static
+# universe). The compliance gate is the structural defense against the
+# Mag7 monoculture failure mode.
+TIER_1_MARKET_CAP_THRESHOLD = 200e9   # $200B
+TIER_2_MARKET_CAP_THRESHOLD = 10e9    # $10B
+TIER_3_MARKET_CAP_THRESHOLD = 1e9     # $1B
+
+# Compliance thresholds applied when slate has >= MIN_SLATE_SIZE ideas.
+# Smaller slates (a focused 3-name memo) shouldn't be forced to include
+# small-caps just to satisfy a quota.
+MIN_SLATE_SIZE_FOR_TIER_GATE = 8
+MAX_TIER_1_SHARE = 0.30   # no more than 30% mega-caps
+MIN_DISCOVERY_TIER_SHARE = 0.30   # at least 30% Tier-3 / Tier-4
+
+
+def classify_tier(idea: dict) -> int | None:
+    """
+    Classify a TradeIdea into one of four discovery tiers.
+
+      Tier 4 — special situation: idea has `screen_source` (came from a
+                   dynamic screen, e.g., insider clusters or 13F initiations).
+                   Special-situation status takes precedence over market cap.
+      Tier 1 — mega-cap (market_cap > $200B)
+      Tier 2 — mid-cap ($10B - $200B)
+      Tier 3 — small-cap ($1B - $10B)
+
+    Returns None when market cap can't be resolved.
+    """
+    if not isinstance(idea, dict):
+        return None
+    if idea.get("screen_source"):
+        return 4
+
+    # Fall back to market_cap_bucket label when fundamentals.market_cap is
+    # absent (the Research Analyst writes both for downstream consumers).
+    cap_bucket = (idea.get("market_cap_bucket") or "").strip().lower()
+    if cap_bucket == "mega_cap":
+        return 1
+    if cap_bucket == "large_cap":
+        return 2
+    if cap_bucket == "mid_cap":
+        return 2
+    if cap_bucket == "small_cap":
+        return 3
+    if cap_bucket == "micro_cap":
+        return 3
+
+    # Try direct market_cap field if present
+    raw_cap = idea.get("market_cap") or idea.get("market_cap_usd")
+    try:
+        cap = float(raw_cap) if raw_cap is not None else None
+    except (TypeError, ValueError):
+        cap = None
+    if cap is None:
+        return None
+    if cap >= TIER_1_MARKET_CAP_THRESHOLD:
+        return 1
+    if cap >= TIER_2_MARKET_CAP_THRESHOLD:
+        return 2
+    if cap >= TIER_3_MARKET_CAP_THRESHOLD:
+        return 3
+    return 3  # micro-cap also counts as Tier 3 for the discovery share
+
+
+def validate_tier_compliance(trade_ideas: list[dict]) -> dict:
+    """
+    Validate that the slate complies with the discovery tier mandate:
+       - at most MAX_TIER_1_SHARE (30%) Tier-1 mega-cap names
+       - at least MIN_DISCOVERY_TIER_SHARE (30%) Tier-3 or Tier-4 names
+
+    Returns {compliant, tier_distribution, violations, n_ideas,
+             requires_reprompt}. `requires_reprompt=True` signals the
+    Strategist should regenerate. The gate only fires on slates of
+    MIN_SLATE_SIZE_FOR_TIER_GATE or more so focused memos aren't forced
+    to dilute with small-caps.
+
+    This is the structural defense against the platform falling into a
+    "Mag7 monoculture" — even when the LLM has no specific reason to
+    avoid AAPL, the gate forces it to reach for non-consensus names.
+    """
+    n = len(trade_ideas or [])
+    if n == 0:
+        return {
+            "compliant": True,
+            "tier_distribution": {},
+            "violations": [],
+            "n_ideas": 0,
+            "requires_reprompt": False,
+            "reason": "no_ideas",
+        }
+
+    distribution = {1: 0, 2: 0, 3: 0, 4: 0, "unknown": 0}
+    for idea in trade_ideas:
+        t = classify_tier(idea)
+        if t is None:
+            distribution["unknown"] = distribution["unknown"] + 1
+        else:
+            distribution[t] = distribution[t] + 1
+
+    violations: list[str] = []
+    tier1_share = distribution[1] / n
+    discovery_share = (distribution[3] + distribution[4]) / n
+
+    # Only enforce on slates large enough to make the constraint meaningful
+    gate_active = n >= MIN_SLATE_SIZE_FOR_TIER_GATE
+
+    if gate_active and tier1_share > MAX_TIER_1_SHARE:
+        violations.append(
+            f"Tier-1 mega-cap share {tier1_share*100:.0f}% exceeds "
+            f"{MAX_TIER_1_SHARE*100:.0f}% cap "
+            f"({distribution[1]}/{n} ideas are mega-caps)"
+        )
+    if gate_active and discovery_share < MIN_DISCOVERY_TIER_SHARE:
+        violations.append(
+            f"Discovery tier (3+4) share {discovery_share*100:.0f}% below "
+            f"{MIN_DISCOVERY_TIER_SHARE*100:.0f}% minimum "
+            f"({distribution[3] + distribution[4]}/{n} small-cap or screen-sourced)"
+        )
+
+    return {
+        "compliant": len(violations) == 0,
+        "tier_distribution": {
+            "tier_1_mega_cap": distribution[1],
+            "tier_2_mid_cap": distribution[2],
+            "tier_3_small_cap": distribution[3],
+            "tier_4_special_situation": distribution[4],
+            "unknown": distribution["unknown"],
+        },
+        "tier_1_share_pct": round(tier1_share * 100, 1),
+        "discovery_share_pct": round(discovery_share * 100, 1),
+        "violations": violations,
+        "n_ideas": n,
+        "gate_active": gate_active,
+        "gate_threshold_size": MIN_SLATE_SIZE_FOR_TIER_GATE,
+        "requires_reprompt": gate_active and len(violations) > 0,
+    }
+
+
 def validate_and_fix_trade_ideas(
     trade_ideas: list[dict],
     live_prices: dict[str, float],

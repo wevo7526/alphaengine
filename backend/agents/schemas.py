@@ -281,6 +281,14 @@ class TradeIdea(BaseModel):
     alpha_share: Optional[float] = None
     factor_share: Optional[float] = None
     idiosyncratic_sharpe: Optional[float] = None
+    # Discovery tier (1=mega-cap, 2=mid-cap, 3=small-cap, 4=special-situation).
+    # Set by the Strategist based on fundamentals.market_cap + screen evidence.
+    # Tier compliance is enforced: <=30% Tier-1 AND >=30% Tier-3/4 on slates >=8.
+    tier: Optional[int] = None
+    # Which screen surfaced this name (insider_clusters, 13f_new_initiations,
+    # post_earnings_drift, 52w_low_insider_buy, sector_adjacent, multi).
+    # None means the name was already in the user's plan / primary universe.
+    screen_source: Optional[str] = None
 
     @field_validator("price_corrected", mode="before")
     @classmethod
