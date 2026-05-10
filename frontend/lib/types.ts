@@ -47,6 +47,12 @@ export interface TradeIdea {
   // Hedge-fund style classification + market-cap bucket — surfaced as colored pills
   style_label?: string | null;
   market_cap_bucket?: string | null;
+  // Alpha-vs-factor variance decomposition (from factor regression)
+  // alpha_share + factor_share ~ 1 in-sample. PMs use to distinguish
+  // factor-driven exposure from idiosyncratic alpha.
+  alpha_share?: number | null;
+  factor_share?: number | null;
+  idiosyncratic_sharpe?: number | null;
 }
 
 export interface IntelligenceMemo {

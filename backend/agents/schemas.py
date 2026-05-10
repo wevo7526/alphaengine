@@ -274,6 +274,13 @@ class TradeIdea(BaseModel):
     # Market-cap bucket so Strategist can be forced to break out of mega-cap mono-culture
     # Values: mega_cap | large_cap | mid_cap | small_cap | micro_cap | etf
     market_cap_bucket: Optional[str] = None
+    # Alpha-vs-factor variance decomposition for this name (from factor regression).
+    # alpha_share + factor_share approximately sum to 1 in-sample (small cross-term).
+    # PMs use these to distinguish "this is a factor bet I could index" from
+    # "this is a genuinely idiosyncratic alpha play."
+    alpha_share: Optional[float] = None
+    factor_share: Optional[float] = None
+    idiosyncratic_sharpe: Optional[float] = None
 
     @field_validator("price_corrected", mode="before")
     @classmethod

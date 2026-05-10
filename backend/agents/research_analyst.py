@@ -438,6 +438,30 @@ def get_short_interest(ticker: str) -> dict:
     }
 
 
+@tool
+def analyze_pair_candidate(ticker_a: str, ticker_b: str, period: str = "1y") -> dict:
+    """
+    Run a full pair-trade cointegration analysis on two tickers. Returns
+    hedge ratio (Total Least Squares on log prices), Engle-Granger ADF
+    p-value, Ornstein-Uhlenbeck mean-reversion half-life in days, current
+    spread z-score, and rolling-correlation stability score.
+
+    A pair is `cointegrated=True` only when ALL FOUR pass:
+      - ADF p-value < 0.05 (reject unit-root null)
+      - 1 < half_life < 60 days (reverts on a tradable horizon)
+      - stability > 0.5 (rolling correlation is structurally stable)
+      - ≥126 observations (~6 months daily)
+
+    Use this BEFORE proposing any TradeIdea with structure_type='pair'.
+    The returned `trade_signal` field tells you whether the current
+    z-score is wide enough to enter (long_spread/short_spread) or not (hold).
+    `share_ratio_at_close` converts the log-price hedge ratio into a
+    share ratio at current prices for execution sizing.
+    """
+    from quant.pairs import analyze_pair
+    return analyze_pair(ticker_a, ticker_b, period=period)
+
+
 SYSTEM_PROMPT = """You are a senior research analyst at a quantitative hedge fund. You have been
 given an analysis plan and your job is to execute it by gathering all relevant data.
 
@@ -575,6 +599,7 @@ class ResearchAnalyst(BaseAgent):
             get_peer_comparison,
             get_short_interest,
             screen_secondary_universe,
+            analyze_pair_candidate,
         ]
 
     def build_input_prompt(self, context: dict) -> str:

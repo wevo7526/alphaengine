@@ -301,6 +301,166 @@ def _model_label(factor_names: list[str]) -> str:
     return f"{len(factor_names)}-factor"
 
 
+def compute_residual_returns(
+    asset_returns: list[float],
+    factor_returns: dict[str, list[float]],
+    risk_free_rate: float | None = None,
+    include_alpha: bool = True,
+) -> dict:
+    """
+    Daily idiosyncratic (residual) returns after stripping factor exposure.
+
+    Model: y_t - r_f = α + Σ β_k · F_{k,t} + ε_t
+
+    `include_alpha=True` (default) returns the idiosyncratic *excess* return
+    ε_t + α — what L/S signal research actually operates on as "pure alpha"
+    contribution per name. `include_alpha=False` returns the OLS residuals
+    ε_t alone (mean ≈ 0), useful for residual-based risk modeling.
+
+    Returns the daily series plus annualized alpha and residual vol so the
+    consumer can plot the idiosyncratic equity curve directly. Empty list +
+    error string on failure — never None.
+    """
+    if not factor_returns:
+        return {"residuals": [], "error": "No factor data"}
+
+    min_len = min(len(asset_returns), *[len(v) for v in factor_returns.values()])
+    if min_len < 30:
+        return {"residuals": [], "error": "Need 30+ observations"}
+
+    rfr = _resolve_rfr(risk_free_rate)
+    rf_daily = rfr / 252
+    y = np.array(asset_returns[-min_len:], dtype=float)
+    y_excess = y - rf_daily
+
+    factor_names = list(factor_returns.keys())
+    X = np.column_stack([np.array(factor_returns[f][-min_len:], dtype=float) for f in factor_names])
+
+    if STATSMODELS_AVAILABLE:
+        X_const = sm.add_constant(X)
+        model = sm.OLS(y_excess, X_const).fit(cov_type="HAC", cov_kwds={"maxlags": 5})
+        alpha = float(model.params[0])
+        resid = np.asarray(model.resid, dtype=float)
+        method = "ols_hac"
+    else:
+        result = _numpy_ols(y_excess, X)
+        alpha = float(result["betas"][0])
+        resid = np.asarray(result["residuals"], dtype=float)
+        method = "ols_numpy"
+
+    out_series = (resid + alpha) if include_alpha else resid
+    residual_vol_annual = float(np.std(resid, ddof=1) * np.sqrt(252)) if len(resid) > 1 else 0.0
+
+    return {
+        "residuals": [_clean(round(float(r), 8)) for r in out_series.tolist()],
+        "alpha_daily": _clean(round(alpha, 8)),
+        "alpha_annualized_pct": _clean(round(alpha * 252 * 100, 2)),
+        "residual_vol_annual_pct": _clean(round(residual_vol_annual * 100, 2)),
+        "n_observations": int(min_len),
+        "includes_alpha_in_series": bool(include_alpha),
+        "method": method,
+    }
+
+
+def attribute_alpha_vs_factor(
+    asset_returns: list[float],
+    factor_returns: dict[str, list[float]],
+    risk_free_rate: float | None = None,
+) -> dict:
+    """
+    Variance-based decomposition of an asset's return into factor-driven
+    vs idiosyncratic components.
+
+    For an OLS regression y - r_f = α + β'F + ε:
+        Var(y - r_f) ≈ Var(β'F) + Var(ε)         (cross-term ≈ 0 in-sample)
+        factor_share = Var(β'F) / Var(y - r_f)
+        alpha_share  = Var(ε)   / Var(y - r_f)
+
+    These don't strictly sum to 1 in finite samples due to small cross-terms;
+    we surface both honestly with an `unexplained_share` residual term.
+
+    Also returns the idiosyncratic Sharpe = α_annualized / residual_vol_annualized
+    — this is the information ratio of the alpha leg, and it's what L/S funds
+    are actually paying for.
+
+    `interpretation`:
+      - "factor_driven"  if factor_share > 0.70
+      - "idiosyncratic"  if alpha_share > 0.70
+      - "mixed"          otherwise
+    """
+    if not factor_returns:
+        return {"error": "No factor data"}
+
+    min_len = min(len(asset_returns), *[len(v) for v in factor_returns.values()])
+    if min_len < 30:
+        return {"error": "Need 30+ observations"}
+
+    rfr = _resolve_rfr(risk_free_rate)
+    rf_daily = rfr / 252
+    y = np.array(asset_returns[-min_len:], dtype=float)
+    y_excess = y - rf_daily
+
+    factor_names = list(factor_returns.keys())
+    X = np.column_stack([np.array(factor_returns[f][-min_len:], dtype=float) for f in factor_names])
+
+    if STATSMODELS_AVAILABLE:
+        X_const = sm.add_constant(X)
+        model = sm.OLS(y_excess, X_const).fit(cov_type="HAC", cov_kwds={"maxlags": 5})
+        alpha = float(model.params[0])
+        betas = np.asarray(model.params[1:], dtype=float)
+        resid = np.asarray(model.resid, dtype=float)
+        method = "ols_hac"
+    else:
+        result = _numpy_ols(y_excess, X)
+        alpha = float(result["betas"][0])
+        betas = np.asarray(result["betas"][1:], dtype=float)
+        resid = np.asarray(result["residuals"], dtype=float)
+        method = "ols_numpy"
+
+    factor_contribution_daily = X @ betas  # excludes intercept; mean adds back as alpha
+
+    var_y = float(np.var(y_excess, ddof=1)) if len(y_excess) > 1 else 0.0
+    var_factor = float(np.var(factor_contribution_daily, ddof=1)) if len(factor_contribution_daily) > 1 else 0.0
+    var_resid = float(np.var(resid, ddof=1)) if len(resid) > 1 else 0.0
+
+    if var_y < 1e-14:
+        return {"error": "Asset return variance ~ 0"}
+
+    factor_share = var_factor / var_y
+    alpha_share = var_resid / var_y
+    unexplained_share = max(0.0, 1.0 - factor_share - alpha_share)  # cross-term residual
+
+    residual_vol_annual = float(np.std(resid, ddof=1) * np.sqrt(252)) if len(resid) > 1 else 0.0
+    alpha_annualized = alpha * 252
+
+    if residual_vol_annual > 1e-9:
+        idio_sharpe: float | None = alpha_annualized / residual_vol_annual
+    else:
+        idio_sharpe = None
+
+    if factor_share > 0.70:
+        interp = "factor_driven"
+    elif alpha_share > 0.70:
+        interp = "idiosyncratic"
+    else:
+        interp = "mixed"
+
+    return {
+        "factor_share": _clean(round(factor_share, 4)),
+        "alpha_share": _clean(round(alpha_share, 4)),
+        "unexplained_share": _clean(round(unexplained_share, 4)),
+        "factor_share_pct": _clean(round(factor_share * 100, 2)),
+        "alpha_share_pct": _clean(round(alpha_share * 100, 2)),
+        "residual_vol_annual_pct": _clean(round(residual_vol_annual * 100, 2)),
+        "alpha_annualized_pct": _clean(round(alpha_annualized * 100, 2)),
+        "idiosyncratic_sharpe": _clean(round(idio_sharpe, 3)) if idio_sharpe is not None else None,
+        "n_observations": int(min_len),
+        "interpretation": interp,
+        "method": method,
+        "model": _model_label(factor_names),
+    }
+
+
 def performance_attribution(
     portfolio_returns: list[float],
     factor_returns: dict[str, list[float]],

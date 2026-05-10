@@ -884,6 +884,60 @@ async def get_backtest_results(run_id: str, req: Request):
         return {c.name: getattr(record, c.name) for c in record.__table__.columns}
 
 
+# === YIELD CURVE ===
+
+@app.get("/api/quant/curve")
+async def yield_curve(as_of: str | None = None):
+    """
+    Current (or as-of-date) US Treasury yield curve from FRED CMT series,
+    interpolated to 11 standard tenors (1M-30Y) via natural cubic spline.
+
+    Returns level / slope / butterfly summary metrics suitable for a macro
+    PM's regime check.
+    """
+    from quant.curve import get_curve
+    return get_curve(date=as_of)
+
+
+@app.get("/api/quant/curve/regime")
+async def yield_curve_regime(history_days: int = 120):
+    """
+    Classify the last `history_days` of yield-curve evolution into one of
+    bull_steepener / bull_flattener / bear_steepener / bear_flattener / stable.
+    """
+    from quant.curve import curve_regime
+    return curve_regime(history_days=history_days)
+
+
+@app.post("/api/quant/curve/key-rate-durations")
+async def yield_curve_krd(payload: dict):
+    """
+    Empirical key-rate sensitivities for a list of tickers via joint OLS
+    regression of asset returns on Δyield at {2Y, 5Y, 10Y, 30Y}.
+
+    Body: {
+        "tickers": ["TLT", "IEF", "SPY", ...],
+        "lookback_days": 252  (optional, default 252)
+    }
+    """
+    from quant.curve import key_rate_durations
+    tickers = [t.strip().upper() for t in (payload.get("tickers") or []) if t]
+    if not tickers:
+        raise HTTPException(status_code=400, detail="No tickers provided")
+    lookback = int(payload.get("lookback_days", 252))
+    history_dict: dict[str, list[dict]] = {}
+    for t in tickers[:20]:  # cap to protect rate limits
+        try:
+            hist = market_client.get_price_history(t, period="1y" if lookback <= 365 else "2y")
+            if hist:
+                history_dict[t] = hist
+        except Exception as e:
+            logger.warning(f"KRD price fetch failed for {t}: {e}")
+    if not history_dict:
+        raise HTTPException(status_code=502, detail="No price history available for requested tickers")
+    return key_rate_durations(history_dict, lookback_days=lookback)
+
+
 # === FACTOR ANALYSIS ===
 
 @app.get("/api/quant/factors")
@@ -906,6 +960,7 @@ async def factor_analysis(tickers: str = "SPY", model: str = "single"):
         compute_multi_factor_loadings,
         compute_rolling_factor_exposure,
         build_proxy_factor_returns,
+        attribute_alpha_vs_factor,
     )
     ticker_list = [t.strip().upper() for t in tickers.split(",")]
 
@@ -963,6 +1018,20 @@ async def factor_analysis(tickers: str = "SPY", model: str = "single"):
                 multi = compute_multi_factor_loadings(port_returns, aligned)
                 response["multi_factor"] = multi
                 response["model"] = multi.get("model", "ff5_mom")
+                # Alpha vs factor variance decomposition + idiosyncratic Sharpe.
+                # Surfaces what the regression actually means in PM language.
+                response["alpha_vs_factor"] = attribute_alpha_vs_factor(
+                    port_returns, aligned,
+                )
+                # Per-ticker decomposition — PMs want to see which names are
+                # idiosyncratic vs factor-driven, not just portfolio-level.
+                per_ticker: dict = {}
+                for tk, rets in ticker_returns.items():
+                    if len(rets) >= min_len:
+                        per_ticker[tk] = attribute_alpha_vs_factor(
+                            rets[-min_len:], aligned,
+                        )
+                response["alpha_vs_factor_per_ticker"] = per_ticker
             else:
                 response["multi_factor"] = {"error": "Could not align factor proxies"}
         else:

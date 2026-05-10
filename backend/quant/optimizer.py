@@ -79,19 +79,34 @@ def mean_variance_optimize(
     current_weights: dict[str, float] | None = None,
     transaction_cost_bps: float = 10.0,
     max_position_size: float = 0.05,
+    dollar_neutral: bool = False,
+    beta_neutral: bool = False,
+    asset_betas: dict[str, float] | None = None,
+    gross_leverage: float = 1.0,
 ) -> dict:
     """
-    Classical Markowitz mean-variance optimization.
+    Classical Markowitz mean-variance optimization with optional L/S
+    market-neutral construction.
 
-    Maximizes Sharpe ratio subject to weights summing to 1, bounded per-name
-    by `max_position_size` (default 5% — matches the risk gate so the
-    optimizer can't suggest weights the gate will reject downstream).
+    Default mode (long_only=True): weights sum to 1, bounded [0, cap].
+    Maximizes Sharpe. Transaction cost penalty when current_weights given.
 
-    Transaction cost penalty: when `current_weights` is supplied, the
-    objective deducts `transaction_cost_bps * sum(|delta_w|)` from expected
-    return. This kills the classic MV pathology where a tiny estimated-return
-    differential triggers a complete rebalance — a real fund's turnover would
-    bleed all the alpha in commissions.
+    L/S mode (long_only=False AND (dollar_neutral OR beta_neutral)):
+        Reformulates variables as w = w_long - w_short, both ≥ 0, with explicit
+        gross leverage constraint sum(w_long + w_short) = gross_leverage.
+
+        - dollar_neutral=True: sum(w_long) = sum(w_short)  ⇔  sum(w) = 0
+        - beta_neutral=True: sum(w · β) = 0
+        - asset_betas: per-ticker β to the market; required for beta_neutral.
+          Missing β falls back to dollar_neutral with a logged warning.
+
+    Returns method='long_short_market_neutral' in L/S mode so consumers can
+    branch on it. The realized gross, net, and portfolio beta are surfaced
+    so a PM can verify the neutrality constraint actually bound.
+
+    Reasoning: SLSQP can't handle abs() in constraints directly. The long/
+    short split (Markowitz 1959, Jacobs/Levy 1993) is the textbook way to
+    encode |w| limits in a smooth QP — no penalty terms, no rounding.
     """
     tickers = cov_matrix.get("tickers", [])
     matrix = cov_matrix.get("matrix", [])
@@ -99,13 +114,130 @@ def mean_variance_optimize(
         return {"error": "No covariance data"}
 
     n = len(tickers)
-    mu = np.array([expected_returns.get(t, 0) for t in tickers])
+    mu = np.array([expected_returns.get(t, 0) for t in tickers], dtype=float)
     cov = np.array(matrix)
     cov = np.where(cov == None, 0, cov).astype(float)
     cov, ridge_info = _regularize_cov(cov)
-    w_current = np.array([(current_weights or {}).get(t, 0.0) for t in tickers])
+    w_current = np.array([(current_weights or {}).get(t, 0.0) for t in tickers], dtype=float)
     tc = transaction_cost_bps / 10000.0
+    cap = max(0.0, min(1.0, max_position_size))
 
+    # ---- L/S market-neutral path ----------------------------------------
+    use_ls_path = (not long_only) and (dollar_neutral or beta_neutral)
+    if use_ls_path:
+        # Resolve betas; fall back gracefully if missing
+        betas_arr: np.ndarray | None = None
+        beta_neutral_active = bool(beta_neutral)
+        if beta_neutral:
+            if asset_betas:
+                betas_arr = np.array(
+                    [float(asset_betas.get(t, float("nan")) or float("nan")) for t in tickers],
+                    dtype=float,
+                )
+                if np.isnan(betas_arr).any():
+                    missing = [tickers[i] for i in range(n) if math.isnan(float(betas_arr[i]))]
+                    logger.warning(
+                        f"beta_neutral=True but missing betas for {missing} — "
+                        f"falling back to dollar_neutral only"
+                    )
+                    beta_neutral_active = False
+                    betas_arr = None
+            else:
+                logger.warning(
+                    "beta_neutral=True but asset_betas not provided — "
+                    "falling back to dollar_neutral only"
+                )
+                beta_neutral_active = False
+
+        gross = max(0.01, float(gross_leverage))
+
+        def _w_from_x(x: np.ndarray) -> np.ndarray:
+            return x[:n] - x[n:]
+
+        def neg_sharpe_ls(x: np.ndarray) -> float:
+            w = _w_from_x(x)
+            port_ret = float(mu @ w)
+            if current_weights is not None:
+                port_ret -= tc * float(np.sum(np.abs(w - w_current)))
+            port_var = float(w @ cov @ w)
+            if port_var <= 1e-14:
+                return 0.0
+            return -port_ret / float(np.sqrt(port_var))
+
+        cons_ls: list[dict] = [
+            # Gross leverage equality: sum(l + s) = gross
+            {"type": "eq", "fun": lambda x: float(np.sum(x) - gross)},
+        ]
+        if dollar_neutral:
+            cons_ls.append(
+                {"type": "eq", "fun": lambda x: float(np.sum(_w_from_x(x)))}
+            )
+        if beta_neutral_active and betas_arr is not None:
+            betas_local = betas_arr  # bind to lambda closure
+            cons_ls.append(
+                {"type": "eq", "fun": lambda x: float(np.dot(betas_local, _w_from_x(x)))}
+            )
+
+        bounds_ls = [(0.0, cap) for _ in range(2 * n)]
+
+        # Initialize half-long / half-short equal weight across all names.
+        # Splitting evenly is a neutral starting point; SLSQP will redistribute.
+        x0 = np.full(2 * n, gross / (2 * n))
+
+        result = minimize(
+            neg_sharpe_ls,
+            x0,
+            method="SLSQP",
+            bounds=bounds_ls,
+            constraints=cons_ls,
+            options={"maxiter": 200, "ftol": 1e-7},
+        )
+
+        if not result.success:
+            logger.warning(f"L/S optimization failed: {result.message}")
+            return {"error": result.message, "method": "long_short_market_neutral"}
+
+        w_opt = _w_from_x(result.x)
+        weights = {tickers[i]: _clean(round(float(w_opt[i]), 4)) for i in range(n)}
+        port_ret = float(mu @ w_opt)
+        port_var = float(w_opt @ cov @ w_opt)
+        port_vol = float(np.sqrt(port_var)) if port_var > 0 else 0.0
+
+        gross_realized = float(np.sum(result.x))
+        net_realized = float(np.sum(w_opt))
+        beta_realized: float | None = (
+            float(np.dot(betas_arr, w_opt)) if betas_arr is not None else None
+        )
+        long_weight = float(np.sum(np.maximum(w_opt, 0.0)))
+        short_weight = float(np.sum(np.maximum(-w_opt, 0.0)))
+
+        turnover = float(np.sum(np.abs(w_opt - w_current))) if current_weights is not None else 0.0
+        tc_drag = tc * turnover
+
+        return {
+            "weights": weights,
+            "expected_return_pct": _clean(round(port_ret * 100, 2)),
+            "expected_vol_pct": _clean(round(port_vol * 100, 2)),
+            "sharpe": _clean(round(port_ret / port_vol, 3)) if port_vol > 0 else None,
+            "turnover_pct": _clean(round(turnover * 100, 2)),
+            "tx_cost_drag_pct": _clean(round(tc_drag * 100, 4)),
+            "max_position_cap_pct": round(cap * 100, 2),
+            "gross_leverage_target": round(gross, 4),
+            "gross_leverage_realized": round(gross_realized, 4),
+            "net_exposure_realized": round(net_realized, 4),
+            "long_exposure": round(long_weight, 4),
+            "short_exposure": round(short_weight, 4),
+            "portfolio_beta_realized": (
+                round(beta_realized, 4) if beta_realized is not None else None
+            ),
+            "dollar_neutral": bool(dollar_neutral),
+            "beta_neutral": bool(beta_neutral_active),
+            "beta_neutral_requested": bool(beta_neutral),
+            "ridge_regularization": ridge_info,
+            "method": "long_short_market_neutral",
+        }
+
+    # ---- Original (long-only or unconstrained directional) path ---------
     def neg_sharpe(w):
         port_ret = mu @ w
         if current_weights is not None:
@@ -118,7 +250,6 @@ def mean_variance_optimize(
 
     constraints = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
 
-    cap = max(0.0, min(1.0, max_position_size))
     if long_only:
         bounds = [(0, cap) for _ in range(n)]
     else:
