@@ -74,6 +74,59 @@ interface SignalsResp {
   count: number;
 }
 
+interface AttributionData {
+  trade_count: number;
+  unique_tickers?: number;
+  period_return_pct?: number;
+  benchmark_return_pct?: number;
+  decomposition?: {
+    alpha_pct: number | null;
+    beta_contribution_pct: number;
+    residual_pct: number;
+  };
+  factor_loadings?: {
+    alpha: number | null;
+    beta: number | null;
+    r_squared: number | null;
+    residual_vol: number | null;
+  };
+  weights?: Record<string, number>;
+  error?: string;
+}
+
+interface FactorResp {
+  tickers: string[];
+  model: string;
+  alpha?: number | null;
+  beta?: number | null;
+  r_squared?: number | null;
+  residual_vol?: number | null;
+  factor_betas?: Record<string, number>;
+  alpha_pvalue?: number | null;
+  alpha_tstat?: number | null;
+  alpha_significant_at_5pct?: boolean;
+  n_observations?: number;
+  multi_factor?: {
+    alpha?: number | null;
+    alpha_pvalue?: number | null;
+    alpha_significant_at_5pct?: boolean;
+    factor_betas?: Record<string, number>;
+    factor_tstats?: Record<string, number>;
+    r_squared?: number | null;
+    adj_r_squared?: number | null;
+    residual_vol?: number | null;
+    model?: string;
+    n_observations?: number;
+    multicollinearity_flag?: boolean;
+    high_vif_factors?: string[];
+    error?: string;
+  };
+}
+
+interface PositionsResp {
+  positions: { ticker: string }[];
+}
+
 function Stat({
   label,
   value,
@@ -156,6 +209,11 @@ function aggregateHitRateByMonth(signals: SignalScore[]) {
 export default function TrackRecordPage() {
   const [summary, setSummary] = useState<ScorecardSummary | null>(null);
   const [signals, setSignals] = useState<SignalScore[]>([]);
+  const [attribution, setAttribution] = useState<AttributionData | null>(null);
+  const [factors, setFactors] = useState<FactorResp | null>(null);
+  const [factorModel, setFactorModel] = useState<"single" | "ff5_mom">("single");
+  const [factorLoading, setFactorLoading] = useState(false);
+  const [openTickers, setOpenTickers] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -164,17 +222,41 @@ export default function TrackRecordPage() {
     setLoading(true);
     setError(null);
     try {
-      const [s, sigResp] = await Promise.all([
+      const [s, sigResp, attr, pos] = await Promise.all([
         api.scorecardSummary() as Promise<ScorecardSummary>,
         api.scorecardSignals(200) as Promise<SignalsResp>,
+        api.attribution().catch(() => null) as Promise<AttributionData | null>,
+        api.positions().catch(() => null) as Promise<PositionsResp | null>,
       ]);
       setSummary(s);
       setSignals(sigResp?.signals ?? []);
+      setAttribution(attr);
+      const tickers = Array.from(
+        new Set((pos?.positions ?? []).map((p) => p.ticker).filter(Boolean))
+      ).slice(0, 8);
+      setOpenTickers(tickers);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to load track record";
       setError(msg);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadFactors(model: "single" | "ff5_mom") {
+    if (openTickers.length === 0) {
+      setError("Factor exposure needs at least one open position.");
+      return;
+    }
+    setFactorLoading(true);
+    try {
+      const f = (await api.factors(openTickers, model)) as FactorResp;
+      setFactors(f);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Factor regression failed";
+      setError(msg);
+    } finally {
+      setFactorLoading(false);
     }
   }
 
@@ -552,6 +634,332 @@ export default function TrackRecordPage() {
                 </table>
               )}
             </div>
+          </div>
+
+          {/* ─────────────────── Portfolio Attribution ─────────────────── */}
+          {attribution && !attribution.error && attribution.decomposition && (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+              <h2 className="text-[13px] font-medium text-text-primary mb-1">
+                Portfolio Attribution
+              </h2>
+              <p className="text-[11px] text-text-tertiary mb-4">
+                Decomposing actual book returns into alpha (idiosyncratic) vs
+                beta × market (factor exposure) vs residual. Run on your open
+                positions over the available history window.
+              </p>
+
+              <div className="grid grid-cols-3 gap-3 mb-4">
+                <Stat
+                  label="Portfolio Return"
+                  value={
+                    attribution.period_return_pct !== undefined
+                      ? `${attribution.period_return_pct >= 0 ? "+" : ""}${attribution.period_return_pct.toFixed(2)}%`
+                      : null
+                  }
+                  color={
+                    attribution.period_return_pct !== undefined && attribution.period_return_pct >= 0
+                      ? "text-signal-green"
+                      : "text-signal-red"
+                  }
+                />
+                <Stat
+                  label="SPY Benchmark"
+                  value={
+                    attribution.benchmark_return_pct !== undefined
+                      ? `${attribution.benchmark_return_pct >= 0 ? "+" : ""}${attribution.benchmark_return_pct.toFixed(2)}%`
+                      : null
+                  }
+                />
+                <Stat
+                  label="R-Squared"
+                  value={
+                    attribution.factor_loadings?.r_squared !== null && attribution.factor_loadings?.r_squared !== undefined
+                      ? attribution.factor_loadings.r_squared.toFixed(2)
+                      : null
+                  }
+                  help="% of portfolio return variance explained by market beta"
+                />
+              </div>
+
+              <div className="space-y-2 mb-4">
+                {[
+                  {
+                    label: "Alpha (skill)",
+                    value: attribution.decomposition.alpha_pct,
+                    bar: (attribution.decomposition.alpha_pct ?? 0) >= 0 ? "bg-signal-green" : "bg-signal-red",
+                    color: (attribution.decomposition.alpha_pct ?? 0) >= 0 ? "text-signal-green" : "text-signal-red",
+                  },
+                  {
+                    label: "Beta × Market",
+                    value: attribution.decomposition.beta_contribution_pct,
+                    bar: attribution.decomposition.beta_contribution_pct >= 0 ? "bg-accent" : "bg-signal-red",
+                    color: attribution.decomposition.beta_contribution_pct >= 0 ? "text-accent" : "text-signal-red",
+                  },
+                  {
+                    label: "Residual (noise)",
+                    value: attribution.decomposition.residual_pct,
+                    bar: "bg-signal-yellow",
+                    color: "text-signal-yellow",
+                  },
+                ].map((row) => (
+                  <div key={row.label} className="flex items-center gap-3">
+                    <span className="text-[11px] text-text-secondary w-32">{row.label}</span>
+                    <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${row.bar}`}
+                        style={{ width: `${Math.min(Math.abs(row.value ?? 0) * 5, 100)}%` }}
+                      />
+                    </div>
+                    <span className={`text-[12px] font-mono w-16 text-right ${row.color}`}>
+                      {row.value !== null && row.value !== undefined
+                        ? `${row.value >= 0 ? "+" : ""}${row.value.toFixed(2)}%`
+                        : "—"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+
+              {attribution.factor_loadings && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3 border-t border-border-primary">
+                  <div>
+                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Alpha (ann.)</p>
+                    <p
+                      className={`text-[13px] font-mono ${
+                        (attribution.factor_loadings.alpha ?? 0) >= 0 ? "text-signal-green" : "text-signal-red"
+                      }`}
+                    >
+                      {attribution.factor_loadings.alpha !== null && attribution.factor_loadings.alpha !== undefined
+                        ? `${attribution.factor_loadings.alpha >= 0 ? "+" : ""}${attribution.factor_loadings.alpha.toFixed(2)}%`
+                        : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Beta vs SPY</p>
+                    <p className="text-[13px] font-mono text-text-primary">
+                      {attribution.factor_loadings.beta !== null && attribution.factor_loadings.beta !== undefined
+                        ? attribution.factor_loadings.beta.toFixed(3)
+                        : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">R²</p>
+                    <p className="text-[13px] font-mono text-text-primary">
+                      {attribution.factor_loadings.r_squared !== null && attribution.factor_loadings.r_squared !== undefined
+                        ? attribution.factor_loadings.r_squared.toFixed(3)
+                        : "—"}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Residual Vol</p>
+                    <p className="text-[13px] font-mono text-text-primary">
+                      {attribution.factor_loadings.residual_vol !== null && attribution.factor_loadings.residual_vol !== undefined
+                        ? `${attribution.factor_loadings.residual_vol.toFixed(2)}%`
+                        : "—"}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {attribution?.error && (
+            <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+              <h2 className="text-[13px] font-medium text-text-primary mb-1">
+                Portfolio Attribution
+              </h2>
+              <p className="text-[12px] text-text-tertiary">
+                {attribution.error}. Attribution requires open trades with 3+ months of price
+                history per ticker.
+              </p>
+            </div>
+          )}
+
+          {/* ─────────────────── Factor Exposure ─────────────────── */}
+          <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+            <div className="flex items-baseline justify-between mb-1">
+              <h2 className="text-[13px] font-medium text-text-primary">
+                Factor Exposure
+              </h2>
+              <div className="flex items-center gap-2">
+                <div className="flex rounded-lg border border-border-primary overflow-hidden">
+                  <button
+                    onClick={() => setFactorModel("single")}
+                    className={`px-2.5 py-1 text-[11px] font-medium ${
+                      factorModel === "single"
+                        ? "bg-white text-bg-primary"
+                        : "text-text-tertiary hover:text-text-primary"
+                    }`}
+                  >
+                    Single-factor
+                  </button>
+                  <button
+                    onClick={() => setFactorModel("ff5_mom")}
+                    className={`px-2.5 py-1 text-[11px] font-medium ${
+                      factorModel === "ff5_mom"
+                        ? "bg-white text-bg-primary"
+                        : "text-text-tertiary hover:text-text-primary"
+                    }`}
+                  >
+                    FF5 + Mom
+                  </button>
+                </div>
+                <button
+                  onClick={() => loadFactors(factorModel)}
+                  disabled={factorLoading || openTickers.length === 0}
+                  className="rounded-lg px-3 py-1 text-[11px] font-medium bg-white/[0.07] hover:bg-white/[0.12] text-text-primary border border-border-primary disabled:opacity-50"
+                >
+                  {factorLoading ? "Computing…" : "Run"}
+                </button>
+              </div>
+            </div>
+            <p className="text-[11px] text-text-tertiary mb-3">
+              Factor regression on your open positions ({openTickers.length} tickers).
+              FF5 + Momentum uses ETF proxies (IWM, IWD/IWF, QUAL, USMV, MTUM).
+              {openTickers.length === 0 && " — Open at least one position to enable."}
+            </p>
+
+            {factors && (() => {
+              const usingMulti = !!factors.multi_factor && !factors.multi_factor.error;
+              const view = usingMulti
+                ? {
+                    alpha: factors.multi_factor!.alpha,
+                    beta: null as number | null,
+                    r_squared: factors.multi_factor!.r_squared,
+                    factor_betas: factors.multi_factor!.factor_betas,
+                    factor_tstats: factors.multi_factor!.factor_tstats,
+                    residual_vol: factors.multi_factor!.residual_vol,
+                    alpha_pvalue: factors.multi_factor!.alpha_pvalue,
+                    alpha_significant: factors.multi_factor!.alpha_significant_at_5pct,
+                    n_observations: factors.multi_factor!.n_observations,
+                    model_label: factors.multi_factor!.model || "FF5 + Momentum",
+                    multicollinearity: factors.multi_factor!.multicollinearity_flag,
+                    high_vif: factors.multi_factor!.high_vif_factors,
+                  }
+                : {
+                    alpha: factors.alpha,
+                    beta: factors.beta,
+                    r_squared: factors.r_squared,
+                    factor_betas: factors.factor_betas,
+                    factor_tstats: undefined as Record<string, number> | undefined,
+                    residual_vol: factors.residual_vol,
+                    alpha_pvalue: factors.alpha_pvalue,
+                    alpha_significant: factors.alpha_significant_at_5pct,
+                    n_observations: factors.n_observations,
+                    model_label: "Single-factor (CAPM)",
+                    multicollinearity: false,
+                    high_vif: undefined as string[] | undefined,
+                  };
+              return (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-text-quaternary uppercase tracking-wider">Model</span>
+                      <span className="text-[11px] font-mono text-text-primary">{view.model_label}</span>
+                      {view.n_observations && (
+                        <span className="text-[10px] text-text-quaternary">n={view.n_observations}</span>
+                      )}
+                    </div>
+                    {view.alpha_pvalue !== null && view.alpha_pvalue !== undefined && (
+                      <div
+                        className={`text-[10px] font-medium px-2 py-0.5 rounded ${
+                          view.alpha_significant
+                            ? "bg-signal-green/10 text-signal-green border border-signal-green/30"
+                            : "bg-signal-yellow/10 text-signal-yellow border border-signal-yellow/30"
+                        }`}
+                      >
+                        {view.alpha_significant ? "Alpha significant" : "Alpha not significant"} · p={view.alpha_pvalue.toFixed(3)}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className={`grid gap-3 ${usingMulti ? "grid-cols-2" : "grid-cols-3"}`}>
+                    <Stat
+                      label="Alpha (ann.)"
+                      value={
+                        view.alpha !== null && view.alpha !== undefined
+                          ? `${Number(view.alpha) >= 0 ? "+" : ""}${Number(view.alpha).toFixed(2)}%`
+                          : null
+                      }
+                      color={Number(view.alpha ?? 0) >= 0 ? "text-signal-green" : "text-signal-red"}
+                    />
+                    {!usingMulti && (
+                      <Stat
+                        label="Beta"
+                        value={view.beta !== null && view.beta !== undefined ? Number(view.beta).toFixed(3) : null}
+                      />
+                    )}
+                    <Stat
+                      label="R-Squared"
+                      value={view.r_squared !== null && view.r_squared !== undefined ? Number(view.r_squared).toFixed(3) : null}
+                    />
+                  </div>
+
+                  {view.factor_betas && (
+                    <div>
+                      <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-2">
+                        Factor Exposures
+                      </p>
+                      <div className="space-y-1.5">
+                        {Object.entries(view.factor_betas).map(([factor, beta]) => {
+                          const t = view.factor_tstats?.[factor];
+                          const sig = t !== null && t !== undefined && Math.abs(t) >= 1.96;
+                          return (
+                            <div key={factor} className="flex items-center gap-3">
+                              <span className="text-[11px] text-text-secondary w-28 capitalize">
+                                {factor.replace(/_/g, " ")}
+                              </span>
+                              <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${Number(beta) >= 0 ? "bg-accent" : "bg-signal-red"}`}
+                                  style={{
+                                    width: `${Math.min(Math.abs(Number(beta)) * 50, 100)}%`,
+                                    marginLeft: Number(beta) < 0 ? "auto" : 0,
+                                  }}
+                                />
+                              </div>
+                              <span className="text-[11px] font-mono text-text-primary w-14 text-right">
+                                {beta !== null && beta !== undefined ? Number(beta).toFixed(3) : "—"}
+                              </span>
+                              {t !== null && t !== undefined && (
+                                <span
+                                  className={`text-[10px] font-mono w-14 text-right ${
+                                    sig ? "text-signal-green" : "text-text-quaternary"
+                                  }`}
+                                >
+                                  t={t.toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <p className="text-[10px] text-text-quaternary mt-2">
+                        |t| ≥ 1.96 indicates significance at 5%.
+                      </p>
+                    </div>
+                  )}
+
+                  {view.multicollinearity && view.high_vif && view.high_vif.length > 0 && (
+                    <div className="rounded-lg border border-signal-yellow/40 bg-signal-yellow/10 p-2 text-[11px] text-signal-yellow">
+                      Multicollinearity flagged on: {view.high_vif.join(", ")} (VIF &gt; 10). Interpret these betas carefully.
+                    </div>
+                  )}
+
+                  {view.residual_vol !== null && view.residual_vol !== undefined && (
+                    <p className="text-[11px] text-text-quaternary">
+                      Residual vol (idiosyncratic risk):{" "}
+                      <span className="font-mono text-text-primary">
+                        {Number(view.residual_vol).toFixed(2)}%
+                      </span>
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+
+            {!factors && openTickers.length > 0 && (
+              <p className="text-[11px] text-text-tertiary">Click Run to compute.</p>
+            )}
           </div>
         </>
       )}

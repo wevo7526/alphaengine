@@ -58,9 +58,20 @@ function IconCompare(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconStack(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M2 5l6-3 6 3-6 3-6-3z" />
+      <path d="M2 9l6 3 6-3" />
+      <path d="M2 12l6 3 6-3" />
+    </svg>
+  );
+}
+
 const NAV = [
   { href: "/", label: "Home", icon: IconHome },
   { href: "/analysis", label: "Analysis", icon: IconChart },
+  { href: "/memos", label: "Analyses", icon: IconStack },
   { href: "/portfolio", label: "Portfolio", icon: IconBriefcase },
   { href: "/risk", label: "Risk", icon: IconShield },
   { href: "/compare", label: "Compare", icon: IconCompare },
