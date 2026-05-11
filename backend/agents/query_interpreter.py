@@ -377,6 +377,7 @@ class QueryInterpreter:
         callbacks: list | None = None,
         macro_context: dict | None = None,
         scorecard: dict | None = None,
+        thread_context: dict | None = None,
     ) -> AnalysisPlan:
         """Parse a freeform query into a structured AnalysisPlan."""
         logger.info(f"[query_interpreter] Interpreting: {query}")
@@ -423,10 +424,45 @@ class QueryInterpreter:
                 "signal to reduce conviction in this query type.\n"
             )
 
+        # Thread context — when this query is a follow-up, the Interpreter
+        # MUST classify the query into one of the seven query_class buckets
+        # and tailor the plan around the prior tickers/themes/decision.
+        thread_block = ""
+        if thread_context and thread_context.get("is_followup"):
+            prior_tickers = thread_context.get("prior_tickers") or []
+            prior_themes = thread_context.get("prior_themes") or []
+            prior_decision = thread_context.get("prior_decision") or "n/a"
+            prior_titles = thread_context.get("prior_titles") or []
+            prior_summary = thread_context.get("prior_summary_compressed") or ""
+            thread_block = (
+                "\n\n=== FOLLOW-UP CONTEXT ===\n"
+                f"This is a follow-up on an existing research thread "
+                f"(sequence #{thread_context.get('sequence', 0)}).\n"
+                f"Prior tickers in thread: {', '.join(prior_tickers[:20]) or 'none'}\n"
+                f"Prior themes: {', '.join(prior_themes[:10]) or 'none'}\n"
+                f"Most recent Decision Gate: {prior_decision}\n"
+                f"Recent memo titles: {' | '.join(prior_titles)}\n"
+                f"Most recent executive summary (compressed):\n{prior_summary}\n\n"
+                "Classify this query into ONE of these query_class values and "
+                "set `query_class` in your plan accordingly:\n"
+                "  fresh              — actually a new topic, ignore prior context\n"
+                "  drilldown_ticker   — go deeper on a specific name from prior memo\n"
+                "  drilldown_theme    — go deeper on a theme from prior memo\n"
+                "  risk_check         — stress / VaR check on existing book\n"
+                "  validation         — challenge / falsify the prior thesis\n"
+                "  time_horizon_shift — same names, different time horizon\n"
+                "  comparison         — A-vs-B compare named tickers\n"
+                "When the user query references 'the small caps', 'those names', "
+                "'go deeper', 'what if', 'worst case', 'compare' — bias toward the "
+                "corresponding class above and INHERIT relevant tickers / themes "
+                "from the thread. Do NOT re-issue a full universe scan if the user "
+                "is asking to drill in.\n"
+            )
+
         config = {"callbacks": callbacks} if callbacks else {}
         result = await self.llm.ainvoke([
             SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Query: {query}{macro_block}{scorecard_block}\n\nProduce the analysis plan as JSON."),
+            HumanMessage(content=f"Query: {query}{macro_block}{scorecard_block}{thread_block}\n\nProduce the analysis plan as JSON."),
         ], config=config)
 
         text = result.content.strip()

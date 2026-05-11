@@ -149,6 +149,19 @@ class IntelligenceMemoRecord(Base):
     # evidence_url}], by_tool: {tool_name: count}, by_source_type: {...}}.
     # Surfaced to the UI as a "View sources" panel so a PM can audit any claim.
     lineage = Column(JSON, default=dict)
+    # Phase E — conversational thread layer. A research thread is an ordered
+    # chain of memos. First memo: thread_id = its own id, parent_memo_id = NULL,
+    # sequence = 0. Follow-up memos inherit thread_id, set parent_memo_id to
+    # the immediately preceding memo, increment sequence. thread_summary is a
+    # compressed running narrative the CIO can read to maintain continuity.
+    thread_id = Column(String, nullable=True, index=True)
+    parent_memo_id = Column(String, nullable=True, index=True)
+    sequence_in_thread = Column(Integer, default=0)
+    thread_summary = Column(Text, nullable=True)
+    # Query class (fresh | drilldown_ticker | drilldown_theme | risk_check |
+    # validation | time_horizon_shift | comparison). Set by the Interpreter
+    # so the consumer can show which kind of follow-up produced the memo.
+    query_class = Column(String(40), nullable=True)
 
     # /api/signals/latest filters by user_id ordered by created_at desc.
     # Without this composite, every call scans the whole table.
@@ -180,6 +193,12 @@ class TradeRecord(Base):
     realized_pnl = Column(Float)
     opened_at = Column(DateTime(timezone=True), server_default=func.now())
     closed_at = Column(DateTime(timezone=True))
+    # Phase E — working-order tracking. Orthogonal to `status` (trade lifecycle).
+    # active   = PM is actively working this idea
+    # shelved  = deprioritized, may revisit
+    # dismissed = explicitly rejected, hide from the active book
+    working_status = Column(String(20), default="active")
+    watchlist_id = Column(String, nullable=True, index=True)
 
     # /api/portfolio/positions filters by user_id + status (open), and memo_id
     # joins are common. Indexes sized for the actual query shape.

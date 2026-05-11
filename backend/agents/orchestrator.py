@@ -53,6 +53,11 @@ class ResearchDeskState(TypedDict):
     # Phase D — accumulated intermediate_steps per agent for the provenance
     # block. Not serialized over the API; stripped before client return.
     tool_steps_by_agent: dict | None
+    # Phase E — conversational thread context (from prior memos when the
+    # request specifies parent_memo_id). Drives Interpreter classification
+    # and downstream agent context. Empty dict for fresh threads.
+    parent_memo_id: str | None
+    thread_context: dict | None
 
 
 async def _with_timeout(coro, seconds: int, label: str):
@@ -62,6 +67,102 @@ async def _with_timeout(coro, seconds: int, label: str):
     except asyncio.TimeoutError:
         logger.error(f"[orchestrator] {label} timed out after {seconds}s")
         return None
+
+
+async def _load_thread_context(parent_memo_id: str | None) -> dict:
+    """
+    Build a compact context dict from a thread's history. Returned shape:
+
+        {
+          "is_followup": bool,
+          "thread_id": str | None,
+          "parent_memo_id": str | None,
+          "sequence": int,                # sequence_in_thread for the NEW memo
+          "prior_tickers": [str],         # union across all prior memos
+          "prior_themes": [str],
+          "prior_decision": str | None,   # most recent GO/NO-GO/WATCH
+          "prior_query_class": str | None,
+          "prior_titles": [str],          # for display in CIO prompt
+          "prior_summary_compressed": str # last memo's exec summary (capped)
+        }
+
+    Returns {"is_followup": False, ...zero-valued fields} when no parent
+    is given — the orchestrator treats this as a fresh thread. Failures
+    (parent_memo_id not found in DB) downgrade to fresh thread silently.
+    """
+    empty = {
+        "is_followup": False,
+        "thread_id": None,
+        "parent_memo_id": None,
+        "sequence": 0,
+        "prior_tickers": [],
+        "prior_themes": [],
+        "prior_decision": None,
+        "prior_query_class": None,
+        "prior_titles": [],
+        "prior_summary_compressed": "",
+    }
+    if not parent_memo_id:
+        return empty
+
+    try:
+        from db.repositories import MemoRepository
+        thread_id, parent_id, sequence = await MemoRepository.resolve_thread_for_parent(parent_memo_id)
+        if not parent_id:
+            # Parent was specified but not found — treat as fresh thread
+            logger.warning(f"[orchestrator] parent_memo_id={parent_memo_id} not found; starting fresh thread")
+            return empty
+
+        chain = await MemoRepository.get_thread(thread_id) if thread_id else []
+        if not chain:
+            # Thread row exists but get_thread returned empty (shouldn't happen
+            # but defensive); use just the parent
+            parent = await MemoRepository.get_by_id(parent_id)
+            chain = [parent] if parent else []
+
+        all_tickers: set[str] = set()
+        all_themes: set[str] = set()
+        titles: list[str] = []
+        last_decision: str | None = None
+        last_qclass: str | None = None
+        last_summary = ""
+        for m in chain:
+            if not m:
+                continue
+            tickers = m.get("tickers_analyzed") or []
+            if isinstance(tickers, list):
+                all_tickers.update(t for t in tickers if isinstance(t, str))
+            themes = m.get("themes") or []
+            if isinstance(themes, list):
+                all_themes.update(t for t in themes if isinstance(t, str))
+            title = m.get("title")
+            if title and isinstance(title, str):
+                titles.append(title)
+            # The "most recent" loop iteration wins for decision + summary
+            last_decision = m.get("decision") or last_decision
+            last_qclass = m.get("query_class") or last_qclass
+            es = m.get("executive_summary") or ""
+            if es:
+                last_summary = es
+
+        # Compress prior summary to keep prompt tokens bounded
+        compressed = last_summary[:1500] + ("…" if len(last_summary) > 1500 else "")
+
+        return {
+            "is_followup": True,
+            "thread_id": thread_id,
+            "parent_memo_id": parent_id,
+            "sequence": int(sequence),
+            "prior_tickers": sorted(all_tickers),
+            "prior_themes": sorted(all_themes),
+            "prior_decision": last_decision,
+            "prior_query_class": last_qclass,
+            "prior_titles": titles[-5:],
+            "prior_summary_compressed": compressed,
+        }
+    except Exception as e:  # noqa: BLE001 — never let thread load break the run
+        logger.warning(f"[orchestrator] _load_thread_context failed: {e}")
+        return empty
 
 
 async def _fetch_macro_context() -> dict:
@@ -105,11 +206,18 @@ async def run_interpreter(state: ResearchDeskState) -> ResearchDeskState:
             sc = await _fetch_scorecard_for_calibration(state.get("user_id"))
             state["scorecard_data"] = sc
 
+        # Load thread context if this is a follow-up query.
+        tc = state.get("thread_context")
+        if tc is None:
+            tc = await _load_thread_context(state.get("parent_memo_id"))
+            state["thread_context"] = tc
+
         plan = await _with_timeout(
             _query_interpreter.interpret(
                 state["query"],
                 macro_context=macro_ctx,
                 scorecard=sc,
+                thread_context=tc,
             ),
             seconds=45, label="Query Interpreter"
         )
@@ -587,7 +695,11 @@ def get_research_desk_graph():
     return _graph
 
 
-async def run_research_desk(query: str, user_id: str | None = None) -> IntelligenceMemo:
+async def run_research_desk(
+    query: str,
+    user_id: str | None = None,
+    parent_memo_id: str | None = None,
+) -> IntelligenceMemo:
     """Main entry point — run the full research desk pipeline on a freeform query."""
     logger.info(f"[orchestrator] Starting research desk for: {query}")
 
@@ -606,6 +718,9 @@ async def run_research_desk(query: str, user_id: str | None = None) -> Intellige
         "data_quality": None,
         "error": None,
         "current_phase": "idle",
+        "tool_steps_by_agent": None,
+        "parent_memo_id": parent_memo_id,
+        "thread_context": None,
     }
 
     final_state = await graph.ainvoke(initial_state)
@@ -650,6 +765,16 @@ async def run_research_desk(query: str, user_id: str | None = None) -> Intellige
     memo_data["secondary_universe"] = plan.get("secondary_universe", []) or []
     memo_data["target_idea_count"] = int(plan.get("target_idea_count", 10) or 10)
     memo_data["required_style_labels"] = plan.get("required_style_labels", []) or []
+
+    # Phase E — thread metadata. The orchestrator sets these so the persist
+    # layer can write them into the new memo row. thread_id is left None when
+    # this is a fresh thread — main.py will backfill it to the memo's own id
+    # after the row is inserted (so a thread with one memo is still queryable).
+    tc = final_state.get("thread_context") or {}
+    memo_data["thread_id"] = tc.get("thread_id")
+    memo_data["parent_memo_id"] = tc.get("parent_memo_id")
+    memo_data["sequence_in_thread"] = int(tc.get("sequence", 0) or 0)
+    memo_data["query_class"] = plan.get("query_class", "fresh")
 
     # Quality + structural integrity signals
     memo_data["data_quality"] = final_state.get("data_quality") or "complete"

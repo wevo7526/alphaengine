@@ -41,6 +41,61 @@ class MemoRepository:
             ]
 
     @staticmethod
+    async def get_by_id(memo_id: str) -> dict | None:
+        """Fetch a single memo by id. Returns None when not found."""
+        async with async_session() as session:
+            result = await session.execute(
+                select(IntelligenceMemoRecord).where(IntelligenceMemoRecord.id == memo_id)
+            )
+            r = result.scalar_one_or_none()
+            if r is None:
+                return None
+            return {c.name: getattr(r, c.name) for c in r.__table__.columns}
+
+    @staticmethod
+    async def get_thread(thread_id: str) -> list[dict]:
+        """
+        Return all memos in a thread, ordered by sequence_in_thread.
+        Used by the orchestrator to load the full conversational context.
+        """
+        async with async_session() as session:
+            result = await session.execute(
+                select(IntelligenceMemoRecord)
+                .where(IntelligenceMemoRecord.thread_id == thread_id)
+                .order_by(IntelligenceMemoRecord.sequence_in_thread.asc())
+            )
+            return [
+                {c.name: getattr(r, c.name) for c in r.__table__.columns}
+                for r in result.scalars().all()
+            ]
+
+    @staticmethod
+    async def resolve_thread_for_parent(parent_memo_id: str | None) -> tuple[str | None, str | None, int]:
+        """
+        Given a parent_memo_id (or None for a fresh thread), return:
+            (thread_id, parent_memo_id, sequence_in_thread)
+        For a fresh thread, thread_id is None — the orchestrator will set
+        it to the newly created memo's id after save (single-memo thread).
+        For a continuation, thread_id propagates from the parent and sequence
+        increments.
+        """
+        if not parent_memo_id:
+            return None, None, 0
+        async with async_session() as session:
+            result = await session.execute(
+                select(IntelligenceMemoRecord).where(
+                    IntelligenceMemoRecord.id == parent_memo_id
+                )
+            )
+            parent = result.scalar_one_or_none()
+            if parent is None:
+                logger.warning(f"parent_memo_id={parent_memo_id} not found — starting new thread")
+                return None, None, 0
+            parent_thread_id = getattr(parent, "thread_id", None) or parent.id
+            parent_seq = int(getattr(parent, "sequence_in_thread", 0) or 0)
+            return parent_thread_id, parent.id, parent_seq + 1
+
+    @staticmethod
     async def get_recent_tickers_for_user(
         user_id: str | None, days: int = 14, limit_memos: int = 50,
     ) -> list[str]:

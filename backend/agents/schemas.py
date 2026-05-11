@@ -142,6 +142,30 @@ class AnalysisPlan(BaseModel):
     #    "small_cap", "pair_trade", "hedge", "convexity"]
     required_style_labels: list[str] = Field(default_factory=list)
 
+    # Phase E — query classification. When parent_memo_id is present, the
+    # Interpreter classifies the query into one of these categories so the
+    # rest of the pipeline can tailor its behavior. "fresh" is the default
+    # for first-in-thread queries.
+    #   fresh              — new research from scratch
+    #   drilldown_ticker   — "go deeper on X" (named ticker from prior memo)
+    #   drilldown_theme    — "go deeper on theme Y"
+    #   risk_check         — "stress test what we have"
+    #   validation         — "challenge the bull case" / falsification pass
+    #   time_horizon_shift — "what about 3 months out"
+    #   comparison         — "A vs B factor breakdown"
+    query_class: str = "fresh"
+
+    @field_validator("query_class", mode="before")
+    @classmethod
+    def coerce_query_class(cls, v):
+        allowed = {
+            "fresh", "drilldown_ticker", "drilldown_theme",
+            "risk_check", "validation", "time_horizon_shift", "comparison",
+        }
+        if isinstance(v, str) and v.strip().lower() in allowed:
+            return v.strip().lower()
+        return "fresh"
+
     @field_validator("question_type", mode="before")
     @classmethod
     def coerce_question_type(cls, v):
@@ -368,6 +392,13 @@ class IntelligenceMemo(BaseModel):
     # so a PM can audit any number months later. See infra/lineage.py for
     # the extraction logic.
     lineage: dict = Field(default_factory=dict)  # {sources, by_tool, by_source_type, ...}
+    # Phase E — conversational thread metadata. Set by the orchestrator
+    # based on the request's parent_memo_id.
+    thread_id: Optional[str] = None
+    parent_memo_id: Optional[str] = None
+    sequence_in_thread: int = 0
+    thread_summary: Optional[str] = None
+    query_class: str = "fresh"
     plan_confidence: int = 0
     plan_confidence_reason: str = ""
     # New: end-to-end pipeline quality + structural integrity signals

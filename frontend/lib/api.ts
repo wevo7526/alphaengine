@@ -70,10 +70,12 @@ export const api = {
   systemInfo: () => request("/api/system/info"),
   authMe: () => request<{ user_id: string; authenticated: boolean }>("/api/auth/me"),
 
-  analyze: (query: string) =>
+  analyze: (query: string, parent_memo_id?: string | null) =>
     request("/api/analyze", {
       method: "POST",
-      body: JSON.stringify({ query }),
+      body: JSON.stringify(
+        parent_memo_id ? { query, parent_memo_id } : { query }
+      ),
     }),
 
   analyzeStreamUrl: () => `${getApiBase()}/api/analyze/stream`,
@@ -167,6 +169,20 @@ export const api = {
       `/api/data/events?lookforward_days=${lookforwardDays}` +
         (eventTypes ? `&event_types=${eventTypes}` : "")
     ),
+
+  // Phase E — conversational thread continuation
+  memoThread: (memoId: string) => request(`/api/memo/${memoId}/thread`),
+
+  // Phase E — working-order status update on trades
+  updateTradeStatus: (
+    tradeId: string,
+    working_status: "active" | "shelved" | "dismissed",
+    watchlist_id?: string | null
+  ) =>
+    request(`/api/portfolio/trade/${tradeId}/status`, {
+      method: "PATCH",
+      body: JSON.stringify({ working_status, watchlist_id }),
+    }),
 
   // Risk gate preview
   riskCheck: (ticker: string, direction: string, size_pct: number) =>

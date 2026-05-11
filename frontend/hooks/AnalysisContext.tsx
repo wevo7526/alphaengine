@@ -6,7 +6,7 @@ import { useAnalysis, type AnalysisRun } from "./useAnalysis";
 interface AnalysisContextType {
   runs: AnalysisRun[];
   activeRun: string | null;
-  analyze: (query: string) => Promise<void>;
+  analyze: (query: string, parent_memo_id?: string | null) => Promise<void>;
   removeRun: (id: string) => void;
 }
 

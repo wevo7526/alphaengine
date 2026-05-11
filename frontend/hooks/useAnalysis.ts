@@ -178,7 +178,7 @@ export function useAnalysis() {
   );
 
   const analyze = useCallback(
-    async (query: string) => {
+    async (query: string, parent_memo_id?: string | null) => {
       const id = `${Date.now()}`;
       const run: AnalysisRun = {
         id,
@@ -210,10 +210,11 @@ export function useAnalysis() {
           }
         } catch { /* no auth */ }
 
+        const body = parent_memo_id ? { query, parent_memo_id } : { query };
         const response = await fetch(streamUrl, {
           method: "POST",
           headers,
-          body: JSON.stringify({ query }),
+          body: JSON.stringify(body),
           signal: abortController.signal,
         });
 

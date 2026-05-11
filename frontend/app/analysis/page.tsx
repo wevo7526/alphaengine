@@ -12,13 +12,14 @@ function AnalysisView() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // Auto-submit when navigated from a scan finding (?q=...)
+  // Auto-submit when navigated from a memo follow-up (?q=...&parent=memo_id)
+  // or a scan finding (?q=...).
   useEffect(() => {
     const q = searchParams.get("q");
+    const parent = searchParams.get("parent");
     if (q && !activeRun) {
-      // Clear the query param, then submit
       router.replace("/analysis");
-      analyze(q.trim());
+      analyze(q.trim(), parent || undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);

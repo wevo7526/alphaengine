@@ -110,6 +110,15 @@ async def _migrate_columns() -> None:
         ("morning_reports", "user_id", "TEXT"),
         # Phase D — provenance / lineage for memos.
         ("intelligence_memos", "lineage", json_col_type),
+        # Phase E — conversational thread layer for memos.
+        ("intelligence_memos", "thread_id", "TEXT"),
+        ("intelligence_memos", "parent_memo_id", "TEXT"),
+        ("intelligence_memos", "sequence_in_thread", "INTEGER DEFAULT 0"),
+        ("intelligence_memos", "thread_summary", "TEXT"),
+        ("intelligence_memos", "query_class", "TEXT"),
+        # Phase E — working-order tracking on trades.
+        ("trades", "working_status", "TEXT DEFAULT 'active'"),
+        ("trades", "watchlist_id", "TEXT"),
     ]
     for table, column, col_type in column_migrations:
         try:

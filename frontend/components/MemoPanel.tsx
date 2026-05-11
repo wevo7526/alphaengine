@@ -593,6 +593,15 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
           </div>
           <div className="shrink-0 flex items-center gap-1">
             {memo.id && (
+              <a
+                href={`/analysis?q=${encodeURIComponent("Follow up: ")}&parent=${memo.id}`}
+                className="px-2 py-1 rounded-lg text-[11px] font-medium text-text-quaternary hover:text-accent hover:bg-accent/10 transition-colors"
+                title="Continue this research thread"
+              >
+                Follow up
+              </a>
+            )}
+            {memo.id && (
               <button
                 onClick={handleExport}
                 disabled={exporting}
@@ -614,6 +623,19 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
             )}
           </div>
         </div>
+        {/* Thread badge — show when this memo is part of a thread */}
+        {memo.thread_id && (memo.sequence_in_thread ?? 0) > 0 && (
+          <div className="mb-2 flex items-center gap-2 text-[10px] text-text-quaternary">
+            <span className="inline-flex items-center gap-1 rounded-md border border-border-primary bg-bg-primary px-2 py-0.5">
+              Thread #{memo.sequence_in_thread}
+            </span>
+            {memo.query_class && memo.query_class !== "fresh" && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-accent/30 bg-accent/10 text-accent px-2 py-0.5">
+                {memo.query_class.replace(/_/g, " ")}
+              </span>
+            )}
+          </div>
+        )}
         {memo.decision_reason && (
           <p className="text-[11px] text-text-tertiary mb-3 italic">
             {memo.decision_reason}

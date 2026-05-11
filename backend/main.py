@@ -238,6 +238,11 @@ async def auth_me(request: Request):
 
 class AnalyzeRequest(BaseModel):
     query: str
+    # Optional follow-up handle. When provided, the orchestrator loads
+    # ThreadContext (prior tickers/themes/decision/summary) and the
+    # Interpreter classifies the query into one of the seven query_class
+    # buckets. The new memo inherits thread_id and bumps sequence_in_thread.
+    parent_memo_id: str | None = None
 
 
 @app.post("/api/analyze")
@@ -252,12 +257,18 @@ async def analyze(request: AnalyzeRequest, req: Request):
     await analysis_status.set(query_id, {"status": "running", "phase": "interpreting"})
 
     try:
-        memo = await run_research_desk(query, user_id=user_id)
+        memo = await run_research_desk(
+            query, user_id=user_id, parent_memo_id=request.parent_memo_id,
+        )
         result = memo.model_dump(mode="json")
 
         # Persist to database — wrap so DB errors don't kill the response.
         try:
             async with async_session() as session:
+                # When this is a fresh thread (no parent), thread_id is None
+                # on the memo object. We backfill it to the memo's own id after
+                # insert so single-memo threads are still queryable by thread_id.
+                resolved_thread_id = memo.thread_id  # None for fresh
                 record = IntelligenceMemoRecord(
                     user_id=user_id,
                     query=memo.query,
@@ -275,11 +286,26 @@ async def analyze(request: AnalyzeRequest, req: Request):
                     tickers_analyzed=memo.tickers_analyzed,
                     themes=memo.themes,
                     lineage=memo.lineage or {},
+                    thread_id=resolved_thread_id,
+                    parent_memo_id=memo.parent_memo_id,
+                    sequence_in_thread=memo.sequence_in_thread,
+                    thread_summary=memo.thread_summary,
+                    query_class=memo.query_class,
                 )
                 session.add(record)
                 await session.commit()
+                # Backfill thread_id to the new memo's own id when fresh
+                if resolved_thread_id is None:
+                    record.thread_id = record.id
+                    await session.commit()
                 result["id"] = record.id
-                logger.info(f"Memo persisted: {record.id} for user {user_id}")
+                result["thread_id"] = record.thread_id
+                result["parent_memo_id"] = record.parent_memo_id
+                result["sequence_in_thread"] = record.sequence_in_thread
+                logger.info(
+                    f"Memo persisted: {record.id} thread={record.thread_id} "
+                    f"seq={record.sequence_in_thread} class={record.query_class} user={user_id}"
+                )
         except Exception as db_err:
             logger.error(f"DB persist failed (non-fatal): {db_err}")
 
@@ -1598,6 +1624,79 @@ async def close_trade(trade_id: str, req: CloseTradeRequest, request: Request):
         return {"id": trade_id, "status": "closed", "realized_pnl_pct": round(pnl_pct, 2)}
 
 
+class TradeStatusUpdate(BaseModel):
+    working_status: str  # active | shelved | dismissed
+    watchlist_id: str | None = None
+
+
+@app.patch("/api/portfolio/trade/{trade_id}/status")
+async def update_trade_status(trade_id: str, payload: TradeStatusUpdate, request: Request):
+    """
+    Update a trade's working-order status. Orthogonal to the open/closed
+    lifecycle — a trade can be open AND shelved (PM is reconsidering).
+
+    Allowed working_status values: active | shelved | dismissed.
+    Optionally re-assigns the trade to a different watchlist.
+    """
+    from db.models import TradeRecord
+    from sqlalchemy import update as sql_update
+
+    allowed = {"active", "shelved", "dismissed"}
+    if payload.working_status not in allowed:
+        raise HTTPException(status_code=400, detail=f"working_status must be one of {sorted(allowed)}")
+
+    user_id = require_user_id(request)
+    async with async_session() as session:
+        result = await session.execute(
+            select(TradeRecord).where(
+                TradeRecord.id == trade_id,
+                TradeRecord.user_id == user_id,
+            )
+        )
+        trade = result.scalar_one_or_none()
+        if not trade:
+            raise HTTPException(status_code=404, detail="Trade not found")
+
+        updates = {"working_status": payload.working_status}
+        if payload.watchlist_id is not None:
+            # Empty string clears the assignment
+            updates["watchlist_id"] = payload.watchlist_id or None
+
+        await session.execute(
+            sql_update(TradeRecord).where(TradeRecord.id == trade_id).values(**updates)
+        )
+        await session.commit()
+        return {
+            "id": trade_id,
+            "working_status": payload.working_status,
+            "watchlist_id": updates.get("watchlist_id"),
+        }
+
+
+@app.get("/api/memo/{memo_id}/thread")
+async def get_memo_thread(memo_id: str, request: Request):
+    """
+    Return the full thread containing this memo, ordered by sequence.
+    Used by the frontend to render the conversational chain.
+    """
+    from db.repositories import MemoRepository
+    user_id = require_user_id(request)
+    memo = await MemoRepository.get_by_id(memo_id)
+    if not memo:
+        raise HTTPException(status_code=404, detail="Memo not found")
+    if memo.get("user_id") not in (None, user_id):
+        raise HTTPException(status_code=403, detail="Cross-user access denied")
+    thread_id = memo.get("thread_id") or memo.get("id")
+    chain = await MemoRepository.get_thread(thread_id) if thread_id else [memo]
+    # Filter cross-user just in case
+    chain = [m for m in chain if m and m.get("user_id") in (None, user_id)]
+    return {
+        "thread_id": thread_id,
+        "memos": chain,
+        "n_memos": len(chain),
+    }
+
+
 @app.post("/api/portfolio/flush")
 async def flush_positions(req: Request, scope: str = "open"):
     """
@@ -2532,6 +2631,14 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         except Exception as e:
             logger.debug(f"[stream] interpreter prefetch skipped: {e}")
 
+        # Load thread context for follow-up queries.
+        try:
+            from agents.orchestrator import _load_thread_context
+            thread_ctx = await _load_thread_context(request.parent_memo_id)
+        except Exception as e:
+            logger.warning(f"[stream] thread context load failed: {e}")
+            thread_ctx = {}
+
         try:
             plan = await _with_timeout(
                 _query_interpreter.interpret(
@@ -2539,6 +2646,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                     callbacks=[qi_cb],
                     macro_context=macro_context_for_interp,
                     scorecard=scorecard_for_interp,
+                    thread_context=thread_ctx,
                 ),
                 seconds=45, label="QI",
             )
@@ -2867,6 +2975,12 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         memo_data["target_idea_count"] = int(plan_data.get("target_idea_count", 10) or 10)
         memo_data["required_style_labels"] = plan_data.get("required_style_labels", []) or []
 
+        # Phase E — thread metadata propagated from the loaded thread_ctx
+        memo_data["thread_id"] = thread_ctx.get("thread_id") if thread_ctx else None
+        memo_data["parent_memo_id"] = thread_ctx.get("parent_memo_id") if thread_ctx else None
+        memo_data["sequence_in_thread"] = int(thread_ctx.get("sequence", 0) or 0) if thread_ctx else 0
+        memo_data["query_class"] = plan_data.get("query_class", "fresh")
+
         # Quality + structural integrity signals
         if isinstance(research_data, dict):
             memo_data["sub_question_coverage"] = research_data.get("sub_question_coverage", []) or []
@@ -2926,10 +3040,22 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         tickers_analyzed=memo.tickers_analyzed,
                         themes=memo.themes,
                         lineage=memo.lineage or {},
+                        thread_id=memo.thread_id,
+                        parent_memo_id=memo.parent_memo_id,
+                        sequence_in_thread=memo.sequence_in_thread,
+                        thread_summary=memo.thread_summary,
+                        query_class=memo.query_class,
                     )
                     session.add(record)
                     await session.commit()
+                    # Backfill thread_id to the memo's own id on fresh threads
+                    if record.thread_id is None:
+                        record.thread_id = record.id
+                        await session.commit()
                     result["id"] = record.id
+                    result["thread_id"] = record.thread_id
+                    result["parent_memo_id"] = record.parent_memo_id
+                    result["sequence_in_thread"] = record.sequence_in_thread
             except Exception as db_err:
                 logger.warning(f"[stream] DB persist failed (non-fatal): {db_err}")
 

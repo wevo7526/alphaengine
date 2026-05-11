@@ -90,6 +90,12 @@ export interface IntelligenceMemo {
     ungrounded_count?: number;
     desk_count?: number;
   };
+  // Phase E — conversational thread metadata.
+  thread_id?: string | null;
+  parent_memo_id?: string | null;
+  sequence_in_thread?: number;
+  thread_summary?: string | null;
+  query_class?: string;
   // Phase D — full tool-call lineage. Every SEC accession, FRED series,
   // market quote, screen output that produced data for this memo.
   lineage?: {
