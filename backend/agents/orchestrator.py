@@ -50,6 +50,9 @@ class ResearchDeskState(TypedDict):
     data_quality: str | None
     error: str | None
     current_phase: str
+    # Phase D — accumulated intermediate_steps per agent for the provenance
+    # block. Not serialized over the API; stripped before client return.
+    tool_steps_by_agent: dict | None
 
 
 async def _with_timeout(coro, seconds: int, label: str):
@@ -175,6 +178,11 @@ async def run_research(state: ResearchDeskState) -> ResearchDeskState:
         state["research_data"] = _research_completeness_check(
             state.get("plan_data") or {}, output.output
         )
+    # Accumulate tool calls for the provenance lineage block.
+    if output and output.intermediate_steps:
+        steps = state.get("tool_steps_by_agent") or {}
+        steps["research_analyst"] = list(output.intermediate_steps)
+        state["tool_steps_by_agent"] = steps
     return state
 
 
@@ -202,6 +210,11 @@ async def run_risk(state: ResearchDeskState) -> ResearchDeskState:
         }
     else:
         state["risk_data"] = output.output
+    # Accumulate tool calls for the provenance lineage block.
+    if output and output.intermediate_steps:
+        steps = state.get("tool_steps_by_agent") or {}
+        steps["risk_manager"] = list(output.intermediate_steps)
+        state["tool_steps_by_agent"] = steps
     return state
 
 
@@ -285,6 +298,11 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
         }
     else:
         state["strategy_data"] = output.output
+    # Accumulate tool calls for the provenance lineage block.
+    if output and output.intermediate_steps:
+        steps = state.get("tool_steps_by_agent") or {}
+        steps["portfolio_strategist"] = list(output.intermediate_steps)
+        state["tool_steps_by_agent"] = steps
     return state
 
 
@@ -524,6 +542,19 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
         }
     else:
         state["memo_data"] = output.output
+
+    # Build the provenance / lineage block from every agent's accumulated
+    # intermediate_steps. PMs use this to audit any claim back to a tool call.
+    try:
+        from infra.lineage import extract_tool_lineage
+        memo = state.get("memo_data") or {}
+        if isinstance(memo, dict):
+            memo["lineage"] = extract_tool_lineage(
+                state.get("tool_steps_by_agent") or {}
+            )
+            state["memo_data"] = memo
+    except Exception as e:  # noqa: BLE001 — never let lineage break the memo
+        logger.warning(f"[orchestrator] lineage extraction failed: {e}")
     return state
 
 

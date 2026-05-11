@@ -363,6 +363,11 @@ class IntelligenceMemo(BaseModel):
     # Provenance / quality signals — surfaced in the UI as small badges,
     # never persisted to the memo DB record (set in orchestrator post-run).
     grounding: dict = Field(default_factory=dict)  # {confidence, ungrounded_count, ...}
+    # Full tool-call lineage — every SEC accession, FRED series, market quote,
+    # screen output, etc. that contributed to this memo. PERSISTED to the DB
+    # so a PM can audit any number months later. See infra/lineage.py for
+    # the extraction logic.
+    lineage: dict = Field(default_factory=dict)  # {sources, by_tool, by_source_type, ...}
     plan_confidence: int = 0
     plan_confidence_reason: str = ""
     # New: end-to-end pipeline quality + structural integrity signals
@@ -399,7 +404,7 @@ class IntelligenceMemo(BaseModel):
 # === Internal Agent Output ===
 
 class AgentOutput(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", arbitrary_types_allowed=True)
 
     """Generic internal agent output for pipeline state."""
     agent_name: str
@@ -407,3 +412,8 @@ class AgentOutput(BaseModel):
     output: dict = Field(default_factory=dict)
     reasoning: str = ""
     error: Optional[str] = None
+    # Phase D — raw LangChain (AgentAction, observation) tuples from the
+    # executor's intermediate_steps. Consumed by infra/lineage.py at memo-save
+    # time to build the provenance block. NOT serialized over the API; the
+    # orchestrator strips it before returning state to clients.
+    intermediate_steps: list = Field(default_factory=list)

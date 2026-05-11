@@ -38,11 +38,33 @@ function IconRewind(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
+function IconTarget(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="8" cy="8" r="6" />
+      <circle cx="8" cy="8" r="3" />
+      <circle cx="8" cy="8" r="0.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function IconCompare(props: React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M3 4H7M3 8H7M3 12H7" />
+      <path d="M9 4H13M9 8H13M9 12H13" />
+      <path d="M1 2V14M8 2V14M15 2V14" />
+    </svg>
+  );
+}
+
 const NAV = [
   { href: "/", label: "Home", icon: IconHome },
   { href: "/analysis", label: "Analysis", icon: IconChart },
   { href: "/portfolio", label: "Portfolio", icon: IconBriefcase },
   { href: "/risk", label: "Risk", icon: IconShield },
+  { href: "/compare", label: "Compare", icon: IconCompare },
+  { href: "/track-record", label: "Track Record", icon: IconTarget },
 ];
 
 const BOTTOM = [{ href: "/settings", label: "Settings", icon: IconSettings }];

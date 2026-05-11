@@ -90,6 +90,28 @@ export interface IntelligenceMemo {
     ungrounded_count?: number;
     desk_count?: number;
   };
+  // Phase D — full tool-call lineage. Every SEC accession, FRED series,
+  // market quote, screen output that produced data for this memo.
+  lineage?: {
+    sources: Array<{
+      type: string;
+      id: string;
+      url?: string;
+      agent?: string;
+      tool?: string;
+      tool_args?: string;
+      timestamp?: string;
+      form_type?: string;
+      ticker?: string;
+      screen?: string;
+    }>;
+    by_tool: Record<string, number>;
+    by_source_type: Record<string, number>;
+    by_agent: Record<string, number>;
+    n_tool_calls: number;
+    n_unique_sources: number;
+    generated_at?: string;
+  };
   plan_confidence?: number;
   plan_confidence_reason?: string;
   // Phase-2 plan-shape signals surfaced for the UI

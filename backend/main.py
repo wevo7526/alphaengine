@@ -274,6 +274,7 @@ async def analyze(request: AnalyzeRequest, req: Request):
                     hedging_recommendations=memo.hedging_recommendations,
                     tickers_analyzed=memo.tickers_analyzed,
                     themes=memo.themes,
+                    lineage=memo.lineage or {},
                 )
                 session.add(record)
                 await session.commit()
@@ -2924,6 +2925,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         hedging_recommendations=memo.hedging_recommendations,
                         tickers_analyzed=memo.tickers_analyzed,
                         themes=memo.themes,
+                        lineage=memo.lineage or {},
                     )
                     session.add(record)
                     await session.commit()

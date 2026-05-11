@@ -140,6 +140,34 @@ export const api = {
   scorecardSignals: (limit = 50) => request(`/api/scorecard/signals?limit=${limit}`),
   scorecardRun: () => request("/api/scorecard/run", { method: "POST" }),
 
+  // Custom cross-asset scenario (POST). Body: {shock: {rates_shock_bps, ...}, positions?: [...]}
+  customScenario: (
+    shock: Record<string, number>,
+    positions?: Array<{ ticker: string; size_pct: number; direction: string }>
+  ) =>
+    request("/api/quant/scenario/custom", {
+      method: "POST",
+      body: JSON.stringify({ shock, positions: positions ?? [] }),
+    }),
+
+  // Cross-asset correlation matrix (equities + macro proxies)
+  crossAssetCorrelation: (tickers: string[], period = "6mo") =>
+    request(
+      `/api/quant/cross-asset-correlation?tickers=${tickers.join(",")}&period=${period}`
+    ),
+
+  // Yield curve + curve regime + key-rate durations
+  yieldCurve: () => request("/api/quant/curve"),
+  yieldCurveRegime: (historyDays = 120) =>
+    request(`/api/quant/curve/regime?history_days=${historyDays}`),
+
+  // Economic event calendar
+  events: (lookforwardDays = 30, eventTypes = "") =>
+    request(
+      `/api/data/events?lookforward_days=${lookforwardDays}` +
+        (eventTypes ? `&event_types=${eventTypes}` : "")
+    ),
+
   // Risk gate preview
   riskCheck: (ticker: string, direction: string, size_pct: number) =>
     request("/api/portfolio/risk-check", {

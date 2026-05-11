@@ -144,6 +144,11 @@ class IntelligenceMemoRecord(Base):
     tickers_analyzed = Column(JSON, default=list)
     themes = Column(JSON, default=list)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    # Phase D provenance — structured record of every tool call that produced
+    # data for this memo. Shape: {sources: [{tool, args, source_id, source_type,
+    # evidence_url}], by_tool: {tool_name: count}, by_source_type: {...}}.
+    # Surfaced to the UI as a "View sources" panel so a PM can audit any claim.
+    lineage = Column(JSON, default=dict)
 
     # /api/signals/latest filters by user_id ordered by created_at desc.
     # Without this composite, every call scans the whole table.

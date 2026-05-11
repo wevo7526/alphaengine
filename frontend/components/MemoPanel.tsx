@@ -333,6 +333,118 @@ function RiskMatrix({ factors }: { factors: RiskFactor[] }) {
   );
 }
 
+// Human-readable label for each source_type code from infra/lineage.py.
+const SOURCE_TYPE_LABEL: Record<string, string> = {
+  sec_filing: "SEC filings",
+  sec_insider: "Insider trades (Form 4)",
+  sec_13f: "13F holdings",
+  fred_series: "Fed (FRED)",
+  market_price: "Market data",
+  news_article: "News",
+  web_search: "Web research",
+  technical: "Technicals",
+  screen: "Discovery screens",
+  computed: "Computed analytics",
+  other: "Other",
+};
+
+function LineagePanel({ lineage }: { lineage: NonNullable<IntelligenceMemo["lineage"]> }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Group sources by source_type for the collapsed summary view
+  const byType: Record<string, typeof lineage.sources> = {};
+  for (const src of lineage.sources) {
+    const t = src.type || "other";
+    if (!byType[t]) byType[t] = [];
+    byType[t].push(src);
+  }
+  const orderedTypes = Object.keys(byType).sort(
+    (a, b) => (byType[b]?.length || 0) - (byType[a]?.length || 0)
+  );
+
+  return (
+    <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider">
+          Sources & Provenance
+        </h3>
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="text-[11px] text-text-tertiary hover:text-text-secondary"
+        >
+          {expanded ? "Hide details" : "Show details"}
+        </button>
+      </div>
+      <p className="text-[11px] text-text-tertiary mt-1 mb-3">
+        {lineage.n_tool_calls} tool calls produced {lineage.n_unique_sources}{" "}
+        unique sources. Every number in this memo traces back to one of these.
+      </p>
+
+      {/* Compact summary by source type */}
+      <div className="flex flex-wrap gap-1.5">
+        {orderedTypes.map((t) => (
+          <span
+            key={t}
+            className="inline-flex items-center gap-1 rounded-md border border-border-primary bg-bg-primary px-2 py-0.5 text-[11px] text-text-secondary"
+            title={SOURCE_TYPE_LABEL[t] ?? t}
+          >
+            <span className="text-text-tertiary">{SOURCE_TYPE_LABEL[t] ?? t}</span>
+            <span className="font-mono text-text-primary">{byType[t].length}</span>
+          </span>
+        ))}
+      </div>
+
+      {expanded && (
+        <div className="mt-4 space-y-3">
+          {orderedTypes.map((t) => (
+            <div key={t}>
+              <p className="text-[11px] text-text-quaternary uppercase tracking-wider mb-1">
+                {SOURCE_TYPE_LABEL[t] ?? t}
+              </p>
+              <ul className="space-y-1">
+                {byType[t].map((src, i) => (
+                  <li
+                    key={`${t}-${i}`}
+                    className="text-[12px] text-text-secondary flex items-baseline gap-2"
+                  >
+                    <span className="text-text-quaternary font-mono text-[10px] shrink-0">
+                      {src.tool ?? "—"}
+                    </span>
+                    {src.url ? (
+                      <a
+                        href={src.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-accent hover:underline truncate"
+                      >
+                        {src.id}
+                      </a>
+                    ) : (
+                      <span className="truncate font-mono">{src.id}</span>
+                    )}
+                    {src.form_type && (
+                      <span className="text-text-tertiary text-[10px] shrink-0">
+                        ({src.form_type})
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <p className="text-[10px] text-text-quaternary pt-2 border-t border-border-primary">
+            Captured at{" "}
+            {lineage.generated_at
+              ? new Date(lineage.generated_at).toLocaleString()
+              : "—"}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete?: (id: string) => void }) {
   const [showFull, setShowFull] = useState(false);
   const [enrichment, setEnrichment] = useState<EnrichmentData | null>(null);
@@ -542,6 +654,11 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
           )}
         </div>
       </div>
+
+      {/* Lineage / Sources panel */}
+      {memo.lineage && memo.lineage.n_tool_calls > 0 && (
+        <LineagePanel lineage={memo.lineage} />
+      )}
 
       {/* Key Findings */}
       {memo.key_findings?.length > 0 && (

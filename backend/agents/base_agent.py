@@ -173,11 +173,17 @@ class BaseAgent:
             except Exception as e:
                 logger.debug(f"[{self.agent_name}] grounding check skipped: {e}")
 
+            # Capture intermediate_steps for provenance / lineage. We pass the
+            # raw (action, observation) tuples through so infra/lineage.py can
+            # extract canonical source IDs (SEC accession, FRED series, etc.).
+            steps_for_lineage = result.get("intermediate_steps") or []
+
             logger.info(f"[{self.agent_name}] Analysis complete")
             return AgentOutput(
                 agent_name=self.agent_name,
                 output=parsed,
                 reasoning=parsed.get("reasoning", parsed.get("data_summary", "")),
+                intermediate_steps=list(steps_for_lineage),
             )
         except Exception as e:
             logger.error(f"[{self.agent_name}] Analysis failed: {e}")

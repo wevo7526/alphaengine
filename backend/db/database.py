@@ -101,12 +101,15 @@ async def _migrate_columns() -> None:
     (e.g. "column already exists"), and a single shared transaction would
     poison every subsequent statement with "current transaction is aborted."
     """
+    json_col_type = "JSONB" if DB_DIALECT == "postgres" else "JSON"
     column_migrations = [
         ("intelligence_memos", "user_id", "TEXT"),
         ("trades", "user_id", "TEXT"),
         ("portfolio_snapshots", "user_id", "TEXT"),
         ("factor_exposures", "user_id", "TEXT"),
         ("morning_reports", "user_id", "TEXT"),
+        # Phase D — provenance / lineage for memos.
+        ("intelligence_memos", "lineage", json_col_type),
     ]
     for table, column, col_type in column_migrations:
         try:
