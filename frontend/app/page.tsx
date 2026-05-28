@@ -586,75 +586,95 @@ function IntelligenceVisual() {
       <svg viewBox="0 0 500 300" className="w-full h-full relative">
         <defs>
           <radialGradient id="glyph-blue" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.9" />
-            <stop offset="60%" stopColor="#3b82f6" stopOpacity="0.15" />
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.85" />
+            <stop offset="55%" stopColor="#3b82f6" stopOpacity="0.12" />
             <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="glyph-green" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#10b981" stopOpacity="0.9" />
-            <stop offset="60%" stopColor="#10b981" stopOpacity="0.15" />
+            <stop offset="0%" stopColor="#10b981" stopOpacity="0.85" />
+            <stop offset="55%" stopColor="#10b981" stopOpacity="0.12" />
             <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
           </radialGradient>
+          {/* Horizontal flow gradient: blue on the left, green on the right,
+              fully opaque only at the inner edges so the conduit reads as
+              "data passing from one engine to the other". */}
+          <linearGradient id="flow-stroke" x1="0%" y1="50%" x2="100%" y2="50%">
+            <stop offset="0%"   stopColor="#3b82f6" stopOpacity="0" />
+            <stop offset="20%"  stopColor="#3b82f6" stopOpacity="0.55" />
+            <stop offset="50%"  stopColor="#a1a1aa" stopOpacity="0.4" />
+            <stop offset="80%"  stopColor="#10b981" stopOpacity="0.55" />
+            <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+          </linearGradient>
         </defs>
 
+        {/* Left glyph — probabilistic (orbital cloud) */}
         <g>
-          <circle cx="110" cy="150" r="80" fill="url(#glyph-blue)" />
-          <g className="constellation-orbit-1" style={{ transformOrigin: "110px 150px" }}>
+          <circle cx="120" cy="135" r="78" fill="url(#glyph-blue)" />
+          <g className="constellation-orbit-1" style={{ transformOrigin: "120px 135px" }}>
             {[
-              [110, 90], [170, 120], [165, 180], [115, 210], [55, 180], [50, 120],
+              [120,  75], [175, 105], [170, 165], [125, 195],
+              [ 65, 165], [ 65, 105],
             ].map(([cx, cy], i) => (
-              <circle key={i} cx={cx} cy={cy} r="3.5" fill="#3b82f6" />
+              <circle key={i} cx={cx} cy={cy} r="3.2" fill="#3b82f6" opacity="0.95" />
             ))}
           </g>
-          <circle cx="110" cy="150" r="8" fill="#3b82f6" className="constellation-core" style={{ transformOrigin: "110px 150px" }} />
+          <circle cx="120" cy="135" r="7" fill="#3b82f6" className="constellation-core" style={{ transformOrigin: "120px 135px" }} />
         </g>
 
+        {/* Right glyph — deterministic (precise grid) */}
         <g>
-          <circle cx="390" cy="150" r="80" fill="url(#glyph-green)" />
+          <circle cx="380" cy="135" r="78" fill="url(#glyph-green)" />
           {[-1, 0, 1].flatMap((dx) =>
             [-1, 0, 1].map((dy) => (
               <rect
                 key={`${dx},${dy}`}
-                x={388 + dx * 24}
-                y={148 + dy * 24}
-                width="4"
-                height="4"
+                x={377 + dx * 26}
+                y={132 + dy * 26}
+                width="4.5"
+                height="4.5"
                 fill="#10b981"
+                opacity="0.95"
                 className="constellation-node"
                 style={{ animationDelay: `${(dx + dy + 2) * 0.25}s` }}
               />
             ))
           )}
-          <circle cx="390" cy="150" r="6" fill="#10b981" className="constellation-core" style={{ transformOrigin: "390px 150px" }} />
+          <circle cx="380" cy="135" r="6" fill="#10b981" className="constellation-core" style={{ transformOrigin: "380px 135px" }} />
         </g>
 
+        {/* Flow conduit between the glyphs. Three parallel lines,
+            stroked with a single horizontal gradient so each one fades
+            from blue → neutral → green. Reads as "signal moving through",
+            not as a closed eye-shape. */}
         <g>
-          <path
-            d="M 190 150 Q 250 90 310 150"
-            fill="none"
-            stroke="rgba(59,130,246,0.4)"
-            strokeWidth="1.5"
-            className="constellation-line"
-            style={{ animationDelay: "0.5s" }}
-          />
-          <path
-            d="M 190 150 Q 250 210 310 150"
-            fill="none"
-            stroke="rgba(16,185,129,0.4)"
-            strokeWidth="1.5"
-            className="constellation-line"
-            style={{ animationDelay: "1.5s" }}
-          />
-          <circle cx="250" cy="150" r="3" fill="#fafafa" className="counter-tick" />
+          {[120, 135, 150].map((y, i) => (
+            <line
+              key={y}
+              x1="195" y1={y}
+              x2="305" y2={y}
+              stroke="url(#flow-stroke)"
+              strokeWidth={i === 1 ? 1.6 : 1}
+              className="constellation-line"
+              style={{ animationDelay: `${i * 0.45}s` }}
+            />
+          ))}
+          {/* Center merge: a small vertical "gate" + the central junction dot.
+              The dot pulses; the gate stays still to feel deliberate. */}
+          <line x1="250" y1="120" x2="250" y2="150" stroke="rgba(250,250,250,0.18)" strokeWidth="1" />
+          <circle cx="250" cy="135" r="3.5" fill="#fafafa" className="counter-tick" />
         </g>
 
-        <rect x="80" y="245" width="340" height="32" rx="4" fill="rgba(16,185,129,0.06)" stroke="rgba(16,185,129,0.25)" />
-        <text x="100" y="266" fill="#10b981" fontSize="11" fontFamily="ui-monospace, monospace" letterSpacing="0.05em">
-          ✓ VERIFIED
-        </text>
-        <text x="170" y="266" fill="#a1a1aa" fontSize="11" fontFamily="ui-monospace, monospace">
-          claim ⇆ source ⇆ math
-        </text>
+        {/* VERIFIED strip — wider letter-spacing, tighter alignment. */}
+        <rect x="70" y="232" width="360" height="40" rx="6" fill="rgba(16,185,129,0.06)" stroke="rgba(16,185,129,0.28)" />
+        <g transform="translate(94, 257)">
+          <text x="0" y="0" fill="#10b981" fontSize="11" fontFamily="ui-monospace, monospace" letterSpacing="0.18em" fontWeight="600">
+            ✓  VERIFIED
+          </text>
+          <text x="115" y="0" fill="#52525b" fontSize="11" fontFamily="ui-monospace, monospace">·</text>
+          <text x="130" y="0" fill="#a1a1aa" fontSize="11" fontFamily="ui-monospace, monospace" letterSpacing="0.05em">
+            claim  ·  source  ·  math
+          </text>
+        </g>
       </svg>
     </div>
   );

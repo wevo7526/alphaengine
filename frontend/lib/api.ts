@@ -213,6 +213,32 @@ export const api = {
       body: JSON.stringify(fields),
     }),
 
+  // Per-user risk gate overrides
+  myRisk: () =>
+    request<{
+      parameters: Array<{
+        field: string;
+        label: string;
+        desc: string;
+        group: string;
+        value: number;
+        default: number | null;
+        source: "user" | "env" | "default";
+        scale: "pct" | "raw";
+        range_min: number;
+        range_max: number;
+      }>;
+    }>("/api/me/risk"),
+
+  updateMyRisk: (fields: Record<string, number | null>) =>
+    request<{ parameters: unknown[] }>("/api/me/risk", {
+      method: "PATCH",
+      body: JSON.stringify(fields),
+    }),
+
+  resetMyRisk: () =>
+    request<{ parameters: unknown[] }>("/api/me/risk", { method: "DELETE" }),
+
   // Phase E — conversational thread continuation
   memoThread: (memoId: string) => request(`/api/memo/${memoId}/thread`),
 

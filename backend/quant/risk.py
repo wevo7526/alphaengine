@@ -498,6 +498,7 @@ def pre_trade_risk_check(
     max_sector_pct: float | None = None,
     marginal_var_block_pct: float | None = None,
     silent_squeeze_threshold: float | None = None,
+    min_position_size: float | None = None,
 ) -> dict:
     """
     Master pre-trade gate. Called before every trade execution.
@@ -511,7 +512,8 @@ def pre_trade_risk_check(
 
     Each block reason is enumerated in `reasons` and surfaced in the 422.
     """
-    # Resolve thresholds from quant.limits (single source of truth)
+    # Resolve thresholds from quant.limits (single source of truth) — every
+    # gate can be overridden per-user by passing an explicit kwarg.
     if max_position_size is None:
         max_position_size = _limits.MAX_POSITION_SIZE
     if max_sector_pct is None:
@@ -520,6 +522,8 @@ def pre_trade_risk_check(
         marginal_var_block_pct = _limits.MARGINAL_VAR_BLOCK_PCT
     if silent_squeeze_threshold is None:
         silent_squeeze_threshold = _limits.SILENT_SQUEEZE_THRESHOLD
+    if min_position_size is None:
+        min_position_size = _limits.MIN_POSITION_SIZE
 
     reasons = []
     block_reasons: list[str] = []
@@ -587,9 +591,9 @@ def pre_trade_risk_check(
         )
 
     # 6. Final dead-zone guard
-    if adjusted_size <= _limits.MIN_POSITION_SIZE:
+    if adjusted_size <= min_position_size:
         block_reasons.append(
-            f"Position too small after risk adjustments (<{_limits.MIN_POSITION_SIZE*100:.2f}%)"
+            f"Position too small after risk adjustments (<{min_position_size*100:.2f}%)"
         )
 
     approved = len(block_reasons) == 0

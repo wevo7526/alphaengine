@@ -37,6 +37,10 @@ def evaluate_trade_gate(
     max_sector_pct: float | None = None,
     regime: str | None = None,
     regime_confidence: float | None = None,
+    # Additional per-user overrides for the inner risk check
+    marginal_var_block_pct: float | None = None,
+    silent_squeeze_threshold: float | None = None,
+    min_position_size: float | None = None,
 ) -> dict:
     """
     Run the full pre-trade risk check on a proposed trade.
@@ -145,7 +149,7 @@ def evaluate_trade_gate(
         else:
             positions.setdefault(tk, {"sector": sector, "weight": 0})
 
-    # Run the gate
+    # Run the gate — thread per-user override kwargs through to the inner check.
     check = pre_trade_risk_check(
         ticker=ticker,
         proposed_action="BUY" if "bullish" in (direction or "") else "SELL",
@@ -154,6 +158,9 @@ def evaluate_trade_gate(
         returns_dict=returns_dict,
         max_position_size=max_position_size,
         max_sector_pct=max_sector_pct,
+        marginal_var_block_pct=marginal_var_block_pct,
+        silent_squeeze_threshold=silent_squeeze_threshold,
+        min_position_size=min_position_size,
     )
 
     # Liquidity check — hard block on illiquid names

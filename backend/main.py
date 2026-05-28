@@ -234,6 +234,24 @@ async def auth_me(request: Request):
     return {"user_id": user_id, "authenticated": True}
 
 
+async def _resolve_user_limits(user_id: str) -> dict[str, float]:
+    """
+    Look up the user's risk overrides and merge with platform defaults.
+    Returns a flat dict keyed by quant.limits.PARAMS_META field names.
+
+    Failure-safe: any DB error falls back to platform defaults so a risk
+    profile lookup glitch can never break trade execution.
+    """
+    from db.repositories import UserRiskProfileRepository
+    from quant.limits import resolve_for_user
+    try:
+        overrides = await UserRiskProfileRepository.get(user_id)
+    except Exception as e:
+        logger.warning(f"user risk lookup failed for {user_id}, using defaults: {e}")
+        overrides = None
+    return resolve_for_user(overrides)
+
+
 # === USER PROFILE + ONBOARDING ===
 
 class ProfileUpdate(BaseModel):
@@ -296,6 +314,54 @@ async def complete_onboarding(payload: OnboardingCompletePayload, request: Reque
     fields = {k: v for k, v in payload.model_dump().items() if v is not None}
     profile = await UserProfileRepository.mark_onboarded(user_id, fields)
     return {"profile": profile, "onboarded": True}
+
+
+# === USER RISK PROFILE — per-user overrides for risk gates ===
+
+@app.get("/api/me/risk")
+async def get_my_risk(request: Request):
+    """
+    Return the merged view of risk gates for this user. Each parameter
+    includes its current value, the platform default, and where the
+    value comes from (user / env / default). Drives the /risk-config UI.
+    """
+    from db.repositories import UserRiskProfileRepository
+    from quant.limits import merged_view
+    user_id = require_user_id(request)
+    overrides = await UserRiskProfileRepository.get(user_id)
+    return {"parameters": merged_view(overrides)}
+
+
+@app.patch("/api/me/risk")
+async def update_my_risk(payload: dict, request: Request):
+    """
+    Partial-update risk overrides. Body is {field: value}. Pass {field: null}
+    to reset a single field back to the platform default.
+
+    Validation enforces per-field ranges (defined in quant.limits.PARAMS_META)
+    and cross-field invariants (drawdown caution < warn < critical). Returns
+    HTTP 400 with the list of validation errors if anything is invalid;
+    nothing is persisted on validation failure.
+    """
+    from db.repositories import UserRiskProfileRepository
+    from quant.limits import merged_view, validate_overrides
+    user_id = require_user_id(request)
+    cleaned, errors = validate_overrides(payload or {})
+    if errors:
+        raise HTTPException(status_code=400, detail={"errors": errors})
+    await UserRiskProfileRepository.upsert(user_id, cleaned)
+    overrides = await UserRiskProfileRepository.get(user_id)
+    return {"parameters": merged_view(overrides)}
+
+
+@app.delete("/api/me/risk")
+async def reset_my_risk(request: Request):
+    """Wipe all user overrides — every gate falls back to the platform default."""
+    from db.repositories import UserRiskProfileRepository
+    from quant.limits import merged_view
+    user_id = require_user_id(request)
+    await UserRiskProfileRepository.reset(user_id)
+    return {"parameters": merged_view(None)}
 
 
 # === ANALYSIS ENDPOINTS ===
@@ -1485,6 +1551,9 @@ async def pre_trade_gate(req: RiskCheckRequest, request: Request):
     # Regime-aware sizing
     regime, regime_conf = _current_regime_for_gate()
 
+    # Per-user limit overrides (falls back to platform defaults on lookup failure)
+    limits = await _resolve_user_limits(user_id)
+
     result = evaluate_trade_gate(
         ticker=req.ticker.upper(),
         direction=req.direction,
@@ -1493,6 +1562,11 @@ async def pre_trade_gate(req: RiskCheckRequest, request: Request):
         portfolio_drawdown_pct=dd,
         regime=regime,
         regime_confidence=regime_conf,
+        max_position_size=limits.get("max_position_pct"),
+        max_sector_pct=limits.get("max_sector_pct"),
+        marginal_var_block_pct=limits.get("marginal_var_block_pct"),
+        silent_squeeze_threshold=limits.get("silent_squeeze_threshold"),
+        min_position_size=limits.get("min_position_pct"),
     )
     return result
 
@@ -1536,6 +1610,9 @@ async def take_trade(req: TakeTradeRequest, request: Request):
             dd = await get_current_portfolio_drawdown(async_session, user_id=user_id)
             regime, regime_conf = _current_regime_for_gate()
 
+            # Per-user limit overrides (falls back to platform defaults on lookup failure)
+            limits = await _resolve_user_limits(user_id)
+
             gate = evaluate_trade_gate(
                 ticker=req.ticker.upper(),
                 direction=req.direction,
@@ -1544,6 +1621,11 @@ async def take_trade(req: TakeTradeRequest, request: Request):
                 portfolio_drawdown_pct=dd,
                 regime=regime,
                 regime_confidence=regime_conf,
+                max_position_size=limits.get("max_position_pct"),
+                max_sector_pct=limits.get("max_sector_pct"),
+                marginal_var_block_pct=limits.get("marginal_var_block_pct"),
+                silent_squeeze_threshold=limits.get("silent_squeeze_threshold"),
+                min_position_size=limits.get("min_position_pct"),
             )
 
             if not gate.get("approved"):

@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
 import { api } from "@/lib/api";
+import { TerminalHeader } from "@/components/TerminalHeader";
 
 interface SystemInfo {
   app: { version: string; env: string; commit: string | null };
@@ -127,9 +129,9 @@ export default function SettingsPage() {
   const env = info?.app.env ?? "unknown";
 
   return (
-    <div className="p-8 max-w-3xl">
+    <div className="p-8 max-w-3xl mx-auto">
       {apiError && (
-        <div className="mb-4 flex items-start justify-between rounded-xl border border-signal-red/25 bg-signal-red/[0.06] p-3">
+        <div className="mb-6 flex items-start justify-between rounded-md border border-signal-red/25 bg-signal-red/[0.06] p-3">
           <div>
             <p className="text-xs font-medium text-signal-red">Notice</p>
             <p className="text-[11px] text-text-tertiary mt-0.5">{apiError}</p>
@@ -144,19 +146,25 @@ export default function SettingsPage() {
         </div>
       )}
 
-      <div className="mb-8">
-        <h1 className="text-xl font-semibold tracking-tight text-text-primary mb-1">
-          Settings
-        </h1>
-        <p className="text-sm text-text-tertiary">
-          Your profile drives risk sizing, benchmark, and Strategist defaults.
-        </p>
-      </div>
+      <TerminalHeader
+        eyebrow="SETTINGS"
+        title="Profile and platform"
+        sub="Your profile drives risk sizing, benchmark, and Strategist defaults."
+        meta={
+          <Link
+            href="/risk-config"
+            className="px-2.5 py-1 rounded-md border border-border-primary text-text-tertiary hover:text-text-primary hover:border-zinc-600 transition-colors"
+          >
+            RISK GATES →
+          </Link>
+        }
+        className="mb-8"
+      />
 
       {/* ───────────────────────── Profile / account ────────────────── */}
-      <div className="rounded-xl border border-border-primary bg-bg-surface p-5 mb-6">
-        <h2 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-4">
-          Account
+      <div className="rounded-md border border-border-primary bg-bg-surface p-5 mb-6">
+        <h2 className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-4">
+          <span className="text-accent">///</span> ACCOUNT
         </h2>
         <div className="flex items-center gap-3">
           {user?.imageUrl ? (
@@ -183,14 +191,14 @@ export default function SettingsPage() {
       </div>
 
       {/* ───────────────────────── Profile editor ───────────────────── */}
-      <div className="rounded-xl border border-border-primary bg-bg-surface p-5 mb-6">
+      <div className="rounded-md border border-border-primary bg-bg-surface p-5 mb-6">
         <div className="flex items-center justify-between mb-5">
           <div>
-            <h2 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-1">
-              Profile
+            <h2 className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-2">
+              <span className="text-accent">///</span> PROFILE
             </h2>
             <p className="text-[12px] text-text-tertiary">
-              Changes drive Strategist defaults + position sizing math.
+              Changes drive Strategist defaults and position sizing math.
             </p>
           </div>
           {profile?.onboarded_at && (
@@ -211,7 +219,7 @@ export default function SettingsPage() {
                   <button
                     key={r.value}
                     onClick={() => setRole(r.value)}
-                    className={`rounded-lg border px-3 py-2 text-[12px] font-medium transition-all ${
+                    className={`rounded-md border px-3 py-2 text-[12px] font-medium transition-all ${
                       role === r.value
                         ? "border-accent bg-accent/[0.08] text-accent"
                         : "border-border-primary bg-bg-primary text-text-secondary hover:border-zinc-600"
@@ -240,7 +248,7 @@ export default function SettingsPage() {
                   }
                   step={10000}
                   min={0}
-                  className="w-full pl-7 pr-3 h-10 bg-bg-primary border border-border-primary rounded-lg text-[13px] font-mono text-text-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-colors"
+                  className="w-full pl-7 pr-3 h-10 bg-bg-primary border border-border-primary rounded-md text-[13px] font-mono text-text-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-colors"
                 />
               </div>
               <p className="mt-1 text-[10px] text-text-quaternary">
@@ -255,7 +263,7 @@ export default function SettingsPage() {
                   <button
                     key={m.value}
                     onClick={() => setMandate(m.value)}
-                    className={`w-full text-left rounded-lg border px-3 py-2.5 transition-all ${
+                    className={`w-full text-left rounded-md border px-3 py-2.5 transition-all ${
                       mandate === m.value
                         ? "border-accent bg-accent/[0.08]"
                         : "border-border-primary bg-bg-primary hover:border-zinc-600"
@@ -302,7 +310,7 @@ export default function SettingsPage() {
                   <button
                     key={b.value}
                     onClick={() => setBenchmark(b.value)}
-                    className={`rounded-lg border px-3 py-2 text-[12px] font-medium transition-all ${
+                    className={`rounded-md border px-3 py-2 text-[12px] font-medium transition-all ${
                       benchmark === b.value
                         ? "border-accent bg-accent/[0.08] text-accent"
                         : "border-border-primary bg-bg-primary text-text-secondary hover:border-zinc-600"
@@ -321,7 +329,7 @@ export default function SettingsPage() {
               <button
                 onClick={handleSave}
                 disabled={saving || !isDirty}
-                className="px-4 py-2 rounded-lg bg-white text-bg-primary text-[12px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-4 py-2 rounded-md bg-white text-bg-primary text-[12px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 {saving ? "Saving…" : isDirty ? "Save changes" : "Saved"}
               </button>
@@ -331,14 +339,14 @@ export default function SettingsPage() {
       </div>
 
       {/* ───────────────────────── System info (collapsible) ────────── */}
-      <div className="rounded-xl border border-border-primary bg-bg-surface overflow-hidden">
+      <div className="rounded-md border border-border-primary bg-bg-surface overflow-hidden">
         <button
           onClick={() => setShowSystem((v) => !v)}
           className="w-full flex items-center justify-between px-5 py-4 hover:bg-bg-elevated/40 transition-colors"
         >
           <div className="text-left">
-            <p className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-0.5">
-              System
+            <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-1">
+              <span className="text-accent">///</span> SYSTEM
             </p>
             <p className="text-[12px] text-text-tertiary">
               Environment, data sources, risk parameters.

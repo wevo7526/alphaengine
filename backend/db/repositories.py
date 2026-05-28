@@ -12,7 +12,7 @@ from db.database import async_session
 from db.models import (
     IntelligenceMemoRecord, TradeRecord, PortfolioSnapshotRecord,
     BacktestRunRecord, BacktestResultRecord, FactorExposureRecord,
-    RegimeRecord, MacroSnapshotRecord, UserProfile,
+    RegimeRecord, MacroSnapshotRecord, UserProfile, UserRiskProfile,
 )
 
 logger = logging.getLogger(__name__)
@@ -198,6 +198,80 @@ class UserProfileRepository:
         merged = dict(fields or {})
         merged["onboarded_at"] = datetime.now(tz.utc)
         return await UserProfileRepository.upsert(user_id, merged)
+
+
+# Whitelist of editable risk-override fields. Must match UserRiskProfile
+# columns exactly. Anything not in this set is silently dropped at upsert
+# time to prevent stray column writes.
+USER_RISK_FIELDS = frozenset({
+    "max_position_pct", "max_sector_pct", "min_position_pct",
+    "var_confidence",
+    "drawdown_caution_pct", "drawdown_warn_pct", "drawdown_critical_pct",
+    "marginal_var_block_pct", "silent_squeeze_threshold",
+    "liquidity_max_pct_of_adv", "liquidity_block_pct_of_adv",
+    "liquidity_participation_rate", "liquidity_spread_warn_bps",
+    "optimizer_tx_cost_bps", "optimizer_ridge_lambda",
+    "vif_max_threshold",
+})
+
+
+class UserRiskProfileRepository:
+    """
+    CRUD for per-user overrides of the platform's risk gates.
+
+    Every field is nullable — NULL means "use the platform default".
+    Upsert only touches fields explicitly present in the input dict; pass
+    {field: None} to reset a single field back to the platform default.
+    """
+
+    @staticmethod
+    async def get(user_id: str) -> dict | None:
+        async with async_session() as session:
+            result = await session.execute(
+                select(UserRiskProfile).where(UserRiskProfile.user_id == user_id)
+            )
+            r = result.scalar_one_or_none()
+            if r is None:
+                return None
+            return {c.name: getattr(r, c.name) for c in r.__table__.columns}
+
+    @staticmethod
+    async def upsert(user_id: str, fields: dict) -> dict:
+        """
+        Update only the explicitly-present fields. Pass {key: None} to
+        clear an override and fall back to the platform default. Fields
+        outside USER_RISK_FIELDS are ignored.
+        """
+        clean = {k: v for k, v in fields.items() if k in USER_RISK_FIELDS}
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(UserRiskProfile).where(UserRiskProfile.user_id == user_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = UserRiskProfile(user_id=user_id, **clean)
+                session.add(row)
+            else:
+                for k, v in clean.items():
+                    setattr(row, k, v)
+            await session.commit()
+            await session.refresh(row)
+            return {c.name: getattr(row, c.name) for c in row.__table__.columns}
+
+    @staticmethod
+    async def reset(user_id: str) -> None:
+        """Wipe all user overrides — equivalent to falling back to all defaults."""
+        async with async_session() as session:
+            result = await session.execute(
+                select(UserRiskProfile).where(UserRiskProfile.user_id == user_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                return
+            for f in USER_RISK_FIELDS:
+                setattr(row, f, None)
+            await session.commit()
 
 
 class TradeRepository:

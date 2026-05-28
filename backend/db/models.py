@@ -252,6 +252,56 @@ class UserProfile(Base):
     onboarded_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class UserRiskProfile(Base):
+    """
+    Per-user overrides for the platform's risk gates.
+
+    Each column mirrors a constant in `quant.limits`. NULL means "use the
+    platform default" — concretely, the limit resolution order at trade
+    time is: user override (this row) -> env var -> hardcoded default in
+    quant/limits.py.
+
+    Why a sibling table instead of extending UserProfile: 17 risk
+    parameters with validation rules deserve their own surface (separate
+    /risk-config page). Keeping them in their own table makes the
+    onboarding flow simpler and keeps profile updates from accidentally
+    touching risk overrides.
+    """
+    __tablename__ = "user_risk_profiles"
+
+    user_id = Column(String, primary_key=True, index=True)
+
+    # Position limits (decimals: 0.05 = 5%)
+    max_position_pct = Column(Float, nullable=True)
+    max_sector_pct = Column(Float, nullable=True)
+    min_position_pct = Column(Float, nullable=True)
+
+    # VaR / circuit breaker
+    var_confidence = Column(Float, nullable=True)
+    drawdown_caution_pct = Column(Float, nullable=True)
+    drawdown_warn_pct = Column(Float, nullable=True)
+    drawdown_critical_pct = Column(Float, nullable=True)
+
+    # Marginal VaR / silent-squeeze
+    marginal_var_block_pct = Column(Float, nullable=True)
+    silent_squeeze_threshold = Column(Float, nullable=True)
+
+    # Liquidity
+    liquidity_max_pct_of_adv = Column(Float, nullable=True)
+    liquidity_block_pct_of_adv = Column(Float, nullable=True)
+    liquidity_participation_rate = Column(Float, nullable=True)
+    liquidity_spread_warn_bps = Column(Float, nullable=True)
+
+    # Optimizer
+    optimizer_tx_cost_bps = Column(Float, nullable=True)
+    optimizer_ridge_lambda = Column(Float, nullable=True)
+
+    # Factor
+    vif_max_threshold = Column(Float, nullable=True)
+
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class MacroSnapshotRecord(Base):
     """Historical macro regime snapshots for tracking regime changes."""
     __tablename__ = "macro_snapshots"
