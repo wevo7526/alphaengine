@@ -170,6 +170,49 @@ export const api = {
         (eventTypes ? `&event_types=${eventTypes}` : "")
     ),
 
+  // User profile + onboarding
+  myProfile: () =>
+    request<{
+      profile: {
+        id: string;
+        user_id: string;
+        full_name: string | null;
+        email: string | null;
+        role: string | null;
+        portfolio_size_usd: number | null;
+        benchmark: string;
+        mandate: string;
+        created_at: string;
+        updated_at: string;
+        onboarded_at: string | null;
+      } | null;
+      onboarded: boolean;
+    }>("/api/me/profile"),
+  updateMyProfile: (fields: {
+    full_name?: string;
+    email?: string;
+    role?: string;
+    portfolio_size_usd?: number;
+    benchmark?: string;
+    mandate?: string;
+  }) =>
+    request("/api/me/profile", {
+      method: "PUT",
+      body: JSON.stringify(fields),
+    }),
+  completeOnboarding: (fields: {
+    full_name?: string;
+    email?: string;
+    role?: string;
+    portfolio_size_usd?: number;
+    benchmark?: string;
+    mandate?: string;
+  }) =>
+    request("/api/me/onboarding/complete", {
+      method: "POST",
+      body: JSON.stringify(fields),
+    }),
+
   // Phase E — conversational thread continuation
   memoThread: (memoId: string) => request(`/api/memo/${memoId}/thread`),
 

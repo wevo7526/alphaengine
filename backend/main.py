@@ -234,6 +234,70 @@ async def auth_me(request: Request):
     return {"user_id": user_id, "authenticated": True}
 
 
+# === USER PROFILE + ONBOARDING ===
+
+class ProfileUpdate(BaseModel):
+    """
+    Body for PUT /api/me/profile. Every field optional so the onboarding
+    wizard can call this incrementally as the user advances through steps.
+    """
+    full_name: str | None = None
+    email: str | None = None
+    role: str | None = None
+    portfolio_size_usd: float | None = None
+    benchmark: str | None = None
+    mandate: str | None = None
+
+
+class OnboardingCompletePayload(ProfileUpdate):
+    """Same fields as ProfileUpdate; sets onboarded_at server-side."""
+    pass
+
+
+@app.get("/api/me/profile")
+async def get_my_profile(request: Request):
+    """
+    Return the authenticated user's profile or {profile: null, onboarded: False}
+    when no profile exists. SessionGuard uses this to route new users to
+    /onboarding.
+    """
+    from db.repositories import UserProfileRepository
+    user_id = require_user_id(request)
+    profile = await UserProfileRepository.get(user_id)
+    return {
+        "profile": profile,
+        "onboarded": bool(profile and profile.get("onboarded_at") is not None),
+    }
+
+
+@app.put("/api/me/profile")
+async def update_my_profile(payload: ProfileUpdate, request: Request):
+    """
+    Upsert profile fields. Used during onboarding (per-step save) and from
+    Settings later for edits. Does NOT set onboarded_at — use
+    /api/me/onboarding/complete for that.
+    """
+    from db.repositories import UserProfileRepository
+    user_id = require_user_id(request)
+    fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+    profile = await UserProfileRepository.upsert(user_id, fields)
+    return {"profile": profile, "onboarded": bool(profile.get("onboarded_at"))}
+
+
+@app.post("/api/me/onboarding/complete")
+async def complete_onboarding(payload: OnboardingCompletePayload, request: Request):
+    """
+    Mark the user as onboarded. Sets onboarded_at = now() and persists any
+    final field values from the wizard's last step in the same write.
+    Idempotent: calling twice is harmless, onboarded_at gets refreshed.
+    """
+    from db.repositories import UserProfileRepository
+    user_id = require_user_id(request)
+    fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+    profile = await UserProfileRepository.mark_onboarded(user_id, fields)
+    return {"profile": profile, "onboarded": True}
+
+
 # === ANALYSIS ENDPOINTS ===
 
 class AnalyzeRequest(BaseModel):

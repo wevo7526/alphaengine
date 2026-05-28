@@ -68,6 +68,90 @@ body {
   50% { opacity: 1; }
 }
 
+/* ─── Brand constellation animation (auth panel) ────────────────────────
+   A slow, perpetual network animation that conveys agent connectivity
+   and data flow. All durations are 30-120s so the motion reads as
+   ambient, never distracting. */
+
+@keyframes orbit-clockwise {
+  to { transform: rotate(360deg); }
+}
+@keyframes orbit-counter {
+  to { transform: rotate(-360deg); }
+}
+.constellation-orbit-1 {
+  transform-origin: center;
+  animation: orbit-clockwise 60s linear infinite;
+}
+.constellation-orbit-2 {
+  transform-origin: center;
+  animation: orbit-counter 90s linear infinite;
+}
+.constellation-halo {
+  transform-origin: center;
+  animation: orbit-clockwise 180s linear infinite;
+}
+
+@keyframes core-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.18); opacity: 1; }
+}
+.constellation-core {
+  transform-origin: center;
+  animation: core-breathe 5.5s ease-in-out infinite;
+}
+
+@keyframes node-glow {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+.constellation-node {
+  animation: node-glow 4s ease-in-out infinite;
+}
+
+@keyframes line-shimmer {
+  0%, 100% { opacity: 0.18; }
+  50% { opacity: 0.42; }
+}
+.constellation-line {
+  animation: line-shimmer 7s ease-in-out infinite;
+}
+
+@keyframes drift-1 {
+  0%   { transform: translate(0, 0); }
+  33%  { transform: translate(60px, -40px); }
+  66%  { transform: translate(-30px, 50px); }
+  100% { transform: translate(0, 0); }
+}
+@keyframes drift-2 {
+  0%   { transform: translate(0, 0); }
+  33%  { transform: translate(-50px, 30px); }
+  66%  { transform: translate(45px, -25px); }
+  100% { transform: translate(0, 0); }
+}
+.constellation-drift-1 { animation: drift-1 28s ease-in-out infinite; }
+.constellation-drift-2 { animation: drift-2 36s ease-in-out infinite; }
+
+@keyframes scan-sweep {
+  0%   { transform: rotate(0deg); opacity: 0; }
+  10%  { opacity: 0.5; }
+  90%  { opacity: 0.5; }
+  100% { transform: rotate(360deg); opacity: 0; }
+}
+.constellation-scan {
+  transform-origin: center;
+  animation: scan-sweep 12s ease-in-out infinite;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up-1 { animation: fade-up 0.55s ease-out 0.05s both; }
+.fade-up-2 { animation: fade-up 0.55s ease-out 0.15s both; }
+.fade-up-3 { animation: fade-up 0.55s ease-out 0.25s both; }
+.fade-up-4 { animation: fade-up 0.55s ease-out 0.35s both; }
+
 /* ────────────────────────────────────────────────────────────────────────
    Clerk: hide third-party branding badges + development-mode footer.
    Targeted at known class shapes Clerk uses; the appearance API above

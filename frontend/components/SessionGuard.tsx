@@ -5,50 +5,107 @@ import { useRouter, usePathname } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { api } from "@/lib/api";
 
-type AuthState = "checking" | "authenticated" | "unauthenticated";
-
 /**
- * Minimal session guard.
+ * Session + onboarding guard.
  *
- * - On auth routes (/sign-in, /sign-up): always render children, no checks.
- * - Off auth routes: wait for Clerk to load, redirect to /sign-in if not signed in.
- * - Optimistic — we trust Clerk's isSignedIn and render immediately when true.
- *   The backend will 401 individual API calls if the token is genuinely bad;
- *   we don't block the UI on a blocking /api/auth/me gate (that was the loop).
+ * Route classes:
+ *   PUBLIC (no checks):  /, /sign-in, /sign-up, /sso-callback
+ *   ONBOARDING:          /onboarding
+ *     - signed-in only
+ *     - if already onboarded, redirect to /dashboard
+ *   PROTECTED:           every other route
+ *     - signed-in required, otherwise bounce to /
+ *     - if signed-in but not onboarded, bounce to /onboarding
+ *
+ * Onboarding state is cached after the first successful fetch so
+ * subsequent navigations don't re-hit the API.
  */
 export function SessionGuard({ children }: { children: React.ReactNode }) {
   const { isLoaded, isSignedIn } = useUser();
   const router = useRouter();
   const pathname = usePathname();
   const redirectedRef = useRef(false);
+  const [onboardingChecked, setOnboardingChecked] = useState(false);
+  const [isOnboarded, setIsOnboarded] = useState<boolean | null>(null);
 
-  // Public routes (no auth required, no redirect): marketing landing + auth pages.
   const isPublicRoute =
     pathname === "/" ||
     pathname.startsWith("/sign-in") ||
-    pathname.startsWith("/sign-up");
+    pathname.startsWith("/sign-up") ||
+    pathname.startsWith("/sso-callback");
+  const isOnboardingRoute = pathname.startsWith("/onboarding");
+
+  // Fetch onboarding state once after sign-in.
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) {
+      setOnboardingChecked(false);
+      setIsOnboarded(null);
+      return;
+    }
+    if (onboardingChecked) return;
+
+    let cancelled = false;
+    api
+      .myProfile()
+      .then((d) => {
+        if (cancelled) return;
+        setIsOnboarded(Boolean(d?.onboarded));
+        setOnboardingChecked(true);
+      })
+      .catch(() => {
+        // Default to unonboarded on any error so the user gets the wizard
+        if (cancelled) return;
+        setIsOnboarded(false);
+        setOnboardingChecked(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, isSignedIn, onboardingChecked]);
 
   useEffect(() => {
-    // Public routes (landing, sign-in, sign-up) never redirect
+    // Public routes never redirect
     if (isPublicRoute) return;
-
-    // Wait for Clerk
     if (!isLoaded) return;
 
-    // Only redirect once per unmount cycle.
-    // Unauthenticated users bounce to the marketing landing (not /sign-in)
-    // so the public site is always the "home base" — visitors choose to
-    // sign in from the nav when they're ready.
-    if (!isSignedIn && !redirectedRef.current) {
-      redirectedRef.current = true;
-      router.replace("/");
+    // Unsigned-in users on protected routes bounce to landing
+    if (!isSignedIn) {
+      if (!redirectedRef.current) {
+        redirectedRef.current = true;
+        router.replace("/");
+      }
+      return;
     }
-  }, [isLoaded, isSignedIn, isPublicRoute, pathname, router]);
 
-  // Public routes render their own content (auth-aware, but no gate)
+    // Wait for onboarding check to settle before any onboarding routing
+    if (!onboardingChecked) return;
+
+    // Onboarded users hitting /onboarding go to dashboard
+    if (isOnboardingRoute && isOnboarded) {
+      router.replace("/dashboard");
+      return;
+    }
+
+    // Unonboarded users on any other protected route bounce to /onboarding
+    if (!isOnboardingRoute && !isOnboarded) {
+      router.replace("/onboarding");
+      return;
+    }
+  }, [
+    isLoaded,
+    isSignedIn,
+    isPublicRoute,
+    isOnboardingRoute,
+    onboardingChecked,
+    isOnboarded,
+    pathname,
+    router,
+  ]);
+
+  // Public routes render their own content
   if (isPublicRoute) return <>{children}</>;
 
-  // Waiting for Clerk SDK to load
+  // Waiting for Clerk SDK
   if (!isLoaded) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
@@ -57,21 +114,47 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
             className="w-4 h-4 rounded-full border-[1.5px] border-accent border-t-transparent"
             style={{ animation: "spin-slow 0.8s linear infinite" }}
           />
-          <p className="text-[11px] text-text-tertiary">Loading...</p>
+          <p className="text-[11px] text-text-tertiary">Loading…</p>
         </div>
       </div>
     );
   }
 
-  // Not signed in — show placeholder while redirect to landing fires
+  // Not signed in (bounce in progress)
   if (!isSignedIn) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
-        <p className="text-[11px] text-text-tertiary">Redirecting...</p>
+        <p className="text-[11px] text-text-tertiary">Redirecting…</p>
       </div>
     );
   }
 
-  // Signed in — render app. Individual API calls will 401 if token bad.
+  // Onboarding-route flow: render once we know whether to redirect or not
+  if (isOnboardingRoute) {
+    if (!onboardingChecked) {
+      return (
+        <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
+          <p className="text-[11px] text-text-tertiary">Checking your profile…</p>
+        </div>
+      );
+    }
+    return <>{children}</>;
+  }
+
+  // Protected routes: gate on onboarding completeness
+  if (!onboardingChecked) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
+        <p className="text-[11px] text-text-tertiary">Loading your workspace…</p>
+      </div>
+    );
+  }
+  if (!isOnboarded) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
+        <p className="text-[11px] text-text-tertiary">Setting up your account…</p>
+      </div>
+    );
+  }
   return <>{children}</>;
 }

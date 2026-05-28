@@ -12,7 +12,7 @@ from db.database import async_session
 from db.models import (
     IntelligenceMemoRecord, TradeRecord, PortfolioSnapshotRecord,
     BacktestRunRecord, BacktestResultRecord, FactorExposureRecord,
-    RegimeRecord, MacroSnapshotRecord,
+    RegimeRecord, MacroSnapshotRecord, UserProfile,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,6 +147,57 @@ class MemoRepository:
                             if isinstance(t, str) and t.strip():
                                 seen.add(t.strip().upper())
             return sorted(seen)
+
+
+class UserProfileRepository:
+    """CRUD for per-user onboarding profiles."""
+
+    @staticmethod
+    async def get(user_id: str) -> dict | None:
+        async with async_session() as session:
+            result = await session.execute(
+                select(UserProfile).where(UserProfile.user_id == user_id)
+            )
+            r = result.scalar_one_or_none()
+            if r is None:
+                return None
+            return {c.name: getattr(r, c.name) for c in r.__table__.columns}
+
+    @staticmethod
+    async def upsert(user_id: str, fields: dict) -> dict:
+        """
+        Upsert profile fields for a user. Returns the resulting row as a dict.
+        Allowed fields: full_name, email, role, portfolio_size_usd, benchmark,
+        mandate, onboarded_at. Anything else is ignored.
+        """
+        allowed = {
+            "full_name", "email", "role",
+            "portfolio_size_usd", "benchmark", "mandate", "onboarded_at",
+        }
+        clean = {k: v for k, v in fields.items() if k in allowed}
+
+        async with async_session() as session:
+            result = await session.execute(
+                select(UserProfile).where(UserProfile.user_id == user_id)
+            )
+            row = result.scalar_one_or_none()
+            if row is None:
+                row = UserProfile(user_id=user_id, **clean)
+                session.add(row)
+            else:
+                for k, v in clean.items():
+                    setattr(row, k, v)
+            await session.commit()
+            await session.refresh(row)
+            return {c.name: getattr(row, c.name) for c in row.__table__.columns}
+
+    @staticmethod
+    async def mark_onboarded(user_id: str, fields: dict | None = None) -> dict:
+        """Set onboarded_at to now and optionally update other fields."""
+        from datetime import datetime, timezone as tz
+        merged = dict(fields or {})
+        merged["onboarded_at"] = datetime.now(tz.utc)
+        return await UserProfileRepository.upsert(user_id, merged)
 
 
 class TradeRepository:

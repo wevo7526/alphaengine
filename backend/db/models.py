@@ -222,6 +222,36 @@ class PortfolioPosition(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class UserProfile(Base):
+    """
+    Lightweight per-user profile captured during onboarding.
+
+    Holds the operational defaults a PM picks when they first sign up:
+    role, paper portfolio size for sizing math, benchmark for relative
+    performance, and investment mandate (long-only / L/S / market-neutral
+    / macro / multi-strat). `onboarded_at` is set when the user completes
+    the onboarding flow; null means they have not finished yet and the
+    SessionGuard should route them to /onboarding.
+
+    This is intentionally minimal — full firm / pod / multi-tenant
+    structure lands in Tranche 1 of the production refactor. For now,
+    every user has one solo profile.
+    """
+    __tablename__ = "user_profiles"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=False, unique=True, index=True)
+    full_name = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    role = Column(String(30), nullable=True)            # pm | analyst | allocator | other
+    portfolio_size_usd = Column(Float, nullable=True)
+    benchmark = Column(String(20), default="SPY")
+    mandate = Column(String(30), default="long_short")  # long_only|long_short|market_neutral|macro|multi_strat
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    onboarded_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class MacroSnapshotRecord(Base):
     """Historical macro regime snapshots for tracking regime changes."""
     __tablename__ = "macro_snapshots"

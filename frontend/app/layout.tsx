@@ -58,6 +58,11 @@ export default function RootLayout({
           fontFamily: "var(--font-geist-sans), system-ui, sans-serif",
           fontSize: "14px",
         },
+        // Note: we no longer render Clerk's <SignIn>/<SignUp> components.
+        // Auth uses our custom AuthPanel + GoogleButton (hook-based OAuth).
+        // The only Clerk component still in the app is <UserButton>, so the
+        // appearance below covers UserButton popover styling + auth fallback
+        // pages (e.g. /sso-callback) just in case Clerk ever renders chrome.
         elements: {
           rootBox: { width: "100%" },
           card: {
