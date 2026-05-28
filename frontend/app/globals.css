@@ -152,6 +152,75 @@ body {
 .fade-up-3 { animation: fade-up 0.55s ease-out 0.25s both; }
 .fade-up-4 { animation: fade-up 0.55s ease-out 0.35s both; }
 
+/* ─── Bloomberg-style marketing motifs ──────────────────────────────────
+   Ticker band scroll, terminal cursor blink, sparkline draw-in, etc.
+   Used by the marketing landing page. All durations are slow/ambient. */
+
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.ticker-scroll {
+  animation: ticker-scroll 80s linear infinite;
+  will-change: transform;
+}
+
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.terminal-cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1em;
+  background: currentColor;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: cursor-blink 1.1s steps(1, end) infinite;
+}
+
+@keyframes sparkline-draw {
+  from { stroke-dashoffset: 600; }
+  to   { stroke-dashoffset: 0; }
+}
+.sparkline-path {
+  stroke-dasharray: 600;
+  stroke-dashoffset: 600;
+  animation: sparkline-draw 4s ease-out 0.4s forwards;
+}
+
+@keyframes counter-tick {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.85; }
+}
+.counter-tick {
+  animation: counter-tick 2.4s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16,185,129,0.5); }
+  50%      { box-shadow: 0 0 0 6px rgba(16,185,129,0); }
+}
+.status-pulse { animation: status-pulse 2.4s ease-out infinite; }
+
+@keyframes grid-shift {
+  from { background-position: 0 0; }
+  to   { background-position: 40px 40px; }
+}
+.grid-bg {
+  background-image:
+    linear-gradient(to right, rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 40px 40px;
+  animation: grid-shift 30s linear infinite;
+}
+
+@keyframes pulse-bar {
+  0%, 100% { transform: scaleY(0.4); opacity: 0.5; }
+  50%      { transform: scaleY(1);   opacity: 1; }
+}
+.pulse-bar { animation: pulse-bar 1.6s ease-in-out infinite; transform-origin: bottom; }
+
 /* ────────────────────────────────────────────────────────────────────────
    Clerk: hide third-party branding badges + development-mode footer.
    Targeted at known class shapes Clerk uses; the appearance API above
