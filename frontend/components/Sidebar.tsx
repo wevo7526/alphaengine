@@ -69,7 +69,7 @@ function IconStack(props: React.SVGProps<SVGSVGElement>) {
 }
 
 const NAV = [
-  { href: "/", label: "Home", icon: IconHome },
+  { href: "/dashboard", label: "Home", icon: IconHome },
   { href: "/analysis", label: "Analysis", icon: IconChart },
   { href: "/memos", label: "Analyses", icon: IconStack },
   { href: "/portfolio", label: "Portfolio", icon: IconBriefcase },
@@ -83,13 +83,20 @@ const BOTTOM = [{ href: "/settings", label: "Settings", icon: IconSettings }];
 export function Sidebar() {
   const pathname = usePathname();
 
-  // Hide sidebar on auth pages — auth layout takes over the full screen
-  if (pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up")) {
+  // Hide sidebar on public marketing landing + auth pages.
+  // The marketing site and auth flows have their own full-width layouts.
+  if (
+    pathname === "/" ||
+    pathname.startsWith("/sign-in") ||
+    pathname.startsWith("/sign-up")
+  ) {
     return null;
   }
 
   const isActive = (href: string) =>
-    href === "/" ? pathname === "/" : pathname.startsWith(href);
+    href === "/dashboard"
+      ? pathname === "/dashboard"
+      : pathname.startsWith(href);
 
   return (
     <aside className="fixed inset-y-0 left-0 w-52 bg-bg-primary border-r border-border-primary flex flex-col z-50">

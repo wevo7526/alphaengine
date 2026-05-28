@@ -22,24 +22,31 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const redirectedRef = useRef(false);
 
-  const isAuthRoute = pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
+  // Public routes (no auth required, no redirect): marketing landing + auth pages.
+  const isPublicRoute =
+    pathname === "/" ||
+    pathname.startsWith("/sign-in") ||
+    pathname.startsWith("/sign-up");
 
   useEffect(() => {
-    // Auth routes never redirect
-    if (isAuthRoute) return;
+    // Public routes (landing, sign-in, sign-up) never redirect
+    if (isPublicRoute) return;
 
     // Wait for Clerk
     if (!isLoaded) return;
 
-    // Only redirect once per unmount cycle
+    // Only redirect once per unmount cycle.
+    // Unauthenticated users bounce to the marketing landing (not /sign-in)
+    // so the public site is always the "home base" — visitors choose to
+    // sign in from the nav when they're ready.
     if (!isSignedIn && !redirectedRef.current) {
       redirectedRef.current = true;
-      router.replace("/sign-in");
+      router.replace("/");
     }
-  }, [isLoaded, isSignedIn, isAuthRoute, pathname, router]);
+  }, [isLoaded, isSignedIn, isPublicRoute, pathname, router]);
 
-  // Auth pages render their own content
-  if (isAuthRoute) return <>{children}</>;
+  // Public routes render their own content (auth-aware, but no gate)
+  if (isPublicRoute) return <>{children}</>;
 
   // Waiting for Clerk SDK to load
   if (!isLoaded) {
@@ -56,11 +63,11 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Not signed in — show placeholder while redirect fires
+  // Not signed in — show placeholder while redirect to landing fires
   if (!isSignedIn) {
     return (
       <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
-        <p className="text-[11px] text-text-tertiary">Redirecting to sign-in...</p>
+        <p className="text-[11px] text-text-tertiary">Redirecting...</p>
       </div>
     );
   }

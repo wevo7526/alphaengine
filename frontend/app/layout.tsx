@@ -18,8 +18,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Alpha Engine",
-  description: "AI-Powered Quantitative Trading Intelligence",
+  title: "Alpha Engine — AI agents for hedge fund research",
+  description:
+    "An auditable, math-grounded research desk for L/S equity and macro PMs. Built on institutional-grade quant: cointegration, Black-Litterman, Cornish-Fisher VaR, Hidden Markov regime detection.",
 };
 
 export default function RootLayout({
@@ -35,7 +36,7 @@ export default function RootLayout({
       }
       signInUrl="/sign-in"
       signUpUrl="/sign-up"
-      afterSignOutUrl="/sign-in"
+      afterSignOutUrl="/"
       appearance={{
         variables: {
           colorPrimary: "#3b82f6",

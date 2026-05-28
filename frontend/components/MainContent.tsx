@@ -4,12 +4,18 @@ import { usePathname } from "next/navigation";
 
 export function MainContent({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isAuth =
-    pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
+  // Marketing landing + auth pages render full-screen (Sidebar is hidden via its own
+  // pathname check). All other routes get the sidebar margin.
+  const isFullScreen =
+    pathname === "/" ||
+    pathname.startsWith("/sign-in") ||
+    pathname.startsWith("/sign-up");
 
-  if (isAuth) {
-    // Auth pages take over the full screen — no sidebar margin
-    return <>{children}</>;
+  if (isFullScreen) {
+    // Wrap in a full-width flex child so children fill horizontal space.
+    // Without this, the body's `flex` container collapses the page to its
+    // content width and everything looks crammed to the left.
+    return <main className="flex-1 w-full min-w-0">{children}</main>;
   }
 
   return (

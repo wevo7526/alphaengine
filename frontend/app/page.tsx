@@ -1,429 +1,356 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api } from "@/lib/api";
-import { MacroChart } from "@/components/MacroChart";
-import { MemoPanel } from "@/components/MemoPanel";
-import type { MacroIndicator, IntelligenceMemo } from "@/lib/types";
+import { useUser } from "@clerk/nextjs";
 
-interface MacroSeries {
-  yield_curve: { date: string; value: number }[];
-  vix: { date: string; value: number }[];
-  credit_spreads: { date: string; value: number }[];
-  fed_funds: { date: string; value: number }[];
-}
-
-interface MacroDashboard {
-  indicators: Record<string, MacroIndicator>;
-  count: number;
-  series: MacroSeries;
-}
-
-interface MorningReport {
-  title?: string;
-  executive_summary?: string;
-  key_findings?: string[];
-  macro_regime?: string;
-  overall_risk_level?: string;
-  trade_ideas?: { ticker: string; direction: string; conviction: number; thesis: string }[];
-}
-
-interface PortfolioSummary {
-  open_positions: number;
-  closed_positions: number;
-  total_size_pct: number | null;
-  unrealized_pnl_pct: number | null;
-  unrealized_pnl_dollars: number | null;
-  realized_pnl_pct: number | null;
-  wins: number;
-  losses: number;
-  win_rate: number | null;
-}
-
-const ALL_INDICATORS: Record<string, string> = {
-  fed_funds_rate: "Fed Funds Rate",
-  yield_curve_spread: "Yield Curve (10Y-2Y)",
-  breakeven_inflation: "Breakeven Inflation",
-  credit_spreads: "HY Credit Spreads",
-  vix: "VIX",
-  unemployment: "Unemployment",
-  cpi: "CPI",
-  real_gdp: "Real GDP",
-  fed_balance_sheet: "Fed Balance Sheet",
-  wti_crude: "WTI Crude",
-  usd_index: "USD Index",
-  m2_money_supply: "M2 Money Supply",
-  jobless_claims: "Initial Claims",
-};
-
-export default function HomePage() {
-  const [macro, setMacro] = useState<MacroDashboard | null>(null);
-  const [macroLoading, setMacroLoading] = useState(true);
-  const [macroError, setMacroError] = useState<string | null>(null);
-  const [morningReport, setMorningReport] = useState<MorningReport | null>(null);
-  const [recentMemos, setRecentMemos] = useState<IntelligenceMemo[]>([]);
-  const [expandedMemo, setExpandedMemo] = useState<number | null>(null);
-  const [regime, setRegime] = useState<Record<string, unknown> | null>(null);
-  const [reportLoading, setReportLoading] = useState(false);
-  const [apiError, setApiError] = useState<string | null>(null);
-  const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
-
-  const recordError = (label: string, e: unknown) => {
-    const msg = e instanceof Error ? e.message : String(e);
-    setApiError(`${label}: ${msg}`);
-    if (typeof console !== "undefined") console.error(`[dashboard] ${label}`, e);
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-
-    api.macroDashboard().then((d: unknown) => {
-      if (!cancelled) {
-        setMacro(d as MacroDashboard);
-        setMacroLoading(false);
-      }
-    }).catch((e) => {
-      if (!cancelled) {
-        setMacroError(e instanceof Error ? e.message : "Failed to load macro data");
-        setMacroLoading(false);
-      }
-    });
-
-    api.regime().then((d: unknown) => {
-      if (!cancelled) setRegime(d as Record<string, unknown>);
-    }).catch((e) => { if (!cancelled) recordError("regime", e); });
-
-    api.latestMemos(5).then((d: unknown) => {
-      if (!cancelled) setRecentMemos((d as { memos: IntelligenceMemo[] }).memos || []);
-    }).catch((e) => { if (!cancelled) recordError("recent analyses", e); });
-
-    api.positions().then((d: unknown) => {
-      if (!cancelled) {
-        const data = d as { summary?: PortfolioSummary };
-        if (data.summary) setPortfolio(data.summary);
-      }
-    }).catch(() => { /* portfolio is optional on cold start */ });
-
-    // Auto-load morning report only between 4:00-8:30 AM EST
-    const now = new Date();
-    const estHour = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" })).getHours();
-    const estMin = new Date(now.toLocaleString("en-US", { timeZone: "America/New_York" })).getMinutes();
-    const isPreMarket = estHour >= 4 && (estHour < 8 || (estHour === 8 && estMin <= 30));
-
-    if (isPreMarket) {
-      setReportLoading(true);
-      api.morningReport().then((d: unknown) => {
-        if (!cancelled) {
-          setMorningReport(d as MorningReport);
-          setReportLoading(false);
-        }
-      }).catch(() => { if (!cancelled) setReportLoading(false); });
-    }
-
-    return () => { cancelled = true; };
-  }, []);
-
-  const loadMorningReport = () => {
-    setReportLoading(true);
-    api.morningReport().then((d: unknown) => {
-      setMorningReport(d as MorningReport);
-      setReportLoading(false);
-    }).catch((e) => {
-      recordError("morning report", e);
-      setReportLoading(false);
-    });
-  };
-
-  const indicators = macro?.indicators ?? {};
-  const series = macro?.series;
+export default function LandingPage() {
+  const { isSignedIn } = useUser();
 
   return (
-    <div className="p-8 max-w-6xl">
-      {apiError && (
-        <div className="mb-4 flex items-start justify-between rounded-xl border border-signal-red/25 bg-signal-red/[0.06] p-3">
-          <div>
-            <p className="text-xs font-medium text-signal-red">Data load issue</p>
-            <p className="text-[11px] text-text-tertiary mt-0.5">{apiError}</p>
-          </div>
-          <button
-            onClick={() => setApiError(null)}
-            className="text-text-quaternary hover:text-text-primary text-xs px-2"
-            aria-label="Dismiss"
-          >
-            ×
-          </button>
-        </div>
-      )}
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-text-primary mb-1">
-            Dashboard
-          </h1>
-          <p className="text-sm text-text-tertiary">
-            Market overview and intelligence briefing.
-          </p>
-        </div>
-        <Link
-          href="/analysis"
-          className="px-4 py-2 rounded-xl bg-white text-bg-primary text-[13px] font-medium hover:bg-zinc-200 transition-colors"
-        >
-          New Analysis
-        </Link>
-      </div>
-
-      {/* Morning Report */}
-      <div className="rounded-xl border border-border-primary bg-bg-surface p-5 mb-6">
-        {morningReport ? (
-          <div>
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-[15px] font-semibold text-text-primary">
-                {morningReport.title || "Morning Briefing"}
-              </h2>
-              <div className="flex items-center gap-3 text-[11px]">
-                {morningReport.macro_regime && (
-                  <span className="text-text-quaternary">
-                    Regime: <span className="text-text-primary font-medium">{morningReport.macro_regime}</span>
-                  </span>
-                )}
-                {morningReport.overall_risk_level && (
-                  <span className="text-text-quaternary">
-                    Risk: <span className="text-text-primary font-medium">{morningReport.overall_risk_level}</span>
-                  </span>
-                )}
-              </div>
-            </div>
-            <p className="text-[13px] text-text-secondary leading-relaxed mb-3">
-              {morningReport.executive_summary}
-            </p>
-            {morningReport.key_findings && morningReport.key_findings.length > 0 && (
-              <ul className="space-y-1">
-                {morningReport.key_findings.slice(0, 4).map((f, i) => (
-                  <li key={i} className="text-xs text-text-tertiary flex items-start gap-2">
-                    <span className="text-accent mt-0.5 shrink-0">{i + 1}</span>
-                    {f}
-                  </li>
-                ))}
-              </ul>
+    <div className="min-h-screen bg-bg-primary text-text-primary flex flex-col">
+      {/* Top nav */}
+      <header className="border-b border-border-primary/60 bg-bg-primary/80 backdrop-blur sticky top-0 z-50">
+        <div className="max-w-6xl mx-auto px-6 h-14 flex items-center justify-between">
+          <Link href="/" className="text-[15px] font-semibold tracking-tight">
+            alpha<span className="text-accent">engine</span>
+          </Link>
+          <nav className="hidden md:flex items-center gap-6 text-[13px] text-text-tertiary">
+            <a href="#platform" className="hover:text-text-primary transition-colors">Platform</a>
+            <a href="#math" className="hover:text-text-primary transition-colors">Math</a>
+            <a href="#trust" className="hover:text-text-primary transition-colors">Trust</a>
+          </nav>
+          <div className="flex items-center gap-2">
+            {isSignedIn ? (
+              <Link
+                href="/dashboard"
+                className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-[12px] font-medium hover:bg-zinc-200 transition-colors"
+              >
+                Go to dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/sign-in"
+                  className="text-[13px] text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5"
+                >
+                  Sign in
+                </Link>
+                <Link
+                  href="/sign-up"
+                  className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-[12px] font-medium hover:bg-zinc-200 transition-colors"
+                >
+                  Request access
+                </Link>
+              </>
             )}
           </div>
-        ) : reportLoading ? (
+        </div>
+      </header>
+
+      {/* Hero */}
+      <section className="max-w-6xl mx-auto px-6 pt-20 pb-24 md:pt-32 md:pb-32 w-full">
+        <div className="max-w-3xl">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-text-quaternary mb-5">
+            For long/short equity & macro PMs
+          </p>
+          <h1 className="text-4xl md:text-5xl lg:text-6xl font-semibold tracking-tight leading-[1.05] mb-6">
+            AI agents for hedge fund research.
+          </h1>
+          <p className="text-[16px] md:text-[18px] text-text-secondary leading-relaxed mb-10 max-w-2xl">
+            An auditable, math-grounded research desk that turns a freeform query
+            into a 10-name trade slate with cointegrated pairs, factor
+            decomposition, and live receipts — then grades itself in public.
+          </p>
           <div className="flex items-center gap-3">
-            <div className="w-3 h-3 rounded-full border-[1.5px] border-accent border-t-transparent" style={{ animation: "spin-slow 0.8s linear infinite" }} />
+            {isSignedIn ? (
+              <Link
+                href="/dashboard"
+                className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
+              >
+                Go to dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/sign-up"
+                  className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
+                >
+                  Request access
+                </Link>
+                <Link
+                  href="/sign-in"
+                  className="px-5 py-2.5 rounded-xl border border-border-primary text-text-secondary hover:text-text-primary hover:border-zinc-600 text-[14px] font-medium transition-colors"
+                >
+                  Sign in
+                </Link>
+              </>
+            )}
+          </div>
+        </div>
+      </section>
+
+      {/* Problem section */}
+      <section className="border-y border-border-primary/60 bg-bg-surface/40">
+        <div className="max-w-6xl mx-auto px-6 py-20 md:py-24">
+          <div className="grid md:grid-cols-2 gap-12 items-start">
             <div>
-              <h2 className="text-[13px] font-medium text-text-primary mb-0.5">Morning Briefing</h2>
-              <p className="text-xs text-text-tertiary">Generating pre-market intelligence...</p>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-text-quaternary mb-4">
+                The problem
+              </p>
+              <h2 className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight mb-5">
+                Wall Street research still runs on PDFs and gut feel.
+              </h2>
+              <p className="text-[15px] text-text-tertiary leading-relaxed">
+                Sell-side notes lag the move. Bloomberg shows you data but
+                doesn&apos;t reason about it. Every AI tool you&apos;ve tried
+                makes up numbers, recommends consensus mega-caps, or has no risk
+                framework. PMs end up doing the same manual screen, the same
+                manual valuation, and the same manual stress test every Monday.
+              </p>
+            </div>
+            <div className="md:pt-8">
+              <p className="text-[44px] md:text-[56px] font-semibold text-text-primary leading-none mb-3">
+                ~12 hrs
+              </p>
+              <p className="text-[14px] text-text-tertiary leading-relaxed">
+                The average PM spends 12+ hours/week assembling research that
+                exists in fragments across Bloomberg, FactSet, sell-side decks,
+                10-Ks, and 13F filings. Alpha Engine produces a defensible
+                10-name slate in under 10 minutes — and every number traces back
+                to the SEC accession, FRED series, or fund 13F you can pull
+                yourself.
+              </p>
             </div>
           </div>
-        ) : (
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-[13px] font-medium text-text-primary mb-0.5">Morning Briefing</h2>
-              <p className="text-xs text-text-tertiary">Pre-market intelligence with macro regime, risks, and opportunities.</p>
-            </div>
-            <button
-              onClick={loadMorningReport}
-              className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors"
+        </div>
+      </section>
+
+      {/* Platform — five engines */}
+      <section id="platform" className="max-w-6xl mx-auto px-6 py-24 md:py-28 w-full">
+        <div className="max-w-2xl mb-14">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-text-quaternary mb-4">
+            The platform
+          </p>
+          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight">
+            Five engines. One desk.
+          </h2>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-px bg-border-primary/60 rounded-xl overflow-hidden border border-border-primary/60">
+          {ENGINES.map((engine) => (
+            <article
+              key={engine.number}
+              className="bg-bg-surface p-7 md:p-8 flex flex-col"
             >
-              Generate Report
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Portfolio P&L mini-card */}
-      {portfolio && portfolio.open_positions > 0 && (
-        <Link href="/portfolio" className="block mb-6 group">
-          <div className="rounded-xl border border-border-primary bg-bg-surface p-4 group-hover:border-zinc-600 transition-colors">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-6">
-                <div>
-                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Open Positions</p>
-                  <p className="text-lg font-mono font-medium text-text-primary">{portfolio.open_positions}</p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Capital Deployed</p>
-                  <p className="text-lg font-mono font-medium text-text-primary">
-                    {portfolio.total_size_pct != null ? `${portfolio.total_size_pct.toFixed(1)}%` : "—"}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Unrealized P&amp;L</p>
-                  <p className={`text-lg font-mono font-medium ${
-                    portfolio.unrealized_pnl_pct != null
-                      ? portfolio.unrealized_pnl_pct >= 0 ? "text-signal-green" : "text-signal-red"
-                      : "text-text-primary"
-                  }`}>
-                    {portfolio.unrealized_pnl_pct != null
-                      ? `${portfolio.unrealized_pnl_pct >= 0 ? "+" : ""}${portfolio.unrealized_pnl_pct.toFixed(2)}%`
-                      : "—"}
-                  </p>
-                </div>
-                {portfolio.win_rate != null && (
-                  <div>
-                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Win Rate</p>
-                    <p className="text-lg font-mono font-medium text-text-primary">{portfolio.win_rate.toFixed(0)}%</p>
-                  </div>
-                )}
+              <p className="text-[11px] font-mono text-text-quaternary mb-4">{engine.number}</p>
+              <h3 className="text-[17px] font-semibold text-text-primary mb-2">
+                {engine.title}
+              </h3>
+              <p className="text-[13px] text-text-secondary leading-relaxed mb-4">
+                {engine.body}
+              </p>
+              <div className="mt-auto flex flex-wrap gap-1.5">
+                {engine.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className="text-[10px] font-mono text-text-quaternary bg-bg-elevated/70 border border-border-primary/40 px-2 py-0.5 rounded"
+                  >
+                    {tag}
+                  </span>
+                ))}
               </div>
-              <span className="text-[11px] text-text-tertiary group-hover:text-text-secondary transition-colors">View portfolio →</span>
-            </div>
-          </div>
-        </Link>
-      )}
+            </article>
+          ))}
+        </div>
+      </section>
 
-      {/* Regime Detection */}
-      {regime && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-4 mb-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className={`w-2.5 h-2.5 rounded-full ${
-                String(regime.current_regime) === "risk_on" ? "bg-signal-green" :
-                String(regime.current_regime) === "risk_off" ? "bg-signal-red" : "bg-signal-yellow"
-              }`} />
-              <div>
-                <p className="text-[11px] text-text-quaternary uppercase tracking-wider">Market Regime</p>
-                <p className="text-[15px] font-semibold text-text-primary capitalize">
-                  {String(regime.current_regime || "unknown").replace("_", " ")}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-text-quaternary">Confidence:</span>
-              <span className="text-sm font-mono text-text-primary">
-                {regime.confidence ? `${(Number(regime.confidence) * 100).toFixed(0)}%` : "—"}
-              </span>
-              <span className="text-[10px] text-text-quaternary ml-2">
-                {String(regime.method || "")}
-              </span>
-            </div>
-          </div>
-          {regime.probabilities && typeof regime.probabilities === "object" ? (
-            <div className="flex gap-2 mt-3">
-              {Object.entries((regime.probabilities || {}) as Record<string, number>).map(([state, prob]) => (
-                <div key={state} className="flex-1 rounded-lg bg-bg-primary px-2 py-1.5 text-center">
-                  <p className="text-[9px] text-text-quaternary capitalize">{state.replace("_", " ")}</p>
-                  <p className="text-xs font-mono text-text-primary">{(Number(prob) * 100).toFixed(0)}%</p>
+      {/* Math callout */}
+      <section id="math" className="border-y border-border-primary/60 bg-bg-surface/40">
+        <div className="max-w-6xl mx-auto px-6 py-20 md:py-24">
+          <div className="max-w-3xl">
+            <p className="text-[11px] uppercase tracking-[0.18em] text-text-quaternary mb-4">
+              The math
+            </p>
+            <h2 className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight mb-6">
+              Institutional-grade, not LLM-generated.
+            </h2>
+            <p className="text-[15px] text-text-tertiary leading-relaxed mb-8">
+              Black-Litterman optimization. EWMA covariance with Ledoit-Wolf
+              shrinkage. Cornish-Fisher VaR with bootstrap confidence
+              intervals. Engle-Granger cointegration with Ornstein-Uhlenbeck
+              half-life. Joint OLS key-rate durations. Information Coefficient
+              scoring on every signal. Hidden Markov regime classification. The
+              math is textbook — the agents orchestrate it.
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {MATH_BADGES.map((b) => (
+                <div
+                  key={b.label}
+                  className="rounded-xl border border-border-primary bg-bg-surface px-3 py-3"
+                >
+                  <p className="text-[10px] uppercase tracking-wider text-text-quaternary mb-1">
+                    {b.label}
+                  </p>
+                  <p className="text-[13px] text-text-primary font-mono">{b.value}</p>
                 </div>
               ))}
             </div>
-          ) : null}
+          </div>
         </div>
-      )}
+      </section>
 
-      {/* Macro Charts */}
-      {macroError && (
-        <div className="rounded-xl border border-signal-red/20 bg-signal-red/[0.04] p-4 mb-6">
-          <p className="text-xs text-signal-red">Macro data error: {macroError}</p>
-          <p className="text-[11px] text-text-quaternary mt-1">Make sure the backend is running on the correct port.</p>
+      {/* Trust pillars */}
+      <section id="trust" className="max-w-6xl mx-auto px-6 py-24 md:py-28 w-full">
+        <div className="max-w-2xl mb-14">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-text-quaternary mb-4">
+            Why a PM can trust it
+          </p>
+          <h2 className="text-2xl md:text-3xl font-semibold tracking-tight leading-tight">
+            Defensible by construction.
+          </h2>
         </div>
-      )}
-      {macroLoading ? (
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="rounded-xl border border-border-primary bg-bg-surface p-4 h-48 flex items-center justify-center">
-              <div className="flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full border-[1.5px] border-accent border-t-transparent" style={{ animation: "spin-slow 0.8s linear infinite" }} />
-                <span className="text-xs text-text-quaternary">Loading...</span>
-              </div>
+
+        <div className="grid sm:grid-cols-2 gap-px bg-border-primary/60 rounded-xl overflow-hidden border border-border-primary/60">
+          {TRUST_PILLARS.map((p) => (
+            <div key={p.title} className="bg-bg-surface p-7 md:p-8">
+              <h3 className="text-[15px] font-semibold text-text-primary mb-2">
+                {p.title}
+              </h3>
+              <p className="text-[13px] text-text-tertiary leading-relaxed">
+                {p.body}
+              </p>
             </div>
           ))}
         </div>
-      ) : series ? (
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <MacroChart title="Yield Curve (10Y-2Y)" data={series.yield_curve} color="#3b82f6" unit="%" />
-          <MacroChart title="VIX" data={series.vix} color="#ef4444" invertColor />
-          <MacroChart title="HY Credit Spreads" data={series.credit_spreads} color="#f59e0b" unit="%" invertColor />
-          <MacroChart title="Fed Funds Rate" data={series.fed_funds} color="#8b5cf6" unit="%" />
-        </div>
-      ) : null}
+      </section>
 
-      {/* All Indicators */}
-      {Object.keys(indicators).length > 0 && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface overflow-hidden mb-6">
-          <div className="px-4 py-3 border-b border-border-primary">
-            <h2 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider">
-              Economic Indicators
-            </h2>
-          </div>
-          <div className="divide-y divide-border-primary">
-            {Object.entries(ALL_INDICATORS).map(([key, label]) => {
-              const ind = indicators[key];
-              if (!ind) return null;
-              return (
-                <div key={key} className="flex items-center justify-between px-4 py-2.5">
-                  <span className="text-[13px] text-text-secondary">{label}</span>
-                  <div className="flex items-center gap-3">
-                    <span className={`text-[11px] font-mono ${ind.change > 0 ? "text-signal-green" : "text-signal-red"}`}>
-                      {ind.change > 0 ? "+" : ""}{ind.change.toFixed(2)}
-                    </span>
-                    <span className="text-[13px] font-mono font-medium text-text-primary w-20 text-right">
-                      {ind.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                    </span>
-                    <span className="text-[10px] text-text-quaternary w-20 text-right">
-                      {ind.date}
-                    </span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Recent Analyses */}
-      {recentMemos.length > 0 && (
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider">
-              Recent Analyses
-            </h2>
-            <Link href="/portfolio" className="text-[11px] text-accent hover:underline">
-              View all in Portfolio
-            </Link>
-          </div>
-          <div className="space-y-2">
-            {recentMemos.map((memo, i) => (
-              <div key={i}>
-                <div
-                  onClick={() => setExpandedMemo(expandedMemo === i ? null : i)}
-                  className="rounded-xl border border-border-primary bg-bg-surface p-4 hover:border-zinc-600 transition-colors cursor-pointer"
+      {/* Closing CTA */}
+      <section className="border-t border-border-primary/60 bg-bg-surface/40">
+        <div className="max-w-6xl mx-auto px-6 py-24 md:py-32 text-center">
+          <h2 className="text-3xl md:text-4xl font-semibold tracking-tight leading-tight mb-5">
+            Bring your research desk into the future.
+          </h2>
+          <p className="text-[15px] text-text-tertiary max-w-xl mx-auto mb-8 leading-relaxed">
+            Built for L/S equity and macro PMs who want defensible research,
+            not generative prose.
+          </p>
+          <div className="flex items-center justify-center gap-3">
+            {isSignedIn ? (
+              <Link
+                href="/dashboard"
+                className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
+              >
+                Go to dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/sign-up"
+                  className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
                 >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[13px] font-medium text-text-primary">
-                      {memo.title || memo.query}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {memo.trade_ideas && memo.trade_ideas.length > 0 && (
-                        <div className="flex gap-1">
-                          {memo.trade_ideas.slice(0, 4).map((ti, j) => (
-                            <span key={j} className="text-[10px] font-mono text-text-quaternary bg-bg-elevated px-1.5 py-0.5 rounded">
-                              {ti.ticker}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <span className="text-[10px] text-text-quaternary">
-                        {memo.created_at ? new Date(memo.created_at).toLocaleDateString() : ""}
-                      </span>
-                      <span className="text-text-quaternary text-xs">{expandedMemo === i ? "−" : "+"}</span>
-                    </div>
-                  </div>
-                  {expandedMemo !== i && (
-                    <p className="text-xs text-text-tertiary line-clamp-2">{memo.executive_summary}</p>
-                  )}
-                </div>
-                {expandedMemo === i && (
-                  <div className="mt-2">
-                    <MemoPanel memo={memo} onDelete={(id) => setRecentMemos((prev) => prev.filter((m) => m.id !== id))} />
-                  </div>
-                )}
-              </div>
-            ))}
+                  Request access
+                </Link>
+                <Link
+                  href="/sign-in"
+                  className="px-5 py-2.5 rounded-xl border border-border-primary text-text-secondary hover:text-text-primary hover:border-zinc-600 text-[14px] font-medium transition-colors"
+                >
+                  Sign in
+                </Link>
+              </>
+            )}
           </div>
         </div>
-      )}
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-border-primary/60 mt-auto">
+        <div className="max-w-6xl mx-auto px-6 py-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-[12px] text-text-quaternary">
+          <div className="flex items-center gap-4">
+            <span className="font-semibold text-text-secondary">
+              alpha<span className="text-accent">engine</span>
+            </span>
+            <span>© {new Date().getFullYear()}</span>
+          </div>
+          <div className="flex items-center gap-5">
+            <a href="#platform" className="hover:text-text-secondary transition-colors">Platform</a>
+            <a href="#math" className="hover:text-text-secondary transition-colors">Math</a>
+            <a href="#trust" className="hover:text-text-secondary transition-colors">Trust</a>
+            <Link href="/sign-in" className="hover:text-text-secondary transition-colors">Sign in</Link>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
+
+const ENGINES: { number: string; title: string; body: string; tags: string[] }[] = [
+  {
+    number: "01",
+    title: "Research Desk",
+    body:
+      "Five agents — Interpreter, Research Analyst, Risk Manager, Portfolio Strategist, CIO — produce a structured intelligence memo from a freeform query in under 10 minutes. Every numerical claim is grounded in a tool call you can audit.",
+    tags: ["LangGraph", "Claude Sonnet", "29 tools"],
+  },
+  {
+    number: "02",
+    title: "Hidden-Gem Discovery",
+    body:
+      "Five live screens that structurally break the mega-cap monoculture: insider cluster buys, smart-money 13F initiations, post-earnings drift on under-covered names, 52-week-low with insider buying, and sector-adjacent picks-and-shovels.",
+    tags: ["SEC EDGAR", "Form 4", "13F"],
+  },
+  {
+    number: "03",
+    title: "Risk + Attribution",
+    body:
+      "EWMA-Ledoit-Wolf covariance, Cornish-Fisher VaR with bootstrap CI, drawdown circuit breaker, marginal VaR gate. Long/short construction with dollar-neutral, beta-neutral, gross-leverage constraints. Brinson attribution against any benchmark.",
+    tags: ["Black-Litterman", "Cornish-Fisher", "Jacobs-Levy"],
+  },
+  {
+    number: "04",
+    title: "Conversational Threads",
+    body:
+      "Drill down without starting over. Follow-ups inherit the prior memo's tickers, themes, and decision. The Interpreter classifies your query into seven action types — drilldown, validation, risk check, time-horizon shift — and routes accordingly.",
+    tags: ["Thread persistence", "Query routing"],
+  },
+  {
+    number: "05",
+    title: "Track Record",
+    body:
+      "The system grades itself in public. Every signal scored at 1-day, 5-day, 20-day horizons against realized prices. Information Coefficient by conviction bucket. Alpha decay curve. Hit rate over time. Empty states warn when sample sizes are not yet statistically meaningful.",
+    tags: ["IC", "ICIR", "Brinson"],
+  },
+];
+
+const MATH_BADGES: { label: string; value: string }[] = [
+  { label: "Cointegration", value: "Engle-Granger ADF" },
+  { label: "Hedge ratio", value: "Total Least Squares" },
+  { label: "Half-life", value: "Ornstein-Uhlenbeck AR(1)" },
+  { label: "Covariance", value: "EWMA + Ledoit-Wolf" },
+  { label: "VaR", value: "Parametric + CF + Bootstrap" },
+  { label: "Regime", value: "Hidden Markov + rule fallback" },
+  { label: "Curve", value: "11-tenor CMT + cubic spline" },
+  { label: "Skill", value: "Spearman IC, Newey-West α" },
+];
+
+const TRUST_PILLARS: { title: string; body: string }[] = [
+  {
+    title: "Live receipts on every number.",
+    body:
+      "Each memo carries a lineage block: every SEC accession, FRED series ID, fund CIK, market quote, and screen output that contributed to it. A PM auditing a number months later can pull the source.",
+  },
+  {
+    title: "The system grades itself.",
+    body:
+      "Every trade idea scored at 1d/5d/20d horizons. IC, hit-rate by conviction, alpha-decay curves surfaced on the Track Record page. If the model is poorly calibrated, the page tells you. No hiding behind smooth narratives.",
+  },
+  {
+    title: "Risk has kill authority.",
+    body:
+      "Position cap, sector cap, marginal VaR, drawdown circuit breaker, liquidity gate — all enforced before a trade clears. No advisory warnings that get ignored: trades that breach a gate get blocked.",
+  },
+  {
+    title: "Structural defense against monoculture.",
+    body:
+      "On any slate of 8+ ideas, no more than 30% can be mega-cap and at least 30% must come from a dynamic discovery screen. The system regenerates rather than ship a Mag7 slate.",
+  },
+];
