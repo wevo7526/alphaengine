@@ -34,20 +34,12 @@ export default function LandingPage() {
                 Go to dashboard
               </Link>
             ) : (
-              <>
-                <Link
-                  href="/sign-in"
-                  className="text-[13px] text-text-secondary hover:text-text-primary transition-colors px-3 py-1.5"
-                >
-                  Sign in
-                </Link>
-                <Link
-                  href="/sign-up"
-                  className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-[12px] font-medium hover:bg-zinc-200 transition-colors"
-                >
-                  Request access
-                </Link>
-              </>
+              <Link
+                href="/sign-up"
+                className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-[12px] font-medium hover:bg-zinc-200 transition-colors"
+              >
+                Get started
+              </Link>
             )}
           </div>
         </div>
@@ -71,7 +63,7 @@ export default function LandingPage() {
               a 10-name trade slate with cointegrated pairs, factor decomposition,
               and full source lineage in under 10 minutes.
             </p>
-            <div className="flex items-center gap-3 flex-wrap">
+            <div className="flex items-center gap-4 flex-wrap">
               {isSignedIn ? (
                 <Link
                   href="/dashboard"
@@ -80,22 +72,14 @@ export default function LandingPage() {
                   Go to dashboard
                 </Link>
               ) : (
-                <>
-                  <Link
-                    href="/sign-up"
-                    className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
-                  >
-                    Request access
-                  </Link>
-                  <Link
-                    href="/sign-in"
-                    className="px-5 py-2.5 rounded-xl border border-border-primary text-text-secondary hover:text-text-primary hover:border-zinc-600 text-[14px] font-medium transition-colors"
-                  >
-                    Sign in
-                  </Link>
-                </>
+                <Link
+                  href="/sign-up"
+                  className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
+                >
+                  Get started
+                </Link>
               )}
-              <div className="flex items-center gap-2 text-[11px] text-text-quaternary ml-2">
+              <div className="flex items-center gap-2 text-[11px] text-text-quaternary">
                 <span className="w-1.5 h-1.5 rounded-full bg-signal-green animate-pulse" />
                 Live agents in production
               </div>
@@ -220,29 +204,21 @@ export default function LandingPage() {
           <p className="text-[15px] text-text-tertiary max-w-xl mx-auto mb-8 leading-relaxed">
             Sign up takes a minute. Your first memo runs in under ten.
           </p>
-          <div className="flex items-center justify-center gap-3 flex-wrap">
+          <div className="flex items-center justify-center">
             {isSignedIn ? (
               <Link
                 href="/dashboard"
-                className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
+                className="px-6 py-3 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
               >
                 Go to dashboard
               </Link>
             ) : (
-              <>
-                <Link
-                  href="/sign-up"
-                  className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
-                >
-                  Request access
-                </Link>
-                <Link
-                  href="/sign-in"
-                  className="px-5 py-2.5 rounded-xl border border-border-primary text-text-secondary hover:text-text-primary hover:border-zinc-600 text-[14px] font-medium transition-colors"
-                >
-                  Sign in
-                </Link>
-              </>
+              <Link
+                href="/sign-up"
+                className="px-6 py-3 rounded-xl bg-white text-bg-primary text-[14px] font-medium hover:bg-zinc-200 transition-colors"
+              >
+                Get started
+              </Link>
             )}
           </div>
         </div>

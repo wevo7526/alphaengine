@@ -65,48 +65,127 @@ export default function RootLayout({
             border: "1px solid #27272a",
             boxShadow: "0 25px 50px -12px rgba(0,0,0,0.5)",
             borderRadius: "1rem",
+            padding: "2rem 1.75rem",
           },
-          headerTitle: { color: "#fafafa", fontSize: "18px", fontWeight: 600 },
-          headerSubtitle: { color: "#a1a1aa" },
+          // Header
+          headerTitle: { color: "#fafafa", fontSize: "20px", fontWeight: 600 },
+          headerSubtitle: { color: "#a1a1aa", fontSize: "13px" },
+          // Primary CTA
           formButtonPrimary: {
             backgroundColor: "#3b82f6",
             color: "#ffffff",
             borderRadius: "0.75rem",
-            fontWeight: 500,
+            fontWeight: 600,
             fontSize: "14px",
-            height: "40px",
+            height: "42px",
+            boxShadow: "0 0 0 1px rgba(59,130,246,0.4)",
+            transition: "background-color 120ms ease",
+            "&:hover": { backgroundColor: "#2563eb" },
+            "&:focus": { boxShadow: "0 0 0 3px rgba(59,130,246,0.35)" },
           },
+          // Inputs
           formFieldInput: {
             backgroundColor: "#09090b",
             border: "1px solid #27272a",
             color: "#fafafa",
             borderRadius: "0.75rem",
-            height: "40px",
+            height: "42px",
+            fontSize: "14px",
+            "&:focus": {
+              borderColor: "#3b82f6",
+              boxShadow: "0 0 0 3px rgba(59,130,246,0.18)",
+            },
+            "&::placeholder": { color: "#52525b" },
           },
-          formFieldLabel: { color: "#a1a1aa", fontSize: "13px" },
-          footerActionLink: { color: "#3b82f6" },
-          identityPreview: { backgroundColor: "#09090b", border: "1px solid #27272a" },
-          identityPreviewText: { color: "#fafafa" },
-          identityPreviewEditButton: { color: "#3b82f6" },
+          formFieldLabel: { color: "#d4d4d8", fontSize: "13px", fontWeight: 500 },
+          formFieldHintText: { color: "#71717a", fontSize: "12px" },
+          formFieldErrorText: { color: "#ef4444", fontSize: "12px", fontWeight: 500 },
+          formFieldSuccessText: { color: "#10b981", fontSize: "12px" },
+          formFieldInputShowPasswordButton: {
+            color: "#a1a1aa",
+            "&:hover": { color: "#fafafa" },
+          },
+          formResendCodeLink: { color: "#3b82f6", fontWeight: 500 },
+          // Alerts
+          alert: {
+            backgroundColor: "rgba(239,68,68,0.08)",
+            border: "1px solid rgba(239,68,68,0.3)",
+            color: "#fca5a5",
+            borderRadius: "0.5rem",
+          },
+          alertText: { color: "#fca5a5", fontSize: "13px" },
+          // Identity preview (the "you're signed in as..." card)
+          identityPreview: {
+            backgroundColor: "#09090b",
+            border: "1px solid #27272a",
+            borderRadius: "0.75rem",
+          },
+          identityPreviewText: { color: "#fafafa", fontSize: "13px" },
+          identityPreviewEditButton: {
+            color: "#3b82f6",
+            "&:hover": { color: "#60a5fa" },
+          },
+          // Divider between social + form
           dividerLine: { backgroundColor: "#27272a" },
-          dividerText: { color: "#71717a" },
+          dividerText: { color: "#71717a", fontSize: "11px" },
+          // Social buttons
           socialButtonsBlockButton: {
             backgroundColor: "#09090b",
             border: "1px solid #27272a",
             color: "#fafafa",
             borderRadius: "0.75rem",
-            height: "40px",
+            height: "42px",
+            transition: "background-color 120ms ease, border-color 120ms ease",
+            "&:hover": {
+              backgroundColor: "#18181b",
+              borderColor: "#3f3f46",
+            },
           },
-          socialButtonsBlockButtonText: { color: "#fafafa", fontSize: "13px" },
+          socialButtonsBlockButtonText: { color: "#fafafa", fontSize: "13px", fontWeight: 500 },
+          socialButtonsProviderIcon: { color: "#fafafa" },
+          // OTP code field
           otpCodeFieldInput: {
             backgroundColor: "#09090b",
             border: "1px solid #27272a",
             color: "#fafafa",
+            fontSize: "16px",
+            fontWeight: 600,
+            "&:focus": {
+              borderColor: "#3b82f6",
+              boxShadow: "0 0 0 3px rgba(59,130,246,0.18)",
+            },
           },
-          formFieldInputShowPasswordButton: { color: "#71717a" },
-          footer: { backgroundColor: "transparent" },
+          // Back / navigation
+          headerBackLink: {
+            color: "#a1a1aa",
+            "&:hover": { color: "#fafafa" },
+          },
+          headerBackIcon: { color: "#a1a1aa" },
+          // Footer (we hide Clerk branding via globals.css; the
+          // "Don't have an account? Sign up" link stays visible and styled here)
+          footer: {
+            backgroundColor: "transparent",
+            borderTop: "1px solid #27272a",
+            paddingTop: "1rem",
+          },
           footerAction: { backgroundColor: "transparent" },
-          footerActionText: { color: "#71717a" },
+          footerActionText: { color: "#a1a1aa", fontSize: "13px" },
+          footerActionLink: {
+            color: "#3b82f6",
+            fontWeight: 500,
+            "&:hover": { color: "#60a5fa" },
+          },
+          // Profile menu (when signed in elsewhere)
+          userButtonPopoverCard: {
+            backgroundColor: "#18181b",
+            border: "1px solid #27272a",
+          },
+          userButtonPopoverActionButton: {
+            color: "#fafafa",
+            "&:hover": { backgroundColor: "#27272a" },
+          },
+          userButtonPopoverActionButtonText: { color: "#fafafa" },
+          userButtonPopoverFooter: { display: "none" },
         },
       }}
     >

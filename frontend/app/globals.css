@@ -67,3 +67,33 @@ body {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }
 }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Clerk: hide third-party branding badges + development-mode footer.
+   Targeted at known class shapes Clerk uses; the appearance API above
+   covers most things, but the "Secured by Clerk" badge in dev mode lives
+   outside the card and needs CSS to remove. Class names change between
+   Clerk versions, so we cover the family of patterns.
+   ──────────────────────────────────────────────────────────────────────── */
+.cl-internal-b3fm6y,
+.cl-internal-1dauvpw,
+.cl-internal-1k3jck0,
+.cl-internal-1rpdi70,
+[class*="cl-internal-"][class*="brand"],
+[data-clerk-branding],
+.cl-logoBox,
+.cl-userButtonPopoverFooter,
+.cl-developmentMode {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  overflow: hidden !important;
+}
+
+/* The dev-mode "🔧 Development mode" pill that Clerk renders fixed at
+   the bottom of the viewport on free / dev publishable keys. */
+.cl-internal-1uxrcyw,
+[class*="cl-internal-"][class*="development"] {
+  display: none !important;
+}
+
