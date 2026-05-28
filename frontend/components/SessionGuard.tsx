@@ -11,11 +11,17 @@ import { api } from "@/lib/api";
  * Route classes:
  *   PUBLIC (no checks):  /, /sign-in, /sign-up, /sso-callback
  *   ONBOARDING:          /onboarding
- *     - signed-in only
- *     - if already onboarded, redirect to /dashboard
+ *     - signed-in required (else bounce to /)
+ *     - renders the wizard IMMEDIATELY — does NOT block on the profile
+ *       lookup; if the lookup later reveals the user is already onboarded
+ *       we redirect to /dashboard in the background. This avoids the
+ *       multi-second "Checking your profile…" full-screen that users
+ *       were sitting through on first sign-up.
  *   PROTECTED:           every other route
- *     - signed-in required, otherwise bounce to /
+ *     - signed-in required (else bounce to /)
  *     - if signed-in but not onboarded, bounce to /onboarding
+ *     - while the profile check is in flight, show a small branded
+ *       loader (not a long-running blank screen)
  *
  * Onboarding state is cached after the first successful fetch so
  * subsequent navigations don't re-hit the API.
@@ -53,7 +59,8 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
         setOnboardingChecked(true);
       })
       .catch(() => {
-        // Default to unonboarded on any error so the user gets the wizard
+        // Treat any failure as "not onboarded" so the user gets the wizard
+        // rather than being stuck on a spinner if the API is briefly slow.
         if (cancelled) return;
         setIsOnboarded(false);
         setOnboardingChecked(true);
@@ -105,56 +112,54 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
   // Public routes render their own content
   if (isPublicRoute) return <>{children}</>;
 
-  // Waiting for Clerk SDK
+  // Waiting for Clerk SDK to load — small branded spinner, not full-screen
   if (!isLoaded) {
-    return (
-      <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
-        <div className="flex flex-col items-center gap-3">
-          <div
-            className="w-4 h-4 rounded-full border-[1.5px] border-accent border-t-transparent"
-            style={{ animation: "spin-slow 0.8s linear infinite" }}
-          />
-          <p className="text-[11px] text-text-tertiary">Loading…</p>
-        </div>
-      </div>
-    );
+    return <BrandedLoader caption="Loading" />;
   }
 
-  // Not signed in (bounce in progress)
+  // Not signed in — bounce in progress
   if (!isSignedIn) {
-    return (
-      <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
-        <p className="text-[11px] text-text-tertiary">Redirecting…</p>
-      </div>
-    );
+    return <BrandedLoader caption="Redirecting" />;
   }
 
-  // Onboarding-route flow: render once we know whether to redirect or not
+  // Onboarding route: render the wizard immediately. The redirect-if-onboarded
+  // check fires in the useEffect above and will navigate away if needed.
+  // This is the key fix — never block the onboarding UI on the profile API call.
   if (isOnboardingRoute) {
-    if (!onboardingChecked) {
-      return (
-        <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
-          <p className="text-[11px] text-text-tertiary">Checking your profile…</p>
-        </div>
-      );
-    }
     return <>{children}</>;
   }
 
   // Protected routes: gate on onboarding completeness
   if (!onboardingChecked) {
-    return (
-      <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
-        <p className="text-[11px] text-text-tertiary">Loading your workspace…</p>
-      </div>
-    );
+    return <BrandedLoader caption="Loading workspace" />;
   }
   if (!isOnboarded) {
-    return (
-      <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
-        <p className="text-[11px] text-text-tertiary">Setting up your account…</p>
-      </div>
-    );
+    // Redirect already fired in useEffect; show a small loader while it lands
+    return <BrandedLoader caption="Setting things up" />;
   }
   return <>{children}</>;
+}
+
+/**
+ * Compact branded loader. Centered on the viewport with the wordmark above
+ * a small spinner and one-line caption. Replaces the previous bare
+ * "Checking your profile…" text that left users staring at a blank screen.
+ */
+function BrandedLoader({ caption }: { caption: string }) {
+  return (
+    <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
+      <div className="flex flex-col items-center gap-4">
+        <span className="text-[14px] font-semibold tracking-tight text-text-primary">
+          alpha<span className="text-accent">engine</span>
+        </span>
+        <div className="flex items-center gap-2">
+          <div
+            className="w-3 h-3 rounded-full border-[1.5px] border-accent border-t-transparent"
+            style={{ animation: "spin-slow 0.8s linear infinite" }}
+          />
+          <p className="text-[11px] text-text-tertiary">{caption}…</p>
+        </div>
+      </div>
+    </div>
+  );
 }

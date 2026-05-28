@@ -19,19 +19,24 @@ export function BrandConstellation() {
   const outerCount = 8;
   const innerCount = 5;
 
+  // Round to 2 decimals so SSR and client produce identical SVG strings.
+  // Math.cos / Math.sin can differ by 1 ULP between Node and browser JS
+  // engines, which triggers React's hydration mismatch warning even
+  // though the rendered output is visually identical.
+  const round2 = (n: number) => Math.round(n * 100) / 100;
   const outerNodes = Array.from({ length: outerCount }, (_, i) => {
     const angle = (i / outerCount) * 2 * Math.PI - Math.PI / 2;
     return {
-      cx: center + ORBIT_OUTER * Math.cos(angle),
-      cy: center + ORBIT_OUTER * Math.sin(angle),
+      cx: round2(center + ORBIT_OUTER * Math.cos(angle)),
+      cy: round2(center + ORBIT_OUTER * Math.sin(angle)),
       key: i,
     };
   });
   const innerNodes = Array.from({ length: innerCount }, (_, i) => {
     const angle = (i / innerCount) * 2 * Math.PI - Math.PI / 2;
     return {
-      cx: center + ORBIT_INNER * Math.cos(angle),
-      cy: center + ORBIT_INNER * Math.sin(angle),
+      cx: round2(center + ORBIT_INNER * Math.cos(angle)),
+      cy: round2(center + ORBIT_INNER * Math.sin(angle)),
       key: i,
     };
   });
@@ -90,12 +95,14 @@ export function BrandConstellation() {
           />
         </g>
 
-        {/* Scan sweep — a faint wedge of light rotating slowly */}
+        {/* Scan sweep — a faint wedge of light rotating slowly.
+            Coordinates pre-rounded so SSR matches client (avoids React
+            hydration warning from floating-point precision drift). */}
         <g className="constellation-scan">
           <path
-            d={`M ${center} ${center} L ${center + 280} ${center} A 280 280 0 0 1 ${
+            d={`M ${center} ${center} L ${center + 280} ${center} A 280 280 0 0 1 ${round2(
               center + 280 * Math.cos((40 * Math.PI) / 180)
-            } ${center + 280 * Math.sin((40 * Math.PI) / 180)} Z`}
+            )} ${round2(center + 280 * Math.sin((40 * Math.PI) / 180))} Z`}
             fill="url(#sweepGradient)"
           />
         </g>

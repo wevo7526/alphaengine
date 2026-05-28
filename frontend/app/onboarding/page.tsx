@@ -30,10 +30,10 @@ const MANDATES: { value: Mandate; label: string; desc: string }[] = [
 ];
 
 const BENCHMARKS: { value: Benchmark; label: string; desc: string }[] = [
-  { value: "SPY", label: "S&P 500 (SPY)", desc: "Default for US equity strategies." },
-  { value: "QQQ", label: "Nasdaq 100 (QQQ)", desc: "Tech-tilted growth benchmark." },
-  { value: "IWM", label: "Russell 2000 (IWM)", desc: "Small-cap focus." },
-  { value: "ACWI", label: "MSCI ACWI", desc: "Global equity benchmark." },
+  { value: "SPY", label: "S&P 500", desc: "Default US equity." },
+  { value: "QQQ", label: "Nasdaq 100", desc: "Tech-tilted growth." },
+  { value: "IWM", label: "Russell 2000", desc: "Small-cap focus." },
+  { value: "ACWI", label: "MSCI ACWI", desc: "Global equity." },
 ];
 
 const PORTFOLIO_PRESETS: { label: string; value: number }[] = [
@@ -54,8 +54,12 @@ export default function OnboardingPage() {
   const [benchmark, setBenchmark] = useState<Benchmark>("SPY");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Each step's fade-in key — re-mounts the content so the entrance
+  // animation re-plays on every step change.
+  const [stepKey, setStepKey] = useState(0);
 
-  // Pre-populate name + email from Clerk on first mount
+  // Pre-populate name + email from Clerk on first mount. This also
+  // creates the row in user_profiles so per-step saves can update it.
   useEffect(() => {
     if (!isLoaded || !user) return;
     api
@@ -71,13 +75,41 @@ export default function OnboardingPage() {
   const idx = STEPS.indexOf(step);
   const total = STEPS.length - 1; // exclude "done" from the progress count
 
+  // Per-step save: persists the user's selections after every step so a
+  // mid-flow refresh / close doesn't lose progress. Non-blocking — UI
+  // moves on immediately, save is fire-and-forget.
+  const savePartial = (fields: Parameters<typeof api.updateMyProfile>[0]) => {
+    api.updateMyProfile(fields).catch(() => {
+      /* non-blocking; complete() at the end is the authoritative write */
+    });
+  };
+
+  const goTo = (s: Step) => {
+    setStep(s);
+    setStepKey((k) => k + 1);
+  };
   const next = () => {
     const i = STEPS.indexOf(step);
-    if (i < STEPS.length - 1) setStep(STEPS[i + 1]);
+    if (i < STEPS.length - 1) goTo(STEPS[i + 1]);
   };
   const back = () => {
     const i = STEPS.indexOf(step);
-    if (i > 0) setStep(STEPS[i - 1]);
+    if (i > 0) goTo(STEPS[i - 1]);
+  };
+
+  const handleRoleNext = () => {
+    if (!role) return;
+    savePartial({ role });
+    next();
+  };
+  const handlePortfolioNext = () => {
+    if (portfolioSize <= 0) return;
+    savePartial({ portfolio_size_usd: portfolioSize });
+    next();
+  };
+  const handleMandateNext = () => {
+    savePartial({ mandate, benchmark });
+    next();
   };
 
   const handleFinish = async () => {
@@ -93,7 +125,15 @@ export default function OnboardingPage() {
         full_name: user?.fullName || undefined,
         email: user?.primaryEmailAddress?.emailAddress || undefined,
       });
-      router.replace("/dashboard");
+      // Hard navigation (not router.replace) so SessionGuard re-mounts
+      // and re-fetches /api/me/profile. A client-side route change keeps
+      // the stale `isOnboarded: false` cache and bounces the user back
+      // here in a redirect loop.
+      if (typeof window !== "undefined") {
+        window.location.href = "/dashboard";
+      } else {
+        router.replace("/dashboard");
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Could not save your profile.";
       setError(msg);
@@ -101,9 +141,12 @@ export default function OnboardingPage() {
     }
   };
 
+  const greetingName = user?.firstName || user?.fullName?.split(" ")[0];
+  const avatarUrl = user?.imageUrl;
+
   return (
     <div className="min-h-screen w-full grid lg:grid-cols-[1.05fr_1fr] bg-bg-primary text-text-primary">
-      {/* LEFT — brand panel reused */}
+      {/* LEFT — brand panel */}
       <aside className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden border-r border-border-primary bg-gradient-to-br from-bg-primary via-bg-primary to-[#0a0e1a]">
         <div className="pointer-events-none absolute inset-0" aria-hidden="true">
           <div className="absolute -top-40 -left-40 w-[42rem] h-[42rem] rounded-full bg-accent/[0.10] blur-[120px]" />
@@ -116,8 +159,30 @@ export default function OnboardingPage() {
         >
           alpha<span className="text-accent">engine</span>
         </Link>
+
+        {/* Identity card — surfaces who is signing in (avatar + name) */}
         <div className="relative z-10 max-w-md fade-up-1">
-          <p className="text-[11px] uppercase tracking-[0.2em] text-text-quaternary mb-5">
+          {(avatarUrl || greetingName) && (
+            <div className="mb-6 inline-flex items-center gap-3 rounded-full border border-border-primary bg-bg-surface/70 backdrop-blur px-3 py-1.5">
+              {avatarUrl ? (
+                /* eslint-disable-next-line @next/next/no-img-element */
+                <img
+                  src={avatarUrl}
+                  alt={greetingName ?? "you"}
+                  className="w-6 h-6 rounded-full object-cover"
+                />
+              ) : (
+                <span className="w-6 h-6 rounded-full bg-accent/20 grid place-items-center text-[10px] font-semibold text-accent">
+                  {(greetingName ?? "?").charAt(0).toUpperCase()}
+                </span>
+              )}
+              <span className="text-[12px] text-text-secondary">
+                Signed in as <span className="text-text-primary font-medium">{greetingName ?? "you"}</span>
+              </span>
+            </div>
+          )}
+
+          <p className="text-[11px] uppercase tracking-[0.2em] text-text-quaternary mb-4">
             Setting things up
           </p>
           <h2 className="text-[40px] xl:text-[44px] font-semibold tracking-tight leading-[1.05] mb-5">
@@ -128,6 +193,7 @@ export default function OnboardingPage() {
             you actually work. You can change any of this later in Settings.
           </p>
         </div>
+
         <div className="relative z-10 text-[11px] text-text-quaternary">
           © {new Date().getFullYear()} Alpha Engine
         </div>
@@ -136,7 +202,7 @@ export default function OnboardingPage() {
       {/* RIGHT — wizard */}
       <section className="relative flex flex-col p-6 sm:p-12 overflow-y-auto">
         <div className="w-full max-w-[480px] mx-auto flex-1 flex flex-col">
-          {/* Progress bar */}
+          {/* Progress bar — hidden on the celebratory done step */}
           {step !== "done" && (
             <div className="mb-10 fade-up-1">
               <div className="flex items-center justify-between text-[11px] text-text-quaternary mb-2 uppercase tracking-wider">
@@ -154,12 +220,12 @@ export default function OnboardingPage() {
             </div>
           )}
 
-          {/* Step content */}
-          <div className="flex-1">
+          {/* Step content with fresh entrance animation via stepKey */}
+          <div key={stepKey} className="flex-1">
             {step === "role" && (
               <StepFrame
                 eyebrow="About you"
-                title={`Welcome${user?.firstName ? `, ${user.firstName}` : ""}.`}
+                title={`Welcome${greetingName ? `, ${greetingName}` : ""}.`}
                 subtitle="Which role best describes how you'll use Alpha Engine?"
               >
                 <div className="space-y-2">
@@ -234,7 +300,7 @@ export default function OnboardingPage() {
               <StepFrame
                 eyebrow="Investment mandate"
                 title="How do you run money?"
-                subtitle="This shapes the Strategist's defaults — long-only avoids shorts, market-neutral pairs everything, macro reaches into rates/FX/commodities."
+                subtitle="This shapes the Strategist's defaults. Long-only avoids shorts, market-neutral pairs everything, macro reaches into rates, FX, and commodities."
               >
                 <div className="space-y-2 mb-8">
                   {MANDATES.map((m) => (
@@ -276,27 +342,13 @@ export default function OnboardingPage() {
             )}
 
             {step === "done" && (
-              <StepFrame
-                eyebrow="All set"
-                title="You're ready to go."
-                subtitle="Your first memo runs in under ten minutes. Head to the dashboard or jump straight into a new analysis."
-              >
-                <div className="rounded-2xl border border-border-primary bg-bg-surface p-6 space-y-3 mb-6">
-                  <SummaryRow label="Role" value={ROLES.find((r) => r.value === role)?.label || "—"} />
-                  <SummaryRow label="Portfolio size" value={formatUSD(portfolioSize)} />
-                  <SummaryRow
-                    label="Mandate"
-                    value={MANDATES.find((m) => m.value === mandate)?.label || "—"}
-                  />
-                  <SummaryRow
-                    label="Benchmark"
-                    value={BENCHMARKS.find((b) => b.value === benchmark)?.label || "—"}
-                  />
-                </div>
-                <p className="text-[12px] text-text-quaternary text-center">
-                  You can update any of this in Settings later.
-                </p>
-              </StepFrame>
+              <DoneReveal
+                greetingName={greetingName}
+                role={role}
+                portfolioSize={portfolioSize}
+                mandate={mandate}
+                benchmark={benchmark}
+              />
             )}
           </div>
 
@@ -316,7 +368,7 @@ export default function OnboardingPage() {
 
             {step === "role" && (
               <button
-                onClick={next}
+                onClick={handleRoleNext}
                 disabled={!role}
                 className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
@@ -325,7 +377,7 @@ export default function OnboardingPage() {
             )}
             {step === "portfolio" && (
               <button
-                onClick={next}
+                onClick={handlePortfolioNext}
                 disabled={portfolioSize <= 0}
                 className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
@@ -334,7 +386,7 @@ export default function OnboardingPage() {
             )}
             {step === "mandate" && (
               <button
-                onClick={next}
+                onClick={handleMandateNext}
                 className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 transition-colors"
               >
                 Review →
@@ -346,7 +398,7 @@ export default function OnboardingPage() {
                 disabled={submitting}
                 className="ml-auto px-5 py-2.5 rounded-xl bg-accent text-white text-[13px] font-semibold hover:bg-accent/90 disabled:opacity-60 transition-colors"
               >
-                {submitting ? "Saving…" : "Go to dashboard"}
+                {submitting ? "Saving…" : "Enter Alpha Engine →"}
               </button>
             )}
           </div>
@@ -374,7 +426,7 @@ function StepFrame({
   children: React.ReactNode;
 }) {
   return (
-    <div key={title}>
+    <div>
       <div className="mb-7 fade-up-1">
         <p className="text-[11px] uppercase tracking-[0.2em] text-text-quaternary mb-3">
           {eyebrow}
@@ -442,11 +494,83 @@ function SelectCard({
   );
 }
 
+/**
+ * Celebratory final step. Replaces the previous flat summary card with
+ * a brand reveal: large hero copy, identity confirmation, then a tight
+ * spec sheet of what they chose and a "what comes next" teaser.
+ */
+function DoneReveal({
+  greetingName,
+  role,
+  portfolioSize,
+  mandate,
+  benchmark,
+}: {
+  greetingName?: string;
+  role: Role | null;
+  portfolioSize: number;
+  mandate: Mandate;
+  benchmark: Benchmark;
+}) {
+  const roleLabel = ROLES.find((r) => r.value === role)?.label || "—";
+  const mandateLabel = MANDATES.find((m) => m.value === mandate)?.label || "—";
+  const benchmarkLabel = BENCHMARKS.find((b) => b.value === benchmark)?.label || "—";
+  return (
+    <div>
+      <div className="fade-up-1">
+        <div className="inline-flex items-center gap-2 mb-5 px-2.5 py-1 rounded-full border border-signal-green/30 bg-signal-green/[0.08] text-signal-green text-[10px] font-mono tracking-[0.18em]">
+          <span className="w-1.5 h-1.5 rounded-full bg-signal-green animate-pulse" />
+          PROFILE READY
+        </div>
+        <h1 className="text-[32px] font-semibold tracking-tight text-text-primary mb-2 leading-tight">
+          You&apos;re set{greetingName ? `, ${greetingName}` : ""}.
+        </h1>
+        <p className="text-[14px] text-text-tertiary leading-relaxed mb-7">
+          Your dashboard, risk gates, and benchmark are tuned to how you run
+          money. You can change any of this any time from Settings.
+        </p>
+      </div>
+
+      <div className="rounded-2xl border border-border-primary bg-bg-surface overflow-hidden fade-up-2">
+        <div className="px-4 py-2.5 border-b border-border-primary bg-bg-primary/40">
+          <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">
+            YOUR PROFILE
+          </p>
+        </div>
+        <div className="divide-y divide-border-primary/40">
+          <SummaryRow label="Role" value={roleLabel} />
+          <SummaryRow label="Portfolio size" value={formatUSD(portfolioSize)} />
+          <SummaryRow label="Mandate" value={mandateLabel} />
+          <SummaryRow label="Benchmark" value={benchmarkLabel} />
+        </div>
+      </div>
+
+      <div className="mt-6 grid grid-cols-3 gap-2 fade-up-3">
+        {[
+          { tag: "STEP 1", label: "Run an analysis" },
+          { tag: "STEP 2", label: "Pick a trade" },
+          { tag: "STEP 3", label: "Watch the receipts" },
+        ].map((s) => (
+          <div
+            key={s.tag}
+            className="rounded-lg border border-border-primary bg-bg-surface px-3 py-3"
+          >
+            <p className="text-[9px] font-mono tracking-wider text-text-quaternary mb-1">
+              {s.tag}
+            </p>
+            <p className="text-[12px] text-text-secondary leading-tight">{s.label}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between text-[13px] py-1.5 border-b border-border-primary/40 last:border-b-0">
-      <span className="text-text-tertiary">{label}</span>
-      <span className="text-text-primary font-medium">{value}</span>
+    <div className="flex items-center justify-between px-4 py-2.5">
+      <span className="text-[12px] text-text-tertiary">{label}</span>
+      <span className="text-[13px] text-text-primary font-medium">{value}</span>
     </div>
   );
 }

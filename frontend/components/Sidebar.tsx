@@ -83,12 +83,15 @@ const BOTTOM = [{ href: "/settings", label: "Settings", icon: IconSettings }];
 export function Sidebar() {
   const pathname = usePathname();
 
-  // Hide sidebar on public marketing landing + auth pages.
-  // The marketing site and auth flows have their own full-width layouts.
+  // Hide sidebar on full-screen routes: marketing landing, auth flow,
+  // SSO callback, and the onboarding wizard. Each owns its own layout.
+  // MainContent.tsx mirrors this list — keep them in sync.
   if (
     pathname === "/" ||
     pathname.startsWith("/sign-in") ||
-    pathname.startsWith("/sign-up")
+    pathname.startsWith("/sign-up") ||
+    pathname.startsWith("/sso-callback") ||
+    pathname.startsWith("/onboarding")
   ) {
     return null;
   }

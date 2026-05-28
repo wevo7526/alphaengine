@@ -1,42 +1,32 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useSignIn, useSignUp } from "@clerk/nextjs";
 
 /**
- * Minimal type shim: Clerk's @clerk/nextjs ships TypeScript types that
- * surface `SignInFutureResource` / `SignUpFutureResource` via inference
- * which don't expose `authenticateWithRedirect` in their static type,
- * even though the runtime resource has it. We cast to this shim to call
- * the method safely while keeping the rest of the resource typed.
- */
-type OAuthRedirectable = {
-  authenticateWithRedirect: (params: {
-    strategy: string;
-    redirectUrl: string;
-    redirectUrlComplete: string;
-  }) => Promise<unknown>;
-};
-
-/**
- * Custom Google OAuth button using Clerk's authenticateWithRedirect.
+ * Custom Google OAuth button — Clerk v7 Future API.
  *
- * Two key design points:
+ * Clerk v7 re-implemented useSignIn() / useSignUp() to return a
+ * signal-backed value:
  *
- *   1. Split into SignInGoogleButton + SignUpGoogleButton so each only
- *      uses the one Clerk hook it actually needs. Calling both useSignIn
- *      and useSignUp in the same component was causing one of them to
- *      stay in an `isLoaded: false` state and never resolve.
+ *     useSignIn() -> { signIn: SignInFutureResource, errors, fetchStatus }
+ *     useSignUp() -> { signUp: SignUpFutureResource, errors, fetchStatus }
  *
- *   2. The signIn / signUp resource is mirrored into a ref so the click
- *      handler reads the latest value, not a stale closure. This fixes
- *      the "Auth service is still loading" error that would persist even
- *      after Clerk had finished initializing.
+ * Notes:
+ *   - There is no `isLoaded` flag and no waiting period. The Future
+ *     resource is available immediately on mount.
+ *   - The legacy `signIn.authenticateWithRedirect(...)` no longer exists.
+ *     Use `signIn.sso({ strategy, redirectUrl, redirectCallbackUrl })`.
+ *   - Sso() returns `{ error: ClerkError | null }` rather than throwing.
+ *   - `redirectUrl` is the FINAL destination after OAuth completes
+ *     (legacy `redirectUrlComplete`). `redirectCallbackUrl` is the SSO
+ *     landing page Clerk uses to exchange the OAuth code (legacy
+ *     `redirectUrl`). Param naming flipped between APIs.
  *
  * Modes:
- *   "signin" — Clerk signIn flow → /dashboard. Brand-new Google accounts
- *              get auto-created and SessionGuard routes them to /onboarding.
- *   "signup" — Clerk signUp flow → /onboarding.
+ *   "signin" -> /dashboard (SessionGuard re-routes to /onboarding if
+ *               the user has not finished the wizard).
+ *   "signup" -> /onboarding straight away.
  */
 export function GoogleButton({
   mode,
@@ -45,45 +35,39 @@ export function GoogleButton({
   mode: "signin" | "signup";
   label?: string;
 }) {
-  if (mode === "signin") {
-    return <SignInGoogleButton label={label} />;
-  }
+  if (mode === "signin") return <SignInGoogleButton label={label} />;
   return <SignUpGoogleButton label={label} />;
 }
 
-// ─────────────────────────────────────────────────────────────────────
+// ─── Sign In ─────────────────────────────────────────────────────────
 
 function SignInGoogleButton({ label }: { label?: string }) {
   const { signIn } = useSignIn();
-  // Mirror Clerk's signIn resource into a ref so the click handler reads
-  // the latest value instead of a stale closure. Type comes from useSignIn.
-  const signInRef = useRef<typeof signIn>(signIn);
-  useEffect(() => {
-    signInRef.current = signIn;
-  }, [signIn]);
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleClick = async () => {
     if (loading) return;
-    setError(null);
-    setLoading(true);
-    const resource = signInRef.current as unknown as OAuthRedirectable | null;
-    if (!resource) {
-      setError("Sign in is still initializing. Please try again.");
-      setLoading(false);
+    if (!signIn) {
+      setError("Auth service unavailable. Please refresh and try again.");
       return;
     }
+    setError(null);
+    setLoading(true);
     try {
-      await resource.authenticateWithRedirect({
+      const result = await signIn.sso({
         strategy: "oauth_google",
-        redirectUrl: "/sso-callback",
-        redirectUrlComplete: "/dashboard",
+        redirectUrl: absoluteUrl("/dashboard"),
+        redirectCallbackUrl: absoluteUrl("/sso-callback"),
       });
+      const errMsg = extractError(result?.error);
+      if (errMsg) {
+        setError(errMsg);
+        setLoading(false);
+      }
+      // Success: browser is mid-redirect; leave loading=true.
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Could not start Google sign in.";
-      setError(msg);
+      setError(e instanceof Error ? e.message : "Could not start Google sign in.");
       setLoading(false);
     }
   };
@@ -98,37 +82,34 @@ function SignInGoogleButton({ label }: { label?: string }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────
+// ─── Sign Up ─────────────────────────────────────────────────────────
 
 function SignUpGoogleButton({ label }: { label?: string }) {
   const { signUp } = useSignUp();
-  const signUpRef = useRef<typeof signUp>(signUp);
-  useEffect(() => {
-    signUpRef.current = signUp;
-  }, [signUp]);
-
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const handleClick = async () => {
     if (loading) return;
-    setError(null);
-    setLoading(true);
-    const resource = signUpRef.current as unknown as OAuthRedirectable | null;
-    if (!resource) {
-      setError("Sign up is still initializing. Please try again.");
-      setLoading(false);
+    if (!signUp) {
+      setError("Auth service unavailable. Please refresh and try again.");
       return;
     }
+    setError(null);
+    setLoading(true);
     try {
-      await resource.authenticateWithRedirect({
+      const result = await signUp.sso({
         strategy: "oauth_google",
-        redirectUrl: "/sso-callback",
-        redirectUrlComplete: "/onboarding",
+        redirectUrl: absoluteUrl("/onboarding"),
+        redirectCallbackUrl: absoluteUrl("/sso-callback"),
       });
+      const errMsg = extractError(result?.error);
+      if (errMsg) {
+        setError(errMsg);
+        setLoading(false);
+      }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Could not start Google sign up.";
-      setError(msg);
+      setError(e instanceof Error ? e.message : "Could not start Google sign up.");
       setLoading(false);
     }
   };
@@ -143,7 +124,31 @@ function SignUpGoogleButton({ label }: { label?: string }) {
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────
+
+function absoluteUrl(path: string): string {
+  if (typeof window === "undefined") return path;
+  return window.location.origin + path;
+}
+
+function extractError(err: unknown): string | null {
+  if (!err) return null;
+  if (typeof err === "string") return err;
+  if (typeof err === "object" && err !== null) {
+    const e = err as {
+      message?: string;
+      longMessage?: string;
+      errors?: Array<{ message?: string; longMessage?: string }>;
+    };
+    if (typeof e.longMessage === "string" && e.longMessage) return e.longMessage;
+    if (typeof e.message === "string" && e.message) return e.message;
+    if (Array.isArray(e.errors) && e.errors.length > 0) {
+      const first = e.errors[0];
+      return first?.longMessage || first?.message || null;
+    }
+  }
+  return null;
+}
 
 function ButtonShell({
   onClick,

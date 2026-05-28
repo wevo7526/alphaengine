@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useUser } from "@clerk/nextjs";
 import { api } from "@/lib/api";
 import { MacroChart } from "@/components/MacroChart";
 import { MemoPanel } from "@/components/MemoPanel";
@@ -58,16 +59,28 @@ const ALL_INDICATORS: Record<string, string> = {
 };
 
 export default function HomePage() {
+  const { user } = useUser();
   const [macro, setMacro] = useState<MacroDashboard | null>(null);
   const [macroLoading, setMacroLoading] = useState(true);
   const [macroError, setMacroError] = useState<string | null>(null);
   const [morningReport, setMorningReport] = useState<MorningReport | null>(null);
   const [recentMemos, setRecentMemos] = useState<IntelligenceMemo[]>([]);
+  const [memosLoaded, setMemosLoaded] = useState(false);
   const [expandedMemo, setExpandedMemo] = useState<number | null>(null);
   const [regime, setRegime] = useState<Record<string, unknown> | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
   const [portfolio, setPortfolio] = useState<PortfolioSummary | null>(null);
+  const [portfolioLoaded, setPortfolioLoaded] = useState(false);
+
+  // A "new" user has finished onboarding but has no memos and no positions
+  // yet. Show the WelcomeHero so the dashboard does not greet them with a
+  // wall of empty panels.
+  const isBrandNew =
+    memosLoaded &&
+    portfolioLoaded &&
+    recentMemos.length === 0 &&
+    (!portfolio || portfolio.open_positions === 0);
 
   const recordError = (label: string, e: unknown) => {
     const msg = e instanceof Error ? e.message : String(e);
@@ -95,15 +108,26 @@ export default function HomePage() {
     }).catch((e) => { if (!cancelled) recordError("regime", e); });
 
     api.latestMemos(5).then((d: unknown) => {
-      if (!cancelled) setRecentMemos((d as { memos: IntelligenceMemo[] }).memos || []);
-    }).catch((e) => { if (!cancelled) recordError("recent analyses", e); });
+      if (!cancelled) {
+        setRecentMemos((d as { memos: IntelligenceMemo[] }).memos || []);
+        setMemosLoaded(true);
+      }
+    }).catch((e) => {
+      if (!cancelled) {
+        setMemosLoaded(true);
+        recordError("recent analyses", e);
+      }
+    });
 
     api.positions().then((d: unknown) => {
       if (!cancelled) {
         const data = d as { summary?: PortfolioSummary };
         if (data.summary) setPortfolio(data.summary);
+        setPortfolioLoaded(true);
       }
-    }).catch(() => { /* portfolio is optional on cold start */ });
+    }).catch(() => {
+      if (!cancelled) setPortfolioLoaded(true);
+    });
 
     // Auto-load morning report only between 4:00-8:30 AM EST
     const now = new Date();
@@ -155,14 +179,24 @@ export default function HomePage() {
           </button>
         </div>
       )}
+
+      {/* Brand-new-user welcome hero. Only renders after both memos and
+          positions have loaded and both came back empty, so it does not
+          flash on returning users whose data is still in flight. */}
+      {isBrandNew && (
+        <WelcomeHero firstName={user?.firstName || user?.fullName?.split(" ")[0]} />
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-text-primary mb-1">
-            Dashboard
+            {isBrandNew ? "Market overview" : "Dashboard"}
           </h1>
           <p className="text-sm text-text-tertiary">
-            Market overview and intelligence briefing.
+            {isBrandNew
+              ? "Live macro indicators and regime context."
+              : "Market overview and intelligence briefing."}
           </p>
         </div>
         <Link
@@ -425,5 +459,71 @@ export default function HomePage() {
         </div>
       )}
     </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+// WelcomeHero — first-run state shown above the dashboard for users who
+// have completed onboarding but have not yet generated a memo or taken a
+// position. Renders the brand wordmark, a personalized greeting, three
+// numbered next-step cards, and a primary CTA into /analysis.
+// ────────────────────────────────────────────────────────────────────────
+function WelcomeHero({ firstName }: { firstName?: string }) {
+  const steps = [
+    { tag: "01", title: "Ask a question", body: "Run your first analysis from a single prompt." },
+    { tag: "02", title: "Review the slate", body: "See the trade ideas, the risk gates, and the receipts." },
+    { tag: "03", title: "Take a trade", body: "Track positions, P&L, and signal scoring from then on." },
+  ];
+  return (
+    <section className="relative mb-8 overflow-hidden rounded-2xl border border-border-primary bg-gradient-to-br from-bg-surface to-bg-primary">
+      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+        <div className="absolute -top-32 -left-32 w-[28rem] h-[28rem] rounded-full bg-accent/[0.10] blur-[120px]" />
+        <div className="absolute bottom-0 -right-32 w-[24rem] h-[24rem] rounded-full bg-signal-green/[0.05] blur-[120px]" />
+      </div>
+      <div className="relative p-8 md:p-10">
+        <div className="inline-flex items-center gap-2 mb-5 px-2.5 py-1 rounded-full border border-signal-green/30 bg-signal-green/[0.08] text-signal-green text-[10px] font-mono tracking-[0.18em]">
+          <span className="w-1.5 h-1.5 rounded-full bg-signal-green animate-pulse" />
+          PROFILE READY
+        </div>
+        <h2 className="text-[28px] sm:text-[34px] font-semibold tracking-tight leading-[1.05] mb-2">
+          Welcome to Alpha Engine{firstName ? `, ${firstName}` : ""}.
+        </h2>
+        <p className="text-[14px] text-text-tertiary max-w-xl leading-relaxed mb-7">
+          Your research desk is live. Run your first analysis and you&apos;ll
+          get a 10-name slate with cointegrated pairs, factor decomposition,
+          and full source lineage in under ten minutes.
+        </p>
+
+        <div className="grid sm:grid-cols-3 gap-3 mb-7">
+          {steps.map((s) => (
+            <div
+              key={s.tag}
+              className="rounded-xl border border-border-primary bg-bg-surface/70 backdrop-blur px-4 py-4"
+            >
+              <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                STEP {s.tag}
+              </p>
+              <p className="text-[13px] font-semibold text-text-primary mb-1">{s.title}</p>
+              <p className="text-[11px] text-text-tertiary leading-snug">{s.body}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-4 flex-wrap">
+          <Link
+            href="/analysis"
+            className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 transition-colors"
+          >
+            Run your first analysis →
+          </Link>
+          <Link
+            href="/settings"
+            className="text-[12px] text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            Adjust profile in Settings
+          </Link>
+        </div>
+      </div>
+    </section>
   );
 }
