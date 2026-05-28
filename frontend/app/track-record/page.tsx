@@ -15,10 +15,17 @@ import {
   Legend,
   ReferenceLine,
 } from "recharts";
+import { TerminalHeader } from "@/components/TerminalHeader";
+import { TerminalPanel } from "@/components/TerminalPanel";
+import { StatPanel } from "@/components/StatPanel";
+import { StatusPill } from "@/components/StatusPill";
 
-// Threshold above which we consider the IC stable enough to publish.
-// Below this we still show data, but flagged as "low_sample".
 const STABLE_IC_MIN_SIGNALS = 20;
+
+// Design-token Recharts colors so charts match the rest of the platform.
+const CHART_GRID = "#27272a"; // border-primary
+const CHART_AXIS = "#71717a"; // text-tertiary
+const CHART_REF = "#3f3f46"; // between border-primary and text-quaternary
 
 interface ConvictionBucket {
   count: number;
@@ -127,49 +134,18 @@ interface PositionsResp {
   positions: { ticker: string }[];
 }
 
-function Stat({
-  label,
-  value,
-  suffix,
-  color,
-  help,
-}: {
-  label: string;
-  value: string | null;
-  suffix?: string;
-  color?: string;
-  help?: string;
-}) {
-  return (
-    <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-      <p
-        className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1"
-        title={help}
-      >
-        {label}
-        {help && <span className="ml-1 text-text-quaternary cursor-help">ⓘ</span>}
-      </p>
-      <p className={`text-lg font-mono font-medium ${color ?? "text-text-primary"}`}>
-        {value ?? "—"}
-        {suffix}
-      </p>
-    </div>
-  );
-}
-
-function fmtPct(v: number | null | undefined, digits = 1): string | null {
-  if (v === null || v === undefined || Number.isNaN(v)) return null;
+function fmtPct(v: number | null | undefined, digits = 1): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return `${v.toFixed(digits)}%`;
 }
 
-function fmtNum(v: number | null | undefined, digits = 3): string | null {
-  if (v === null || v === undefined || Number.isNaN(v)) return null;
+function fmtNum(v: number | null | undefined, digits = 3): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return v.toFixed(digits);
 }
 
-function fmtReturn(v: number | null | undefined): string | null {
-  // Returns from scorer are stored as decimals (e.g., 0.0234 = 2.34%)
-  if (v === null || v === undefined || Number.isNaN(v)) return null;
+function fmtReturn(v: number | null | undefined): string {
+  if (v === null || v === undefined || Number.isNaN(v)) return "—";
   return `${(v * 100).toFixed(2)}%`;
 }
 
@@ -181,11 +157,10 @@ function returnColor(v: number | null | undefined): string {
 }
 
 function aggregateHitRateByMonth(signals: SignalScore[]) {
-  // Group by YYYY-MM of signal_date; compute hit_rate_5d per bucket
   const buckets: Record<string, { hits: number; total: number; sum_ret: number; n_ret: number }> = {};
   for (const s of signals) {
     if (!s.signal_date) continue;
-    const month = s.signal_date.slice(0, 7); // YYYY-MM
+    const month = s.signal_date.slice(0, 7);
     if (!buckets[month]) buckets[month] = { hits: 0, total: 0, sum_ret: 0, n_ret: 0 };
     if (s.hit_5d !== null && s.hit_5d !== undefined) {
       buckets[month].total += 1;
@@ -279,7 +254,7 @@ export default function TrackRecordPage() {
 
   if (loading) {
     return (
-      <div className="p-6 text-text-secondary">
+      <div className="p-8 text-text-secondary font-mono text-[12px]">
         Loading scorecard…
       </div>
     );
@@ -288,679 +263,565 @@ export default function TrackRecordPage() {
   const nSignals = summary?.signals ?? 0;
   const stable = nSignals >= STABLE_IC_MIN_SIGNALS;
 
-  // Build conviction-bucket chart data
   const convictionData = summary
     ? Object.entries(summary.by_conviction).map(([name, b]) => ({
         bucket: name,
         count: b.count,
         hit_rate_5d: b.hit_rate_5d ?? null,
-        // returns from scorer are decimals — convert to %
         avg_return_5d_pct: b.avg_return_5d !== null && b.avg_return_5d !== undefined
           ? b.avg_return_5d * 100
           : null,
       }))
     : [];
 
-  // Build alpha decay chart data (1d/5d/20d hit rates and avg returns)
   const decayData = summary
     ? [
-        {
-          horizon: "1d",
-          hit_rate: summary.hit_rate_1d ?? null,
-          avg_return_pct:
-            summary.avg_return_1d !== null && summary.avg_return_1d !== undefined
-              ? summary.avg_return_1d * 100
-              : null,
-        },
-        {
-          horizon: "5d",
-          hit_rate: summary.hit_rate_5d ?? null,
-          avg_return_pct:
-            summary.avg_return_5d !== null && summary.avg_return_5d !== undefined
-              ? summary.avg_return_5d * 100
-              : null,
-        },
-        {
-          horizon: "20d",
-          hit_rate: summary.hit_rate_20d ?? null,
-          avg_return_pct:
-            summary.avg_return_20d !== null && summary.avg_return_20d !== undefined
-              ? summary.avg_return_20d * 100
-              : null,
-        },
+        { horizon: "1d", hit_rate: summary.hit_rate_1d ?? null,
+          avg_return_pct: summary.avg_return_1d !== null && summary.avg_return_1d !== undefined ? summary.avg_return_1d * 100 : null },
+        { horizon: "5d", hit_rate: summary.hit_rate_5d ?? null,
+          avg_return_pct: summary.avg_return_5d !== null && summary.avg_return_5d !== undefined ? summary.avg_return_5d * 100 : null },
+        { horizon: "20d", hit_rate: summary.hit_rate_20d ?? null,
+          avg_return_pct: summary.avg_return_20d !== null && summary.avg_return_20d !== undefined ? summary.avg_return_20d * 100 : null },
       ]
     : [];
 
   const monthlyData = aggregateHitRateByMonth(signals);
 
   return (
-    <div className="p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-baseline justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-text-primary">Track Record</h1>
-          <p className="text-[12px] text-text-tertiary mt-1">
-            The system grading itself. Every past trade idea scored at 1d / 5d / 20d
-            against realized prices.
-          </p>
-        </div>
-        <button
-          onClick={runScoring}
-          disabled={running}
-          className="rounded-lg px-3 py-1.5 text-[12px] font-medium bg-white/[0.07] hover:bg-white/[0.12] text-text-primary border border-border-primary disabled:opacity-50"
-        >
-          {running ? "Scoring…" : "Run scoring job"}
-        </button>
-      </div>
+    <div className="p-8 max-w-[1280px] mx-auto space-y-6">
+      <TerminalHeader
+        eyebrow="TRACK RECORD"
+        title="The system grading itself"
+        sub="Every past trade idea scored at 1d / 5d / 20d against realized prices."
+        meta={
+          <button
+            onClick={runScoring}
+            disabled={running}
+            className="px-2.5 py-1 rounded-md bg-white text-bg-primary text-[10px] font-mono font-semibold tracking-wider hover:bg-zinc-200 disabled:opacity-30 transition-colors"
+          >
+            {running ? "SCORING…" : "RUN SCORING JOB"}
+          </button>
+        }
+      />
 
       {error && (
-        <div className="rounded-lg border border-signal-red/40 bg-signal-red/10 p-3 text-[12px] text-signal-red">
+        <div className="rounded-md border border-signal-red/40 bg-signal-red/10 p-3 text-[12px] text-signal-red">
           {error}
         </div>
       )}
 
       {nSignals === 0 ? (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-6">
-          <p className="text-text-secondary">No signals scored yet.</p>
-          <p className="text-[12px] text-text-tertiary mt-2">
-            Trade ideas must age at least 1 day before they can be scored. Generate
-            a memo with trade ideas, wait a day, then click "Run scoring job" above.
-          </p>
-        </div>
+        <TerminalPanel label="SCORECARD" status="EMPTY">
+          <div className="text-center py-4">
+            <p className="text-[13px] text-text-secondary mb-2">No signals scored yet.</p>
+            <p className="text-[12px] text-text-tertiary max-w-md mx-auto">
+              Trade ideas must age at least 1 day before they can be scored. Generate
+              a memo with trade ideas, wait a day, then click RUN SCORING JOB above.
+            </p>
+          </div>
+        </TerminalPanel>
       ) : (
         <>
-          {/* Headline stats */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Stat
-              label="Signals Scored"
-              value={String(nSignals)}
-              help="Trade ideas scored against realized prices"
+          {/* Headline 4-stat strip */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden">
+            <StatPanel
+              label="SIGNALS SCORED"
+              value={nSignals}
+              sub="Scored against realized prices"
             />
-            <Stat
-              label="Hit Rate 5d"
+            <StatPanel
+              label="HIT RATE 5D"
               value={fmtPct(summary?.hit_rate_5d)}
-              help="% of signals with direction-correct realized return at 5 trading days"
-              color={
-                (summary?.hit_rate_5d ?? 0) >= 55
-                  ? "text-signal-green"
-                  : (summary?.hit_rate_5d ?? 0) >= 45
-                  ? "text-text-primary"
-                  : "text-signal-red"
+              sub="Direction-correct at 5 days"
+              tone={
+                (summary?.hit_rate_5d ?? 0) >= 55 ? "green"
+                : (summary?.hit_rate_5d ?? 0) >= 45 ? "default"
+                : "red"
               }
             />
-            <Stat
-              label="IC 5d"
+            <StatPanel
+              label="IC 5D"
               value={fmtNum(summary?.ic_5d, 3)}
-              help="Information Coefficient at 5d — correlation of (conviction × direction) with realized return. Above 0.05 is publishable; above 0.10 is strong."
-              color={
-                (summary?.ic_5d ?? 0) >= 0.1
-                  ? "text-signal-green"
-                  : (summary?.ic_5d ?? 0) >= 0.05
-                  ? "text-text-primary"
-                  : "text-text-secondary"
+              sub="Above 0.05 publishable"
+              tone={
+                (summary?.ic_5d ?? 0) >= 0.1 ? "green"
+                : (summary?.ic_5d ?? 0) >= 0.05 ? "default"
+                : "default"
               }
             />
-            <Stat
-              label="IC 20d"
+            <StatPanel
+              label="IC 20D"
               value={fmtNum(summary?.ic_20d, 3)}
-              help="Information Coefficient at 20d — measures whether higher-conviction calls produce larger realized moves"
-              color={
-                (summary?.ic_20d ?? 0) >= 0.1
-                  ? "text-signal-green"
-                  : (summary?.ic_20d ?? 0) >= 0.05
-                  ? "text-text-primary"
-                  : "text-text-secondary"
+              sub="Conviction vs realized"
+              tone={
+                (summary?.ic_20d ?? 0) >= 0.1 ? "green"
+                : (summary?.ic_20d ?? 0) >= 0.05 ? "default"
+                : "default"
               }
             />
           </div>
 
           {!stable && (
-            <div className="rounded-lg border border-signal-yellow/40 bg-signal-yellow/10 p-3 text-[12px] text-signal-yellow">
+            <div className="rounded-md border border-signal-yellow/40 bg-signal-yellow/10 p-3 text-[12px] text-signal-yellow">
               Insufficient history — {nSignals} signal{nSignals === 1 ? "" : "s"} scored,
               need {STABLE_IC_MIN_SIGNALS}+ for stable IC. Numbers shown but interpret with care.
             </div>
           )}
 
-          {/* Alpha decay panel */}
-          <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-            <h2 className="text-[13px] font-medium text-text-primary mb-1">
-              Alpha Decay
-            </h2>
-            <p className="text-[11px] text-text-tertiary mb-4">
-              Hit rate and average return at each horizon. Decay (lower numbers at longer horizons)
-              suggests signals fade quickly — better suited for short-term tactical trades. Stable or
-              rising numbers suggest the alpha persists.
-            </p>
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={decayData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#222" />
-                  <XAxis dataKey="horizon" stroke="#666" style={{ fontSize: 11 }} />
-                  <YAxis
-                    yAxisId="left"
-                    stroke="#666"
-                    style={{ fontSize: 11 }}
-                    label={{ value: "Hit rate %", angle: -90, position: "insideLeft", style: { fontSize: 10, fill: "#666" } }}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    stroke="#666"
-                    style={{ fontSize: 11 }}
-                    label={{ value: "Avg return %", angle: 90, position: "insideRight", style: { fontSize: 10, fill: "#666" } }}
-                  />
-                  <ReferenceLine yAxisId="left" y={50} stroke="#444" strokeDasharray="3 3" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#111", border: "1px solid #333", fontSize: 12 }}
-                    labelStyle={{ color: "#aaa" }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Line
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="hit_rate"
-                    name="Hit rate %"
-                    stroke="#10b981"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                  />
-                  <Line
-                    yAxisId="right"
-                    type="monotone"
-                    dataKey="avg_return_pct"
-                    name="Avg return %"
-                    stroke="#3b82f6"
-                    strokeWidth={2}
-                    dot={{ r: 4 }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-
-          {/* Conviction bucket panel */}
-          <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-            <h2 className="text-[13px] font-medium text-text-primary mb-1">
-              Hit Rate by Conviction
-            </h2>
-            <p className="text-[11px] text-text-tertiary mb-4">
-              A working signal should show monotonic improvement: high-conviction
-              calls hit more often than medium, which hit more often than low. Flat or
-              inverted bars are a calibration problem.
-            </p>
-            <div className="h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={convictionData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#222" />
-                  <XAxis dataKey="bucket" stroke="#666" style={{ fontSize: 11 }} />
-                  <YAxis
-                    stroke="#666"
-                    style={{ fontSize: 11 }}
-                    domain={[0, 100]}
-                    label={{ value: "Hit rate 5d %", angle: -90, position: "insideLeft", style: { fontSize: 10, fill: "#666" } }}
-                  />
-                  <ReferenceLine y={50} stroke="#444" strokeDasharray="3 3" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: "#111", border: "1px solid #333", fontSize: 12 }}
-                    labelStyle={{ color: "#aaa" }}
-                    formatter={(value, name) => {
-                      const n = typeof value === "number" ? value : Number(value);
-                      if (Number.isFinite(n)) {
-                        return [
-                          name === "avg_return_5d_pct" ? `${n.toFixed(2)}%` : `${n.toFixed(1)}%`,
-                          name === "hit_rate_5d" ? "Hit rate 5d" : "Avg return 5d",
-                        ] as [string, string];
-                      }
-                      return [String(value ?? "—"), String(name ?? "")];
-                    }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  <Bar dataKey="hit_rate_5d" name="Hit rate 5d %" fill="#10b981" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="grid grid-cols-3 gap-3 mt-3 text-[11px]">
-              {convictionData.map((b) => (
-                <div key={b.bucket} className="rounded-lg border border-border-primary bg-bg-primary p-2">
-                  <p className="text-text-quaternary uppercase tracking-wider mb-1">{b.bucket}</p>
-                  <p className="font-mono text-text-secondary">{b.count} signals</p>
-                  <p className={`font-mono ${returnColor(b.avg_return_5d_pct === null ? null : b.avg_return_5d_pct / 100)}`}>
-                    {b.avg_return_5d_pct !== null
-                      ? `${b.avg_return_5d_pct.toFixed(2)}% avg`
-                      : "—"}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Monthly hit rate over time */}
-          {monthlyData.length > 1 && (
-            <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-              <h2 className="text-[13px] font-medium text-text-primary mb-1">
-                Hit Rate Over Time
-              </h2>
-              <p className="text-[11px] text-text-tertiary mb-4">
-                Monthly 5d hit rate. Watch for regime breaks — a sudden drop suggests
-                the model's edge has degraded and warrants re-evaluation.
-              </p>
-              <div className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={monthlyData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#222" />
-                    <XAxis dataKey="month" stroke="#666" style={{ fontSize: 11 }} />
-                    <YAxis stroke="#666" style={{ fontSize: 11 }} domain={[0, 100]} />
-                    <ReferenceLine y={50} stroke="#444" strokeDasharray="3 3" />
-                    <Tooltip
-                      contentStyle={{ backgroundColor: "#111", border: "1px solid #333", fontSize: 12 }}
-                      labelStyle={{ color: "#aaa" }}
-                      formatter={(value) => {
-                        const n = typeof value === "number" ? value : Number(value);
-                        if (Number.isFinite(n)) return [`${n.toFixed(1)}%`, "Hit rate 5d"] as [string, string];
-                        return [String(value ?? "—"), "Hit rate 5d"];
-                      }}
-                    />
-                    <Line
-                      type="monotone"
-                      dataKey="hit_rate_5d"
-                      stroke="#10b981"
-                      strokeWidth={2}
-                      dot={{ r: 3 }}
-                      connectNulls
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
-          )}
-
-          {/* Top winners + losers */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-              <h2 className="text-[13px] font-medium text-text-primary mb-3">Top Winners (20d)</h2>
-              {summary && summary.top_winners.length === 0 ? (
-                <p className="text-[12px] text-text-tertiary">No closed signals yet.</p>
-              ) : (
-                <table className="w-full text-[12px]">
-                  <thead>
-                    <tr className="text-text-quaternary text-left">
-                      <th className="font-normal pb-2">Ticker</th>
-                      <th className="font-normal pb-2">Dir</th>
-                      <th className="font-normal pb-2 text-right">Conv</th>
-                      <th className="font-normal pb-2 text-right">20d Return</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-text-secondary">
-                    {summary?.top_winners.map((w, i) => (
-                      <tr key={`${w.ticker}-${i}`} className="border-t border-border-primary">
-                        <td className="py-1.5 font-medium text-text-primary">{w.ticker}</td>
-                        <td className="py-1.5">{w.direction}</td>
-                        <td className="py-1.5 text-right font-mono">{w.conviction}</td>
-                        <td className={`py-1.5 text-right font-mono ${returnColor(w.return_20d)}`}>
-                          {fmtReturn(w.return_20d)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-            <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-              <h2 className="text-[13px] font-medium text-text-primary mb-3">Top Losers (20d)</h2>
-              {summary && summary.top_losers.length === 0 ? (
-                <p className="text-[12px] text-text-tertiary">No drawdowns yet.</p>
-              ) : (
-                <table className="w-full text-[12px]">
-                  <thead>
-                    <tr className="text-text-quaternary text-left">
-                      <th className="font-normal pb-2">Ticker</th>
-                      <th className="font-normal pb-2">Dir</th>
-                      <th className="font-normal pb-2 text-right">Conv</th>
-                      <th className="font-normal pb-2 text-right">20d Return</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-text-secondary">
-                    {summary?.top_losers.map((l, i) => (
-                      <tr key={`${l.ticker}-${i}`} className="border-t border-border-primary">
-                        <td className="py-1.5 font-medium text-text-primary">{l.ticker}</td>
-                        <td className="py-1.5">{l.direction}</td>
-                        <td className="py-1.5 text-right font-mono">{l.conviction}</td>
-                        <td className={`py-1.5 text-right font-mono ${returnColor(l.return_20d)}`}>
-                          {fmtReturn(l.return_20d)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
-
-          {/* ─────────────────── Portfolio Attribution ─────────────────── */}
-          {attribution && !attribution.error && attribution.decomposition && (
-            <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-              <h2 className="text-[13px] font-medium text-text-primary mb-1">
-                Portfolio Attribution
-              </h2>
-              <p className="text-[11px] text-text-tertiary mb-4">
-                Decomposing actual book returns into alpha (idiosyncratic) vs
-                beta × market (factor exposure) vs residual. Run on your open
-                positions over the available history window.
-              </p>
-
-              <div className="grid grid-cols-3 gap-3 mb-4">
-                <Stat
-                  label="Portfolio Return"
-                  value={
-                    attribution.period_return_pct !== undefined
-                      ? `${attribution.period_return_pct >= 0 ? "+" : ""}${attribution.period_return_pct.toFixed(2)}%`
-                      : null
-                  }
-                  color={
-                    attribution.period_return_pct !== undefined && attribution.period_return_pct >= 0
-                      ? "text-signal-green"
-                      : "text-signal-red"
-                  }
-                />
-                <Stat
-                  label="SPY Benchmark"
-                  value={
-                    attribution.benchmark_return_pct !== undefined
-                      ? `${attribution.benchmark_return_pct >= 0 ? "+" : ""}${attribution.benchmark_return_pct.toFixed(2)}%`
-                      : null
-                  }
-                />
-                <Stat
-                  label="R-Squared"
-                  value={
-                    attribution.factor_loadings?.r_squared !== null && attribution.factor_loadings?.r_squared !== undefined
-                      ? attribution.factor_loadings.r_squared.toFixed(2)
-                      : null
-                  }
-                  help="% of portfolio return variance explained by market beta"
-                />
-              </div>
-
-              <div className="space-y-2 mb-4">
-                {[
-                  {
-                    label: "Alpha (skill)",
-                    value: attribution.decomposition.alpha_pct,
-                    bar: (attribution.decomposition.alpha_pct ?? 0) >= 0 ? "bg-signal-green" : "bg-signal-red",
-                    color: (attribution.decomposition.alpha_pct ?? 0) >= 0 ? "text-signal-green" : "text-signal-red",
-                  },
-                  {
-                    label: "Beta × Market",
-                    value: attribution.decomposition.beta_contribution_pct,
-                    bar: attribution.decomposition.beta_contribution_pct >= 0 ? "bg-accent" : "bg-signal-red",
-                    color: attribution.decomposition.beta_contribution_pct >= 0 ? "text-accent" : "text-signal-red",
-                  },
-                  {
-                    label: "Residual (noise)",
-                    value: attribution.decomposition.residual_pct,
-                    bar: "bg-signal-yellow",
-                    color: "text-signal-yellow",
-                  },
-                ].map((row) => (
-                  <div key={row.label} className="flex items-center gap-3">
-                    <span className="text-[11px] text-text-secondary w-32">{row.label}</span>
-                    <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
-                      <div
-                        className={`h-full rounded-full ${row.bar}`}
-                        style={{ width: `${Math.min(Math.abs(row.value ?? 0) * 5, 100)}%` }}
+          {/* ─── SIGNAL QUALITY: Alpha Decay + Conviction Buckets ─── */}
+          <TerminalPanel label="SIGNAL QUALITY" status="DECAY · CONVICTION">
+            <div className="grid lg:grid-cols-2 gap-6">
+              <div>
+                <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                  ALPHA DECAY
+                </p>
+                <p className="text-[11px] text-text-tertiary mb-3 leading-relaxed">
+                  Hit rate and average return at each horizon. Decay across horizons suggests
+                  signals fade quickly. Stable or rising numbers suggest the alpha persists.
+                </p>
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={decayData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                      <XAxis dataKey="horizon" stroke={CHART_AXIS} style={{ fontSize: 11 }} />
+                      <YAxis yAxisId="left" stroke={CHART_AXIS} style={{ fontSize: 11 }}
+                        label={{ value: "Hit %", angle: -90, position: "insideLeft", style: { fontSize: 10, fill: CHART_AXIS } }}
                       />
-                    </div>
-                    <span className={`text-[12px] font-mono w-16 text-right ${row.color}`}>
-                      {row.value !== null && row.value !== undefined
-                        ? `${row.value >= 0 ? "+" : ""}${row.value.toFixed(2)}%`
-                        : "—"}
-                    </span>
-                  </div>
-                ))}
+                      <YAxis yAxisId="right" orientation="right" stroke={CHART_AXIS} style={{ fontSize: 11 }}
+                        label={{ value: "Return %", angle: 90, position: "insideRight", style: { fontSize: 10, fill: CHART_AXIS } }}
+                      />
+                      <ReferenceLine yAxisId="left" y={50} stroke={CHART_REF} strokeDasharray="3 3" />
+                      <Tooltip contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", fontSize: 12, borderRadius: 6 }} labelStyle={{ color: "#a1a1aa" }} />
+                      <Legend wrapperStyle={{ fontSize: 11 }} />
+                      <Line yAxisId="left" type="monotone" dataKey="hit_rate" name="Hit %" stroke="#10b981" strokeWidth={2} dot={{ r: 4 }} />
+                      <Line yAxisId="right" type="monotone" dataKey="avg_return_pct" name="Return %" stroke="#3b82f6" strokeWidth={2} dot={{ r: 4 }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
               </div>
 
-              {attribution.factor_loadings && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3 border-t border-border-primary">
-                  <div>
-                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Alpha (ann.)</p>
-                    <p
-                      className={`text-[13px] font-mono ${
-                        (attribution.factor_loadings.alpha ?? 0) >= 0 ? "text-signal-green" : "text-signal-red"
-                      }`}
-                    >
-                      {attribution.factor_loadings.alpha !== null && attribution.factor_loadings.alpha !== undefined
-                        ? `${attribution.factor_loadings.alpha >= 0 ? "+" : ""}${attribution.factor_loadings.alpha.toFixed(2)}%`
-                        : "—"}
-                    </p>
+              <div>
+                <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                  HIT RATE BY CONVICTION
+                </p>
+                <p className="text-[11px] text-text-tertiary mb-3 leading-relaxed">
+                  A working signal shows monotonic improvement: high-conviction calls hit
+                  more often than medium, which hit more often than low.
+                </p>
+                <div className="h-56">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={convictionData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                      <XAxis dataKey="bucket" stroke={CHART_AXIS} style={{ fontSize: 11 }} />
+                      <YAxis stroke={CHART_AXIS} style={{ fontSize: 11 }} domain={[0, 100]} />
+                      <ReferenceLine y={50} stroke={CHART_REF} strokeDasharray="3 3" />
+                      <Tooltip contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", fontSize: 12, borderRadius: 6 }} labelStyle={{ color: "#a1a1aa" }}
+                        formatter={(value, name) => {
+                          const n = typeof value === "number" ? value : Number(value);
+                          if (Number.isFinite(n)) {
+                            return [
+                              name === "avg_return_5d_pct" ? `${n.toFixed(2)}%` : `${n.toFixed(1)}%`,
+                              name === "hit_rate_5d" ? "Hit 5d" : "Return 5d",
+                            ] as [string, string];
+                          }
+                          return [String(value ?? "—"), String(name ?? "")];
+                        }}
+                      />
+                      <Bar dataKey="hit_rate_5d" name="Hit 5d %" fill="#10b981" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mt-3 text-[11px]">
+                  {convictionData.map((b) => (
+                    <div key={b.bucket} className="rounded-md border border-border-primary/60 bg-bg-primary/40 p-2">
+                      <p className="text-text-quaternary uppercase tracking-wider text-[9px] font-mono">{b.bucket}</p>
+                      <p className="font-mono text-text-secondary tabular-nums">{b.count}</p>
+                      <p className={`font-mono tabular-nums ${returnColor(b.avg_return_5d_pct === null ? null : b.avg_return_5d_pct / 100)}`}>
+                        {b.avg_return_5d_pct !== null ? `${b.avg_return_5d_pct.toFixed(2)}%` : "—"}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </TerminalPanel>
+
+          {/* ─── TIMELINE: Monthly Hit Rate + Top Winners/Losers ─── */}
+          <TerminalPanel label="TIMELINE" status="MONTHLY · WINNERS · LOSERS">
+            {monthlyData.length > 1 && (
+              <div className="mb-6">
+                <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                  HIT RATE OVER TIME
+                </p>
+                <p className="text-[11px] text-text-tertiary mb-3 leading-relaxed">
+                  Monthly 5d hit rate. Watch for regime breaks — a sudden drop suggests
+                  the model&apos;s edge has degraded and warrants re-evaluation.
+                </p>
+                <div className="h-48">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={monthlyData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID} />
+                      <XAxis dataKey="month" stroke={CHART_AXIS} style={{ fontSize: 11 }} />
+                      <YAxis stroke={CHART_AXIS} style={{ fontSize: 11 }} domain={[0, 100]} />
+                      <ReferenceLine y={50} stroke={CHART_REF} strokeDasharray="3 3" />
+                      <Tooltip contentStyle={{ backgroundColor: "#18181b", border: "1px solid #27272a", fontSize: 12, borderRadius: 6 }} labelStyle={{ color: "#a1a1aa" }}
+                        formatter={(value) => {
+                          const n = typeof value === "number" ? value : Number(value);
+                          if (Number.isFinite(n)) return [`${n.toFixed(1)}%`, "Hit 5d"] as [string, string];
+                          return [String(value ?? "—"), "Hit 5d"];
+                        }}
+                      />
+                      <Line type="monotone" dataKey="hit_rate_5d" stroke="#10b981" strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div>
+                <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                  TOP WINNERS (20D)
+                </p>
+                {summary && summary.top_winners.length === 0 ? (
+                  <p className="text-[12px] text-text-tertiary">No closed signals yet.</p>
+                ) : (
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="text-text-quaternary text-left">
+                        <th className="font-mono text-[9px] uppercase tracking-[0.18em] pb-2">Ticker</th>
+                        <th className="font-mono text-[9px] uppercase tracking-[0.18em] pb-2">Dir</th>
+                        <th className="font-mono text-[9px] uppercase tracking-[0.18em] pb-2 text-right">Conv</th>
+                        <th className="font-mono text-[9px] uppercase tracking-[0.18em] pb-2 text-right">20d</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-text-secondary">
+                      {summary?.top_winners.map((w, i) => (
+                        <tr key={`${w.ticker}-${i}`} className="border-t border-border-primary/40">
+                          <td className="py-1.5 font-mono font-semibold text-text-primary">{w.ticker}</td>
+                          <td className="py-1.5 text-[11px]">{w.direction}</td>
+                          <td className="py-1.5 text-right font-mono tabular-nums">{w.conviction}</td>
+                          <td className={`py-1.5 text-right font-mono tabular-nums ${returnColor(w.return_20d)}`}>
+                            {fmtReturn(w.return_20d)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <div>
+                <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                  TOP LOSERS (20D)
+                </p>
+                {summary && summary.top_losers.length === 0 ? (
+                  <p className="text-[12px] text-text-tertiary">No drawdowns yet.</p>
+                ) : (
+                  <table className="w-full text-[12px]">
+                    <thead>
+                      <tr className="text-text-quaternary text-left">
+                        <th className="font-mono text-[9px] uppercase tracking-[0.18em] pb-2">Ticker</th>
+                        <th className="font-mono text-[9px] uppercase tracking-[0.18em] pb-2">Dir</th>
+                        <th className="font-mono text-[9px] uppercase tracking-[0.18em] pb-2 text-right">Conv</th>
+                        <th className="font-mono text-[9px] uppercase tracking-[0.18em] pb-2 text-right">20d</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-text-secondary">
+                      {summary?.top_losers.map((l, i) => (
+                        <tr key={`${l.ticker}-${i}`} className="border-t border-border-primary/40">
+                          <td className="py-1.5 font-mono font-semibold text-text-primary">{l.ticker}</td>
+                          <td className="py-1.5 text-[11px]">{l.direction}</td>
+                          <td className="py-1.5 text-right font-mono tabular-nums">{l.conviction}</td>
+                          <td className={`py-1.5 text-right font-mono tabular-nums ${returnColor(l.return_20d)}`}>
+                            {fmtReturn(l.return_20d)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </TerminalPanel>
+
+          {/* ─── ATTRIBUTION: Portfolio Attribution + Factor Exposure ─── */}
+          {(attribution?.decomposition || factors || openTickers.length > 0) && (
+            <TerminalPanel label="ATTRIBUTION" status="DECOMPOSITION · FACTORS">
+              {/* Portfolio Attribution */}
+              {attribution && !attribution.error && attribution.decomposition && (
+                <div className="mb-6">
+                  <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                    PORTFOLIO ATTRIBUTION
+                  </p>
+                  <p className="text-[11px] text-text-tertiary mb-4 leading-relaxed">
+                    Decomposing actual book returns into alpha (idiosyncratic) vs
+                    beta × market (factor exposure) vs residual.
+                  </p>
+
+                  <div className="grid grid-cols-3 gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden mb-4">
+                    <StatPanel
+                      label="PORTFOLIO RETURN"
+                      value={
+                        attribution.period_return_pct !== undefined
+                          ? `${attribution.period_return_pct >= 0 ? "+" : ""}${attribution.period_return_pct.toFixed(2)}%`
+                          : "—"
+                      }
+                      tone={
+                        attribution.period_return_pct !== undefined && attribution.period_return_pct >= 0
+                          ? "green"
+                          : "red"
+                      }
+                    />
+                    <StatPanel
+                      label="SPY BENCHMARK"
+                      value={
+                        attribution.benchmark_return_pct !== undefined
+                          ? `${attribution.benchmark_return_pct >= 0 ? "+" : ""}${attribution.benchmark_return_pct.toFixed(2)}%`
+                          : "—"
+                      }
+                    />
+                    <StatPanel
+                      label="R-SQUARED"
+                      value={
+                        attribution.factor_loadings?.r_squared !== null && attribution.factor_loadings?.r_squared !== undefined
+                          ? attribution.factor_loadings.r_squared.toFixed(2)
+                          : "—"
+                      }
+                      sub="Variance explained by β"
+                    />
                   </div>
-                  <div>
-                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Beta vs SPY</p>
-                    <p className="text-[13px] font-mono text-text-primary">
-                      {attribution.factor_loadings.beta !== null && attribution.factor_loadings.beta !== undefined
-                        ? attribution.factor_loadings.beta.toFixed(3)
-                        : "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">R²</p>
-                    <p className="text-[13px] font-mono text-text-primary">
-                      {attribution.factor_loadings.r_squared !== null && attribution.factor_loadings.r_squared !== undefined
-                        ? attribution.factor_loadings.r_squared.toFixed(3)
-                        : "—"}
-                    </p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-text-quaternary uppercase tracking-wider">Residual Vol</p>
-                    <p className="text-[13px] font-mono text-text-primary">
-                      {attribution.factor_loadings.residual_vol !== null && attribution.factor_loadings.residual_vol !== undefined
-                        ? `${attribution.factor_loadings.residual_vol.toFixed(2)}%`
-                        : "—"}
-                    </p>
+
+                  <div className="space-y-2 mb-4">
+                    {[
+                      {
+                        label: "Alpha (skill)",
+                        value: attribution.decomposition.alpha_pct,
+                        bar: (attribution.decomposition.alpha_pct ?? 0) >= 0 ? "bg-signal-green" : "bg-signal-red",
+                        color: (attribution.decomposition.alpha_pct ?? 0) >= 0 ? "text-signal-green" : "text-signal-red",
+                      },
+                      {
+                        label: "Beta × Market",
+                        value: attribution.decomposition.beta_contribution_pct,
+                        bar: attribution.decomposition.beta_contribution_pct >= 0 ? "bg-accent" : "bg-signal-red",
+                        color: attribution.decomposition.beta_contribution_pct >= 0 ? "text-accent" : "text-signal-red",
+                      },
+                      {
+                        label: "Residual (noise)",
+                        value: attribution.decomposition.residual_pct,
+                        bar: "bg-signal-yellow",
+                        color: "text-signal-yellow",
+                      },
+                    ].map((row) => (
+                      <div key={row.label} className="flex items-center gap-3">
+                        <span className="text-[11px] text-text-secondary w-32">{row.label}</span>
+                        <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
+                          <div
+                            className={`h-full rounded-full ${row.bar}`}
+                            style={{ width: `${Math.min(Math.abs(row.value ?? 0) * 5, 100)}%` }}
+                          />
+                        </div>
+                        <span className={`text-[12px] font-mono w-16 text-right tabular-nums ${row.color}`}>
+                          {row.value !== null && row.value !== undefined
+                            ? `${row.value >= 0 ? "+" : ""}${row.value.toFixed(2)}%`
+                            : "—"}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
-            </div>
-          )}
 
-          {attribution?.error && (
-            <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-              <h2 className="text-[13px] font-medium text-text-primary mb-1">
-                Portfolio Attribution
-              </h2>
-              <p className="text-[12px] text-text-tertiary">
-                {attribution.error}. Attribution requires open trades with 3+ months of price
-                history per ticker.
-              </p>
-            </div>
-          )}
+              {attribution?.error && (
+                <p className="text-[12px] text-text-tertiary mb-4">
+                  Attribution unavailable: {attribution.error}. Needs open trades with 3+ months
+                  of price history per ticker.
+                </p>
+              )}
 
-          {/* ─────────────────── Factor Exposure ─────────────────── */}
-          <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-            <div className="flex items-baseline justify-between mb-1">
-              <h2 className="text-[13px] font-medium text-text-primary">
-                Factor Exposure
-              </h2>
-              <div className="flex items-center gap-2">
-                <div className="flex rounded-lg border border-border-primary overflow-hidden">
-                  <button
-                    onClick={() => setFactorModel("single")}
-                    className={`px-2.5 py-1 text-[11px] font-medium ${
-                      factorModel === "single"
-                        ? "bg-white text-bg-primary"
-                        : "text-text-tertiary hover:text-text-primary"
-                    }`}
-                  >
-                    Single-factor
-                  </button>
-                  <button
-                    onClick={() => setFactorModel("ff5_mom")}
-                    className={`px-2.5 py-1 text-[11px] font-medium ${
-                      factorModel === "ff5_mom"
-                        ? "bg-white text-bg-primary"
-                        : "text-text-tertiary hover:text-text-primary"
-                    }`}
-                  >
-                    FF5 + Mom
-                  </button>
-                </div>
-                <button
-                  onClick={() => loadFactors(factorModel)}
-                  disabled={factorLoading || openTickers.length === 0}
-                  className="rounded-lg px-3 py-1 text-[11px] font-medium bg-white/[0.07] hover:bg-white/[0.12] text-text-primary border border-border-primary disabled:opacity-50"
-                >
-                  {factorLoading ? "Computing…" : "Run"}
-                </button>
-              </div>
-            </div>
-            <p className="text-[11px] text-text-tertiary mb-3">
-              Factor regression on your open positions ({openTickers.length} tickers).
-              FF5 + Momentum uses ETF proxies (IWM, IWD/IWF, QUAL, USMV, MTUM).
-              {openTickers.length === 0 && " — Open at least one position to enable."}
-            </p>
-
-            {factors && (() => {
-              const usingMulti = !!factors.multi_factor && !factors.multi_factor.error;
-              const view = usingMulti
-                ? {
-                    alpha: factors.multi_factor!.alpha,
-                    beta: null as number | null,
-                    r_squared: factors.multi_factor!.r_squared,
-                    factor_betas: factors.multi_factor!.factor_betas,
-                    factor_tstats: factors.multi_factor!.factor_tstats,
-                    residual_vol: factors.multi_factor!.residual_vol,
-                    alpha_pvalue: factors.multi_factor!.alpha_pvalue,
-                    alpha_significant: factors.multi_factor!.alpha_significant_at_5pct,
-                    n_observations: factors.multi_factor!.n_observations,
-                    model_label: factors.multi_factor!.model || "FF5 + Momentum",
-                    multicollinearity: factors.multi_factor!.multicollinearity_flag,
-                    high_vif: factors.multi_factor!.high_vif_factors,
-                  }
-                : {
-                    alpha: factors.alpha,
-                    beta: factors.beta,
-                    r_squared: factors.r_squared,
-                    factor_betas: factors.factor_betas,
-                    factor_tstats: undefined as Record<string, number> | undefined,
-                    residual_vol: factors.residual_vol,
-                    alpha_pvalue: factors.alpha_pvalue,
-                    alpha_significant: factors.alpha_significant_at_5pct,
-                    n_observations: factors.n_observations,
-                    model_label: "Single-factor (CAPM)",
-                    multicollinearity: false,
-                    high_vif: undefined as string[] | undefined,
-                  };
-              return (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-text-quaternary uppercase tracking-wider">Model</span>
-                      <span className="text-[11px] font-mono text-text-primary">{view.model_label}</span>
-                      {view.n_observations && (
-                        <span className="text-[10px] text-text-quaternary">n={view.n_observations}</span>
-                      )}
-                    </div>
-                    {view.alpha_pvalue !== null && view.alpha_pvalue !== undefined && (
-                      <div
-                        className={`text-[10px] font-medium px-2 py-0.5 rounded ${
-                          view.alpha_significant
-                            ? "bg-signal-green/10 text-signal-green border border-signal-green/30"
-                            : "bg-signal-yellow/10 text-signal-yellow border border-signal-yellow/30"
+              {/* Factor Exposure */}
+              <div className="border-t border-border-primary/40 pt-5">
+                <div className="flex items-baseline justify-between mb-2 flex-wrap gap-3">
+                  <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">
+                    FACTOR EXPOSURE
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <div className="inline-flex items-center gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden">
+                      <button
+                        onClick={() => setFactorModel("single")}
+                        className={`px-2.5 py-1 text-[10px] font-mono tracking-wider ${
+                          factorModel === "single"
+                            ? "bg-bg-surface text-text-primary"
+                            : "bg-bg-primary text-text-tertiary hover:text-text-secondary"
                         }`}
                       >
-                        {view.alpha_significant ? "Alpha significant" : "Alpha not significant"} · p={view.alpha_pvalue.toFixed(3)}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className={`grid gap-3 ${usingMulti ? "grid-cols-2" : "grid-cols-3"}`}>
-                    <Stat
-                      label="Alpha (ann.)"
-                      value={
-                        view.alpha !== null && view.alpha !== undefined
-                          ? `${Number(view.alpha) >= 0 ? "+" : ""}${Number(view.alpha).toFixed(2)}%`
-                          : null
-                      }
-                      color={Number(view.alpha ?? 0) >= 0 ? "text-signal-green" : "text-signal-red"}
-                    />
-                    {!usingMulti && (
-                      <Stat
-                        label="Beta"
-                        value={view.beta !== null && view.beta !== undefined ? Number(view.beta).toFixed(3) : null}
-                      />
-                    )}
-                    <Stat
-                      label="R-Squared"
-                      value={view.r_squared !== null && view.r_squared !== undefined ? Number(view.r_squared).toFixed(3) : null}
-                    />
-                  </div>
-
-                  {view.factor_betas && (
-                    <div>
-                      <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-2">
-                        Factor Exposures
-                      </p>
-                      <div className="space-y-1.5">
-                        {Object.entries(view.factor_betas).map(([factor, beta]) => {
-                          const t = view.factor_tstats?.[factor];
-                          const sig = t !== null && t !== undefined && Math.abs(t) >= 1.96;
-                          return (
-                            <div key={factor} className="flex items-center gap-3">
-                              <span className="text-[11px] text-text-secondary w-28 capitalize">
-                                {factor.replace(/_/g, " ")}
-                              </span>
-                              <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
-                                <div
-                                  className={`h-full rounded-full ${Number(beta) >= 0 ? "bg-accent" : "bg-signal-red"}`}
-                                  style={{
-                                    width: `${Math.min(Math.abs(Number(beta)) * 50, 100)}%`,
-                                    marginLeft: Number(beta) < 0 ? "auto" : 0,
-                                  }}
-                                />
-                              </div>
-                              <span className="text-[11px] font-mono text-text-primary w-14 text-right">
-                                {beta !== null && beta !== undefined ? Number(beta).toFixed(3) : "—"}
-                              </span>
-                              {t !== null && t !== undefined && (
-                                <span
-                                  className={`text-[10px] font-mono w-14 text-right ${
-                                    sig ? "text-signal-green" : "text-text-quaternary"
-                                  }`}
-                                >
-                                  t={t.toFixed(2)}
-                                </span>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                      <p className="text-[10px] text-text-quaternary mt-2">
-                        |t| ≥ 1.96 indicates significance at 5%.
-                      </p>
+                        SINGLE
+                      </button>
+                      <button
+                        onClick={() => setFactorModel("ff5_mom")}
+                        className={`px-2.5 py-1 text-[10px] font-mono tracking-wider ${
+                          factorModel === "ff5_mom"
+                            ? "bg-bg-surface text-text-primary"
+                            : "bg-bg-primary text-text-tertiary hover:text-text-secondary"
+                        }`}
+                      >
+                        FF5 + MOM
+                      </button>
                     </div>
-                  )}
-
-                  {view.multicollinearity && view.high_vif && view.high_vif.length > 0 && (
-                    <div className="rounded-lg border border-signal-yellow/40 bg-signal-yellow/10 p-2 text-[11px] text-signal-yellow">
-                      Multicollinearity flagged on: {view.high_vif.join(", ")} (VIF &gt; 10). Interpret these betas carefully.
-                    </div>
-                  )}
-
-                  {view.residual_vol !== null && view.residual_vol !== undefined && (
-                    <p className="text-[11px] text-text-quaternary">
-                      Residual vol (idiosyncratic risk):{" "}
-                      <span className="font-mono text-text-primary">
-                        {Number(view.residual_vol).toFixed(2)}%
-                      </span>
-                    </p>
-                  )}
+                    <button
+                      onClick={() => loadFactors(factorModel)}
+                      disabled={factorLoading || openTickers.length === 0}
+                      className="rounded-md px-3 py-1 text-[10px] font-mono font-semibold tracking-wider bg-white text-bg-primary hover:bg-zinc-200 disabled:opacity-30 transition-colors"
+                    >
+                      {factorLoading ? "COMPUTING…" : "RUN"}
+                    </button>
+                  </div>
                 </div>
-              );
-            })()}
+                <p className="text-[11px] text-text-tertiary mb-4 leading-relaxed">
+                  Factor regression on your open positions ({openTickers.length} tickers).
+                  FF5 + Momentum uses ETF proxies (IWM, IWD/IWF, QUAL, USMV, MTUM).
+                  {openTickers.length === 0 && " Open at least one position to enable."}
+                </p>
 
-            {!factors && openTickers.length > 0 && (
-              <p className="text-[11px] text-text-tertiary">Click Run to compute.</p>
-            )}
-          </div>
+                {factors && (() => {
+                  const usingMulti = !!factors.multi_factor && !factors.multi_factor.error;
+                  const view = usingMulti
+                    ? {
+                        alpha: factors.multi_factor!.alpha,
+                        beta: null as number | null,
+                        r_squared: factors.multi_factor!.r_squared,
+                        factor_betas: factors.multi_factor!.factor_betas,
+                        factor_tstats: factors.multi_factor!.factor_tstats,
+                        residual_vol: factors.multi_factor!.residual_vol,
+                        alpha_pvalue: factors.multi_factor!.alpha_pvalue,
+                        alpha_significant: factors.multi_factor!.alpha_significant_at_5pct,
+                        n_observations: factors.multi_factor!.n_observations,
+                        model_label: factors.multi_factor!.model || "FF5 + Momentum",
+                        multicollinearity: factors.multi_factor!.multicollinearity_flag,
+                        high_vif: factors.multi_factor!.high_vif_factors,
+                      }
+                    : {
+                        alpha: factors.alpha,
+                        beta: factors.beta,
+                        r_squared: factors.r_squared,
+                        factor_betas: factors.factor_betas,
+                        factor_tstats: undefined as Record<string, number> | undefined,
+                        residual_vol: factors.residual_vol,
+                        alpha_pvalue: factors.alpha_pvalue,
+                        alpha_significant: factors.alpha_significant_at_5pct,
+                        n_observations: factors.n_observations,
+                        model_label: "Single-factor (CAPM)",
+                        multicollinearity: false,
+                        high_vif: undefined as string[] | undefined,
+                      };
+                  return (
+                    <div className="space-y-4">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2 text-[10px] font-mono">
+                          <span className="text-text-quaternary tracking-[0.18em] uppercase">Model</span>
+                          <span className="text-text-primary">{view.model_label}</span>
+                          {view.n_observations && (
+                            <span className="text-text-quaternary">n={view.n_observations}</span>
+                          )}
+                        </div>
+                        {view.alpha_pvalue !== null && view.alpha_pvalue !== undefined && (
+                          <StatusPill
+                            label={`${view.alpha_significant ? "ALPHA SIG" : "NOT SIG"} · p=${view.alpha_pvalue.toFixed(3)}`}
+                            tone={view.alpha_significant ? "green" : "yellow"}
+                          />
+                        )}
+                      </div>
+
+                      <div className={`grid grid-cols-${usingMulti ? "2" : "3"} gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden`}>
+                        <StatPanel
+                          label="ALPHA (ANN.)"
+                          value={
+                            view.alpha !== null && view.alpha !== undefined
+                              ? `${Number(view.alpha) >= 0 ? "+" : ""}${Number(view.alpha).toFixed(2)}%`
+                              : "—"
+                          }
+                          tone={Number(view.alpha ?? 0) >= 0 ? "green" : "red"}
+                        />
+                        {!usingMulti && (
+                          <StatPanel
+                            label="BETA"
+                            value={view.beta !== null && view.beta !== undefined ? Number(view.beta).toFixed(3) : "—"}
+                          />
+                        )}
+                        <StatPanel
+                          label="R-SQUARED"
+                          value={view.r_squared !== null && view.r_squared !== undefined ? Number(view.r_squared).toFixed(3) : "—"}
+                        />
+                      </div>
+
+                      {view.factor_betas && (
+                        <div>
+                          <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-3">
+                            FACTOR LOADINGS
+                          </p>
+                          <div className="space-y-1.5">
+                            {Object.entries(view.factor_betas).map(([factor, beta]) => {
+                              const t = view.factor_tstats?.[factor];
+                              const sig = t !== null && t !== undefined && Math.abs(t) >= 1.96;
+                              return (
+                                <div key={factor} className="flex items-center gap-3">
+                                  <span className="text-[11px] text-text-secondary w-28 capitalize font-mono">
+                                    {factor.replace(/_/g, " ")}
+                                  </span>
+                                  <div className="flex-1 h-2 rounded-full bg-bg-elevated overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${Number(beta) >= 0 ? "bg-accent" : "bg-signal-red"}`}
+                                      style={{
+                                        width: `${Math.min(Math.abs(Number(beta)) * 50, 100)}%`,
+                                        marginLeft: Number(beta) < 0 ? "auto" : 0,
+                                      }}
+                                    />
+                                  </div>
+                                  <span className="text-[11px] font-mono text-text-primary w-14 text-right tabular-nums">
+                                    {beta !== null && beta !== undefined ? Number(beta).toFixed(3) : "—"}
+                                  </span>
+                                  {t !== null && t !== undefined && (
+                                    <span
+                                      className={`text-[10px] font-mono w-14 text-right tabular-nums ${
+                                        sig ? "text-signal-green" : "text-text-quaternary"
+                                      }`}
+                                    >
+                                      t={t.toFixed(2)}
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <p className="text-[10px] font-mono text-text-quaternary mt-3">
+                            |t| ≥ 1.96 indicates significance at 5%.
+                          </p>
+                        </div>
+                      )}
+
+                      {view.multicollinearity && view.high_vif && view.high_vif.length > 0 && (
+                        <div className="rounded-md border border-signal-yellow/40 bg-signal-yellow/10 p-2 text-[11px] text-signal-yellow">
+                          Multicollinearity flagged on: {view.high_vif.join(", ")} (VIF &gt; 10). Interpret these betas carefully.
+                        </div>
+                      )}
+
+                      {view.residual_vol !== null && view.residual_vol !== undefined && (
+                        <p className="text-[11px] font-mono text-text-quaternary">
+                          Residual vol (idiosyncratic risk):{" "}
+                          <span className="text-text-primary tabular-nums">
+                            {Number(view.residual_vol).toFixed(2)}%
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+
+                {!factors && openTickers.length > 0 && (
+                  <p className="text-[11px] text-text-tertiary">Click RUN to compute.</p>
+                )}
+              </div>
+            </TerminalPanel>
+          )}
         </>
       )}
     </div>

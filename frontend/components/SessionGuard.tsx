@@ -26,13 +26,36 @@ import { api } from "@/lib/api";
  * Onboarding state is cached after the first successful fetch so
  * subsequent navigations don't re-hit the API.
  */
+const ONBOARDING_CACHE_KEY = "alphaengine:onboarded";
+
+function readOnboardedCache(): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = window.localStorage.getItem(ONBOARDING_CACHE_KEY);
+    if (v === "true") return true;
+    if (v === "false") return false;
+  } catch { /* ignore */ }
+  return null;
+}
+
+function writeOnboardedCache(v: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(ONBOARDING_CACHE_KEY, String(v));
+  } catch { /* ignore */ }
+}
+
 export function SessionGuard({ children }: { children: React.ReactNode }) {
   const { isLoaded, isSignedIn } = useUser();
   const router = useRouter();
   const pathname = usePathname();
   const redirectedRef = useRef(false);
   const [onboardingChecked, setOnboardingChecked] = useState(false);
-  const [isOnboarded, setIsOnboarded] = useState<boolean | null>(null);
+  // Seed from localStorage so transient backend failures don't kick an
+  // existing onboarded user back to the wizard. If we previously confirmed
+  // the user is onboarded, trust that until the next successful API call
+  // tells us otherwise.
+  const [isOnboarded, setIsOnboarded] = useState<boolean | null>(readOnboardedCache);
 
   const isPublicRoute =
     pathname === "/" ||
@@ -45,7 +68,8 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!isLoaded || !isSignedIn) {
       setOnboardingChecked(false);
-      setIsOnboarded(null);
+      // Don't clear isOnboarded here — keep the cached value so the next
+      // sign-in cycle starts with the last-known truth.
       return;
     }
     if (onboardingChecked) return;
@@ -55,14 +79,26 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
       .myProfile()
       .then((d) => {
         if (cancelled) return;
-        setIsOnboarded(Boolean(d?.onboarded));
+        const onboarded = Boolean(d?.onboarded);
+        setIsOnboarded(onboarded);
+        writeOnboardedCache(onboarded);
         setOnboardingChecked(true);
       })
-      .catch(() => {
-        // Treat any failure as "not onboarded" so the user gets the wizard
-        // rather than being stuck on a spinner if the API is briefly slow.
+      .catch((e) => {
+        // Backend slow/failing. DO NOT bounce an existing user into the
+        // wizard on a transient failure — that was a critical bug.
+        // If we have a cached onboarded=true, keep trusting it.
+        // If we don't, treat the user as onboarded so they can at least
+        // reach the app (a brand-new user with a failed first profile
+        // fetch will just see empty panels, which is better than a
+        // forced redirect loop). The onboarding wizard is reachable
+        // explicitly via /onboarding if the user actually needs it.
         if (cancelled) return;
-        setIsOnboarded(false);
+        if (typeof console !== "undefined") {
+          console.warn("[session] profile fetch failed; using cached/optimistic onboarded state", e);
+        }
+        const cached = readOnboardedCache();
+        setIsOnboarded(cached === null ? true : cached);
         setOnboardingChecked(true);
       });
     return () => {

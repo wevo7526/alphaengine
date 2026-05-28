@@ -6,7 +6,6 @@ import { useUser } from "@clerk/nextjs";
 import { api } from "@/lib/api";
 import { MacroChart } from "@/components/MacroChart";
 import { MemoPanel } from "@/components/MemoPanel";
-import { TickerBand } from "@/components/TickerBand";
 import { TerminalHeader } from "@/components/TerminalHeader";
 import { TerminalPanel } from "@/components/TerminalPanel";
 import { StatPanel } from "@/components/StatPanel";
@@ -199,11 +198,11 @@ export default function HomePage() {
 
   return (
     <div className="min-w-0 w-full bg-bg-primary">
-      {/* Live macro tape — sticky under the sidebar. Live polling is
-          intentionally OFF for now (was making 15 parallel /api/data/market
-          calls per dashboard load and overwhelming the backend). The static
-          fallback tape renders instantly; a batch endpoint is a follow-up. */}
-      <TickerBand className="sticky top-0 z-30 backdrop-blur-md" />
+      {/* TickerBand was removed from the dashboard — it was the cause of
+          15 parallel /api/data/market calls per load and was not vital
+          to the platform per user direction. The component still exists
+          in /components and can be re-enabled later behind a real-time
+          batch quote endpoint. */}
 
       <div className="p-8 max-w-[1280px] mx-auto min-w-0">
         {apiError && (

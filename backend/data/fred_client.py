@@ -86,8 +86,23 @@ class FREDDataClient:
             max_entries=128, ttl_seconds=self._SINGLE_TTL,
         )
 
+    # Per-call hard timeout when refreshing. FRED has gone unresponsive in
+    # production and was hanging for tens of seconds per series, blowing the
+    # 90s request deadline. 8s per series with a 12s wall-clock cap on the
+    # whole snapshot is the right tradeoff — if FRED is healthy each call
+    # takes ~1-2s and we finish in well under the cap.
+    _PER_FETCH_TIMEOUT = 8.0
+    _SNAPSHOT_WALL_TIMEOUT = 12.0
+
     def get_macro_snapshot(self) -> dict:
-        """Pull latest values for all key macro indicators."""
+        """Pull latest values for all key macro indicators.
+
+        Stale-while-error: if we have ANY previously-built snapshot in
+        memory, we return it on refresh failure rather than letting the
+        dashboard sit on a timeout. The cache TTL is treated as soft — a
+        background-style refresh only replaces the cached value when the
+        new fetch actually succeeds.
+        """
         now = time.time()
         if self._snapshot_cache and (now - self._snapshot_timestamp) < self._SNAPSHOT_TTL:
             logger.debug("Returning cached macro snapshot")
@@ -115,22 +130,31 @@ class FREDDataClient:
                 return name, None
 
         snapshot: dict = {}
+        deadline = time.time() + self._SNAPSHOT_WALL_TIMEOUT
         with ThreadPoolExecutor(max_workers=6) as pool:
             futures = {
                 pool.submit(_fetch_one, sid, name): name
                 for sid, name in MACRO_SERIES.items()
             }
             for future in as_completed(futures):
+                remaining = max(0.5, deadline - time.time())
                 try:
-                    name, data = future.result(timeout=30)
+                    name, data = future.result(timeout=min(self._PER_FETCH_TIMEOUT, remaining))
                 except Exception as e:
-                    logger.warning(f"FRED worker failure: {e}")
+                    logger.warning(f"FRED worker timeout/failure: {e}")
                     continue
                 if data:
                     snapshot[name] = data
 
-        self._snapshot_cache = snapshot
-        self._snapshot_timestamp = now
+        # Stale-while-error: refresh failed entirely AND we have a prior
+        # snapshot. Keep serving the prior one — better than a blank dashboard.
+        if not snapshot and self._snapshot_cache:
+            logger.warning("FRED snapshot empty; returning stale cache from %.0fs ago", now - self._snapshot_timestamp)
+            return self._snapshot_cache
+
+        if snapshot:
+            self._snapshot_cache = snapshot
+            self._snapshot_timestamp = now
         logger.info(f"Macro snapshot built: {len(snapshot)}/{len(MACRO_SERIES)} indicators")
         return snapshot
 

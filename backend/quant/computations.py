@@ -289,13 +289,18 @@ def get_macro_time_series() -> dict:
             logger.warning(f"Failed to fetch {series_id}: {e}")
             return label, []
 
+    # 8s per series with a hard 10s wall-clock cap. FRED has been hanging
+    # in production; the dashboard must not wait minutes for the chart panel.
+    import time as _time
+    deadline = _time.time() + 10.0
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(_fetch_one, sid, label) for sid, label in targets]
         for future in as_completed(futures):
+            remaining = max(0.5, deadline - _time.time())
             try:
-                label, data = future.result(timeout=15)
+                label, data = future.result(timeout=min(8.0, remaining))
             except Exception as e:
-                logger.warning(f"Macro series worker failure: {e}")
+                logger.warning(f"Macro series worker timeout/failure: {e}")
                 continue
             series[label] = data
 
