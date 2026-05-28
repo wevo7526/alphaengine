@@ -198,11 +198,14 @@ export default function HomePage() {
   const subline = sublineParts.length ? sublineParts.join(" · ") + "." : "Live macro feed and pre-market briefing below.";
 
   return (
-    <div className="min-h-screen bg-bg-primary">
-      {/* Live macro tape — the only place TickerBand lives now. */}
-      <TickerBand live className="sticky top-0 z-30 backdrop-blur-md" />
+    <div className="min-w-0 w-full bg-bg-primary">
+      {/* Live macro tape — sticky under the sidebar. Live polling is
+          intentionally OFF for now (was making 15 parallel /api/data/market
+          calls per dashboard load and overwhelming the backend). The static
+          fallback tape renders instantly; a batch endpoint is a follow-up. */}
+      <TickerBand className="sticky top-0 z-30 backdrop-blur-md" />
 
-      <div className="p-8 max-w-[1280px] mx-auto">
+      <div className="p-8 max-w-[1280px] mx-auto min-w-0">
         {apiError && (
           <div className="mb-6 flex items-start justify-between rounded-md border border-signal-red/25 bg-signal-red/[0.06] p-3">
             <div>
@@ -224,7 +227,6 @@ export default function HomePage() {
           eyebrow={`DASHBOARD · ${todayLabel.toUpperCase()}`}
           title={greeting}
           sub={subline}
-          size="lg"
           meta={<StatusPill label={sessionLabel} tone={sessionTone} pulse={isMarketHours} />}
           className="mb-10"
         />

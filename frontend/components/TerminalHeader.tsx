@@ -33,13 +33,13 @@ export function TerminalHeader({
       : "text-[26px] sm:text-[32px]";
 
   return (
-    <header className={`flex items-end justify-between gap-6 ${className}`}>
-      <div className="min-w-0">
+    <header className={`flex items-end justify-between gap-6 flex-wrap ${className}`}>
+      <div className="min-w-0 flex-1">
         <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-3">
           <span className="text-accent">///</span> {eyebrow}
         </p>
         <h1
-          className={`${titleSize} font-semibold tracking-[-0.02em] leading-[1.05] text-text-primary`}
+          className={`${titleSize} font-semibold tracking-[-0.02em] leading-[1.05] text-text-primary break-words`}
         >
           {title}
         </h1>

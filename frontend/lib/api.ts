@@ -80,8 +80,8 @@ export const api = {
 
   analyzeStreamUrl: () => `${getApiBase()}/api/analyze/stream`,
 
-  macroDashboard: () => request("/api/data/macro"),
-  macro: () => request("/api/data/macro/snapshot"),
+  macroDashboard: () => request("/api/data/macro", { timeoutMs: 20000 }),
+  macro: () => request("/api/data/macro/snapshot", { timeoutMs: 15000 }),
   market: (ticker: string, period = "3mo") =>
     request(`/api/data/market/${ticker}?period=${period}`),
   options: (ticker: string) =>

@@ -266,22 +266,37 @@ def compute_cross_asset_correlation(
 
 def get_macro_time_series() -> dict:
     """
-    Get time series data for macro charts: yield curve, VIX, credit spreads.
-    Returns arrays ready for frontend chart rendering.
+    Get time series data for macro charts: yield curve, VIX, credit spreads,
+    fed funds. Fetched concurrently — sequential fetching was making the
+    dashboard wait 4x longer than necessary (per-series FRED latency adds up).
     """
-    series = {}
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-    for series_id, label in [
+    targets = [
         ("T10Y2Y", "yield_curve"),
         ("VIXCLS", "vix"),
         ("BAMLH0A0HYM2", "credit_spreads"),
         ("DFF", "fed_funds"),
-    ]:
+    ]
+
+    series: dict = {label: [] for _, label in targets}
+
+    def _fetch_one(series_id: str, label: str) -> tuple[str, list[dict]]:
         try:
             data = _fred.get_series_history(series_id, lookback_days=180)
-            series[label] = data
+            return label, data
         except Exception as e:
             logger.warning(f"Failed to fetch {series_id}: {e}")
-            series[label] = []
+            return label, []
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_fetch_one, sid, label) for sid, label in targets]
+        for future in as_completed(futures):
+            try:
+                label, data = future.result(timeout=15)
+            except Exception as e:
+                logger.warning(f"Macro series worker failure: {e}")
+                continue
+            series[label] = data
 
     return series

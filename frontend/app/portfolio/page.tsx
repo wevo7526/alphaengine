@@ -1,9 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import { DIRECTION_STYLE } from "@/lib/types";
 import { ConvictionBar } from "@/components/ConvictionBar";
+import { TerminalHeader } from "@/components/TerminalHeader";
+import { TerminalPanel } from "@/components/TerminalPanel";
+import { StatPanel } from "@/components/StatPanel";
+import { StatusPill } from "@/components/StatusPill";
 
 interface Trade {
   id: string;
@@ -78,13 +83,15 @@ interface PositionsSummary {
   win_rate: number | null;
 }
 
+type Tab = "positions" | "journal" | "backtest";
+
 export default function PortfolioPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [backtestResults, setBacktestResults] = useState<BacktestResult[]>([]);
   const [backtestSummary, setBacktestSummary] = useState<BacktestSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [backtesting, setBacktesting] = useState(false);
-  const [tab, setTab] = useState<"positions" | "journal" | "backtest">("positions");
+  const [tab, setTab] = useState<Tab>("positions");
   const [positions, setPositions] = useState<Position[]>([]);
   const [positionsSummary, setPositionsSummary] = useState<PositionsSummary | null>(null);
   const [positionsLoading, setPositionsLoading] = useState(true);
@@ -164,11 +171,12 @@ export default function PortfolioPage() {
   };
 
   const openTrades = trades.filter((t) => t.status === "open");
+  const closedTrades = trades.filter((t) => t.status !== "open");
 
   return (
-    <div className="p-8 max-w-4xl">
+    <div className="p-8 max-w-[1280px] mx-auto">
       {apiError && (
-        <div className="mb-4 flex items-start justify-between rounded-xl border border-signal-red/25 bg-signal-red/[0.06] p-3">
+        <div className="mb-6 flex items-start justify-between rounded-md border border-signal-red/25 bg-signal-red/[0.06] p-3">
           <div>
             <p className="text-xs font-medium text-signal-red">Notice</p>
             <p className="text-[11px] text-text-tertiary mt-0.5">{apiError}</p>
@@ -183,160 +191,157 @@ export default function PortfolioPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-text-primary mb-1">
-            Portfolio
-          </h1>
-          <p className="text-sm text-text-tertiary">
-            Live positions, trade journal, and paper backtest. Performance
-            analytics are on the{" "}
-            <a href="/track-record" className="text-accent hover:underline">
+      <TerminalHeader
+        eyebrow="PORTFOLIO"
+        title="Live positions and trade journal"
+        sub={
+          <>
+            Performance analytics live on the{" "}
+            <Link href="/track-record" className="text-accent hover:underline">
               Track Record
-            </a>{" "}
+            </Link>{" "}
             page.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={async () => {
-              try {
-                await api.downloadPdf(
-                  api.exportPortfolioUrl(),
-                  `alpha-engine-portfolio-${Date.now()}.pdf`
-                );
-              } catch (e) {
-                recordError("export pdf", e);
-              }
-            }}
-            className="px-3 py-1.5 rounded-lg text-xs font-medium text-text-tertiary hover:text-text-primary hover:bg-white/[0.04] transition-colors"
-          >
-            Export PDF
-          </button>
-          <button
-            onClick={runBacktest}
-            disabled={backtesting}
-            className="px-3 py-1.5 rounded-lg bg-white text-bg-primary text-xs font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
-          >
-            {backtesting ? "Running..." : "Run Backtest"}
-          </button>
-          <button
-            onClick={handleFlush}
-            disabled={flushing || openTrades.length === 0}
-            title="Hard-delete all open positions for your account"
-            className="px-3 py-1.5 rounded-lg border border-signal-red/30 bg-signal-red/[0.06] text-signal-red text-xs font-medium hover:bg-signal-red/[0.12] transition-colors disabled:opacity-30"
-          >
-            {flushing ? "Flushing..." : `Flush Open (${openTrades.length})`}
-          </button>
-        </div>
-      </div>
+          </>
+        }
+        meta={
+          <div className="flex items-center gap-2">
+            <button
+              onClick={async () => {
+                try {
+                  await api.downloadPdf(
+                    api.exportPortfolioUrl(),
+                    `alpha-engine-portfolio-${Date.now()}.pdf`
+                  );
+                } catch (e) {
+                  recordError("export pdf", e);
+                }
+              }}
+              className="px-2.5 py-1 rounded-md text-[10px] font-mono tracking-wider text-text-tertiary hover:text-text-primary hover:bg-white/[0.04] transition-colors"
+            >
+              EXPORT PDF
+            </button>
+            <button
+              onClick={runBacktest}
+              disabled={backtesting}
+              className="px-2.5 py-1 rounded-md bg-white text-bg-primary text-[10px] font-mono font-semibold tracking-wider hover:bg-zinc-200 transition-colors disabled:opacity-40"
+            >
+              {backtesting ? "RUNNING…" : "RUN BACKTEST"}
+            </button>
+            <button
+              onClick={handleFlush}
+              disabled={flushing || openTrades.length === 0}
+              title="Hard-delete all open positions for your account"
+              className="px-2.5 py-1 rounded-md border border-signal-red/30 bg-signal-red/[0.06] text-signal-red text-[10px] font-mono tracking-wider hover:bg-signal-red/[0.12] transition-colors disabled:opacity-30"
+            >
+              {flushing ? "FLUSHING…" : `FLUSH OPEN (${openTrades.length})`}
+            </button>
+          </div>
+        }
+        className="mb-8"
+      />
 
-      {/* Tabs */}
-      <div className="flex gap-2 mb-6">
-        {[
-          { key: "positions" as const, label: "Positions" },
-          { key: "journal" as const, label: "Trade Journal" },
-          { key: "backtest" as const, label: "Backtest" },
-        ].map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-              tab === t.key
-                ? "bg-white/[0.07] text-text-primary"
-                : "text-text-tertiary hover:text-text-secondary hover:bg-white/[0.03]"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* Terminal segment switcher */}
+      <div className="inline-flex items-center gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden mb-8 p-px">
+        {([
+          { key: "positions", label: "POSITIONS", count: positions.length },
+          { key: "journal", label: "TRADE JOURNAL", count: trades.length },
+          { key: "backtest", label: "BACKTEST", count: backtestResults.length || null },
+        ] as { key: Tab; label: string; count: number | null }[]).map((t) => {
+          const active = tab === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-3.5 py-1.5 text-[10px] font-mono tracking-[0.15em] transition-colors ${
+                active
+                  ? "bg-bg-surface text-text-primary"
+                  : "bg-bg-primary text-text-tertiary hover:text-text-secondary"
+              }`}
+            >
+              {t.label}
+              {t.count !== null && (
+                <span className={`ml-2 ${active ? "text-text-quaternary" : "text-text-quaternary"}`}>
+                  {t.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Positions Tab */}
       {tab === "positions" && (
         <>
           {positionsLoading ? (
-            <p className="text-sm text-text-quaternary">Loading positions...</p>
+            <p className="text-sm text-text-quaternary font-mono">Loading positions…</p>
           ) : !positionsSummary || positions.length === 0 ? (
-            <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
-              <p className="text-[13px] text-text-secondary mb-2">No open positions</p>
-              <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-                Take a trade from an analysis memo, or import existing trades via the
-                Trade Journal tab.
-              </p>
-            </div>
+            <TerminalPanel label="POSITIONS" status="EMPTY">
+              <div className="text-center py-6">
+                <p className="text-[13px] text-text-secondary mb-2">No open positions.</p>
+                <p className="text-[12px] text-text-tertiary max-w-sm mx-auto">
+                  Take a trade from an analysis memo, or import existing trades via the
+                  Trade Journal tab.
+                </p>
+              </div>
+            </TerminalPanel>
           ) : (
             <div className="space-y-6">
-              <div className="grid grid-cols-4 gap-3">
-                <StatCard
-                  label="Total Value"
-                  value={`$${positionsSummary.total_market_value.toLocaleString()}`}
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden">
+                <StatPanel
+                  label="TOTAL VALUE"
+                  value={`$${positionsSummary.total_market_value.toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                  sub={`based on $${positionsSummary.portfolio_base.toLocaleString()} portfolio`}
                 />
-                <StatCard
-                  label="Unrealized P&L"
+                <StatPanel
+                  label="UNREALIZED P&L"
                   value={`${positionsSummary.total_unrealized_pnl >= 0 ? "+" : ""}${positionsSummary.total_unrealized_pnl_pct.toFixed(2)}%`}
-                  color={
-                    positionsSummary.total_unrealized_pnl >= 0
-                      ? "text-signal-green"
-                      : "text-signal-red"
-                  }
+                  sub={`${positionsSummary.total_unrealized_pnl >= 0 ? "+" : "-"}$${Math.abs(positionsSummary.total_unrealized_pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                  tone={positionsSummary.total_unrealized_pnl >= 0 ? "green" : "red"}
                 />
-                <StatCard
-                  label="Realized P&L"
-                  value={`${positionsSummary.total_realized_pnl >= 0 ? "+" : ""}$${Math.abs(positionsSummary.total_realized_pnl).toLocaleString()}`}
-                  color={
-                    positionsSummary.total_realized_pnl >= 0
-                      ? "text-signal-green"
-                      : "text-signal-red"
-                  }
+                <StatPanel
+                  label="REALIZED P&L"
+                  value={`${positionsSummary.total_realized_pnl >= 0 ? "+" : "-"}$${Math.abs(positionsSummary.total_realized_pnl).toLocaleString(undefined, { maximumFractionDigits: 0 })}`}
+                  sub={`${positionsSummary.closed_trades} closed trade${positionsSummary.closed_trades === 1 ? "" : "s"}`}
+                  tone={positionsSummary.total_realized_pnl >= 0 ? "green" : "red"}
                 />
-                <StatCard
-                  label="Win Rate"
-                  value={
-                    positionsSummary.win_rate !== null
-                      ? `${positionsSummary.win_rate.toFixed(1)}%`
-                      : "—"
-                  }
-                  color={
+                <StatPanel
+                  label="WIN RATE"
+                  value={positionsSummary.win_rate !== null ? `${positionsSummary.win_rate.toFixed(0)}%` : "—"}
+                  sub={`${positionsSummary.wins}W / ${positionsSummary.losses}L`}
+                  tone={
                     positionsSummary.win_rate !== null && positionsSummary.win_rate >= 50
-                      ? "text-signal-green"
+                      ? "green"
                       : positionsSummary.win_rate !== null
-                      ? "text-signal-red"
-                      : undefined
+                      ? "red"
+                      : "default"
                   }
                 />
               </div>
 
-              <div className="rounded-xl border border-border-primary bg-bg-surface overflow-hidden">
-                <div className="px-4 py-3 border-b border-border-primary flex items-center justify-between">
-                  <div>
-                    <h2 className="text-[13px] font-medium text-text-primary">
-                      Open Positions
-                    </h2>
-                    <p className="text-[10px] text-text-quaternary">
-                      {positionsSummary.open_positions} positions · based on $
-                      {positionsSummary.portfolio_base.toLocaleString()} portfolio
-                    </p>
-                  </div>
+              <TerminalPanel
+                label="OPEN POSITIONS"
+                status={
                   <button
                     onClick={loadPositions}
-                    className="text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
+                    className="text-text-quaternary hover:text-text-secondary transition-colors"
                   >
-                    Refresh
+                    REFRESH
                   </button>
-                </div>
+                }
+                bodyClassName="p-0"
+              >
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
-                      <tr className="text-[10px] text-text-quaternary uppercase tracking-wider border-b border-border-primary">
-                        <th className="px-4 py-2 text-left font-medium">Ticker</th>
-                        <th className="px-4 py-2 text-left font-medium">Dir</th>
-                        <th className="px-4 py-2 text-right font-medium">Entry</th>
-                        <th className="px-4 py-2 text-right font-medium">Current</th>
-                        <th className="px-4 py-2 text-right font-medium">P&L %</th>
-                        <th className="px-4 py-2 text-right font-medium">P&L $</th>
-                        <th className="px-4 py-2 text-right font-medium">Weight</th>
-                        <th className="px-4 py-2 text-right font-medium">Stop/Target</th>
+                      <tr className="text-[10px] text-text-quaternary uppercase tracking-wider border-b border-border-primary/60">
+                        <th className="px-4 py-2.5 text-left font-medium">Ticker</th>
+                        <th className="px-4 py-2.5 text-left font-medium">Dir</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Entry</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Current</th>
+                        <th className="px-4 py-2.5 text-right font-medium">P&L %</th>
+                        <th className="px-4 py-2.5 text-right font-medium">P&L $</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Weight</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Stop / Target</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -349,7 +354,7 @@ export default function PortfolioPage() {
                         return (
                           <tr
                             key={`${p.ticker}-${p.direction}-${i}`}
-                            className="border-b border-border-primary last:border-b-0 hover:bg-white/[0.02] transition-colors"
+                            className="border-b border-border-primary/40 last:border-b-0 hover:bg-white/[0.02] transition-colors"
                           >
                             <td className="px-4 py-3">
                               <span className="text-[13px] font-mono font-bold text-text-primary">
@@ -372,34 +377,34 @@ export default function PortfolioPage() {
                                 {dirLong ? "LONG" : "SHORT"}
                               </span>
                             </td>
-                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-secondary">
+                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-secondary tabular-nums">
                               {p.avg_entry_price !== null
                                 ? `$${p.avg_entry_price.toFixed(2)}`
                                 : "—"}
                             </td>
-                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-primary">
+                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-primary tabular-nums">
                               {p.current_price !== null
                                 ? `$${p.current_price.toFixed(2)}`
                                 : "—"}
                             </td>
-                            <td className={`px-4 py-3 text-right font-mono text-[12px] font-medium ${pnlColor}`}>
+                            <td className={`px-4 py-3 text-right font-mono text-[12px] font-medium tabular-nums ${pnlColor}`}>
                               {p.unrealized_pnl_pct !== null
                                 ? `${p.unrealized_pnl_pct >= 0 ? "+" : ""}${p.unrealized_pnl_pct.toFixed(2)}%`
                                 : "—"}
                             </td>
-                            <td className={`px-4 py-3 text-right font-mono text-[12px] ${pnlColor}`}>
+                            <td className={`px-4 py-3 text-right font-mono text-[12px] tabular-nums ${pnlColor}`}>
                               {p.unrealized_pnl_dollars !== null
                                 ? `${p.unrealized_pnl_dollars >= 0 ? "+" : ""}$${Math.abs(p.unrealized_pnl_dollars).toFixed(0)}`
                                 : "—"}
                             </td>
-                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-tertiary">
+                            <td className="px-4 py-3 text-right font-mono text-[12px] text-text-tertiary tabular-nums">
                               {p.weight_pct != null
                                 ? `${p.weight_pct.toFixed(1)}%`
                                 : p.total_size_pct != null
                                 ? `${p.total_size_pct.toFixed(1)}%`
                                 : "—"}
                             </td>
-                            <td className="px-4 py-3 text-right font-mono text-[11px] text-text-quaternary">
+                            <td className="px-4 py-3 text-right font-mono text-[11px] text-text-quaternary tabular-nums">
                               {p.avg_stop_loss !== null
                                 ? `$${p.avg_stop_loss.toFixed(0)}`
                                 : "—"}{" "}
@@ -414,7 +419,7 @@ export default function PortfolioPage() {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </TerminalPanel>
             </div>
           )}
         </>
@@ -424,25 +429,26 @@ export default function PortfolioPage() {
       {tab === "journal" && (
         <>
           {loading ? (
-            <p className="text-sm text-text-quaternary">Loading trades...</p>
+            <p className="text-sm text-text-quaternary font-mono">Loading trades…</p>
           ) : trades.length === 0 ? (
-            <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
-              <p className="text-[13px] text-text-secondary mb-2">
-                No trades in your journal yet
-              </p>
-              <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-                Go to the Analysis page, run a query, and click "Take Trade" on any
-                trade idea to start tracking positions and P&L here.
-              </p>
-            </div>
+            <TerminalPanel label="JOURNAL" status="EMPTY">
+              <div className="text-center py-6">
+                <p className="text-[13px] text-text-secondary mb-2">No trades in your journal yet.</p>
+                <p className="text-[12px] text-text-tertiary max-w-sm mx-auto">
+                  Go to the Analysis page, run a query, and click &quot;Take Trade&quot; on any
+                  trade idea to start tracking positions and P&L here.
+                </p>
+              </div>
+            </TerminalPanel>
           ) : (
             <div className="space-y-6">
               {openTrades.length > 0 && (
-                <div>
-                  <h2 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-                    Open Positions ({openTrades.length})
-                  </h2>
-                  <div className="space-y-2">
+                <TerminalPanel
+                  label="OPEN POSITIONS"
+                  status={`${openTrades.length} OPEN`}
+                  bodyClassName="p-0"
+                >
+                  <div className="divide-y divide-border-primary/40">
                     {openTrades.map((t) => (
                       <TradeRow
                         key={t.id}
@@ -451,21 +457,20 @@ export default function PortfolioPage() {
                       />
                     ))}
                   </div>
-                </div>
+                </TerminalPanel>
               )}
-              {trades.filter((t) => t.status !== "open").length > 0 && (
-                <div>
-                  <h2 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-                    Closed Trades ({trades.filter((t) => t.status !== "open").length})
-                  </h2>
-                  <div className="space-y-2">
-                    {trades
-                      .filter((t) => t.status !== "open")
-                      .map((t) => (
-                        <TradeRow key={t.id} trade={t} />
-                      ))}
+              {closedTrades.length > 0 && (
+                <TerminalPanel
+                  label="CLOSED TRADES"
+                  status={`${closedTrades.length} CLOSED`}
+                  bodyClassName="p-0"
+                >
+                  <div className="divide-y divide-border-primary/40">
+                    {closedTrades.map((t) => (
+                      <TradeRow key={t.id} trade={t} />
+                    ))}
                   </div>
-                </div>
+                </TerminalPanel>
               )}
             </div>
           )}
@@ -476,90 +481,95 @@ export default function PortfolioPage() {
       {tab === "backtest" && (
         <>
           {backtestSummary && (
-            <div className="grid grid-cols-4 gap-3 mb-6">
-              <StatCard label="Total Trades" value={String(backtestSummary.total)} />
-              <StatCard
-                label="Wins"
-                value={String(backtestSummary.wins)}
-                color="text-signal-green"
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden mb-6">
+              <StatPanel
+                label="TOTAL TRADES"
+                value={backtestSummary.total}
+                sub={`${backtestSummary.open} still open`}
               />
-              <StatCard
-                label="Losses"
-                value={String(backtestSummary.losses)}
-                color="text-signal-red"
+              <StatPanel
+                label="WINS"
+                value={backtestSummary.wins}
+                tone="green"
               />
-              <StatCard
-                label="Win Rate"
+              <StatPanel
+                label="LOSSES"
+                value={backtestSummary.losses}
+                tone="red"
+              />
+              <StatPanel
+                label="WIN RATE"
                 value={`${backtestSummary.win_rate}%`}
-                color={
-                  backtestSummary.win_rate >= 50
-                    ? "text-signal-green"
-                    : "text-signal-red"
-                }
+                tone={backtestSummary.win_rate >= 50 ? "green" : "red"}
               />
             </div>
           )}
 
           {backtestResults.length === 0 ? (
-            <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
-              <p className="text-sm text-text-tertiary">
-                Click "Run Backtest" to evaluate open trades against current prices.
+            <TerminalPanel label="BACKTEST" status="IDLE">
+              <p className="text-[13px] text-text-tertiary text-center py-4">
+                Click &quot;RUN BACKTEST&quot; in the header to evaluate open trades against
+                current prices.
               </p>
-            </div>
+            </TerminalPanel>
           ) : (
-            <div className="space-y-2">
-              {backtestResults.map((t) => (
-                <div
-                  key={t.id}
-                  className="rounded-xl border border-border-primary bg-bg-surface p-4"
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-3">
-                      <span className="text-[15px] font-mono font-bold text-text-primary">
-                        {t.ticker}
-                      </span>
-                      <span
-                        className={`text-xs ${
-                          t.evaluation.status === "target_hit"
-                            ? "text-signal-green"
-                            : t.evaluation.status === "stopped_out"
-                            ? "text-signal-red"
-                            : "text-text-tertiary"
-                        }`}
-                      >
-                        {t.evaluation.status === "target_hit"
-                          ? "Target Hit"
-                          : t.evaluation.status === "stopped_out"
-                          ? "Stopped Out"
-                          : "Open"}
-                      </span>
+            <TerminalPanel
+              label="EVALUATION"
+              status={`${backtestResults.length} RESULTS`}
+              bodyClassName="p-0"
+            >
+              <div className="divide-y divide-border-primary/40">
+                {backtestResults.map((t) => (
+                  <div key={t.id} className="px-4 py-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-3">
+                        <span className="text-[15px] font-mono font-bold text-text-primary">
+                          {t.ticker}
+                        </span>
+                        <StatusPill
+                          label={
+                            t.evaluation.status === "target_hit"
+                              ? "TARGET HIT"
+                              : t.evaluation.status === "stopped_out"
+                              ? "STOPPED OUT"
+                              : "OPEN"
+                          }
+                          tone={
+                            t.evaluation.status === "target_hit"
+                              ? "green"
+                              : t.evaluation.status === "stopped_out"
+                              ? "red"
+                              : "blue"
+                          }
+                        />
+                      </div>
+                      {t.evaluation.current_price && (
+                        <span className="text-[13px] font-mono text-text-primary tabular-nums">
+                          ${t.evaluation.current_price.toFixed(2)}
+                        </span>
+                      )}
                     </div>
-                    {t.evaluation.current_price && (
-                      <span className="text-[13px] font-mono text-text-primary">
-                        ${t.evaluation.current_price.toFixed(2)}
-                      </span>
+                    <ConvictionBar value={t.conviction} size="sm" />
+                    {t.evaluation.unrealized_pnl_pct != null && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <span className="text-[10px] font-mono tracking-wider text-text-quaternary">P&L</span>
+                        <span
+                          className={`text-[13px] font-mono font-medium tabular-nums ${
+                            t.evaluation.unrealized_pnl_pct >= 0
+                              ? "text-signal-green"
+                              : "text-signal-red"
+                          }`}
+                        >
+                          {t.evaluation.unrealized_pnl_pct > 0 ? "+" : ""}
+                          {t.evaluation.unrealized_pnl_pct}%
+                        </span>
+                      </div>
                     )}
+                    <p className="text-[11px] text-text-tertiary mt-2 leading-relaxed">{t.thesis}</p>
                   </div>
-                  <ConvictionBar value={t.conviction} size="sm" />
-                  {t.evaluation.unrealized_pnl_pct != null && (
-                    <div className="mt-2 flex items-center gap-2">
-                      <span className="text-xs text-text-quaternary">P&L:</span>
-                      <span
-                        className={`text-sm font-mono font-medium ${
-                          t.evaluation.unrealized_pnl_pct >= 0
-                            ? "text-signal-green"
-                            : "text-signal-red"
-                        }`}
-                      >
-                        {t.evaluation.unrealized_pnl_pct > 0 ? "+" : ""}
-                        {t.evaluation.unrealized_pnl_pct}%
-                      </span>
-                    </div>
-                  )}
-                  <p className="text-xs text-text-tertiary mt-1">{t.thesis}</p>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            </TerminalPanel>
           )}
         </>
       )}
@@ -627,7 +637,7 @@ function TradeRow({
   };
 
   return (
-    <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+    <div className="px-4 py-4">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-3">
           <span className="text-[15px] font-mono font-bold text-text-primary">
@@ -638,122 +648,91 @@ function TradeRow({
           >
             {trade.action}
           </span>
-          <span
-            className={`text-xs px-2 py-0.5 rounded-full ${
-              trade.status === "open"
-                ? "bg-signal-green/10 text-signal-green"
-                : "bg-bg-elevated text-text-tertiary"
-            }`}
-          >
-            {trade.status}
-          </span>
+          <StatusPill
+            label={trade.status}
+            tone={trade.status === "open" ? "green" : "neutral"}
+          />
         </div>
-        <span className="text-[11px] text-text-quaternary">
+        <span className="text-[10px] font-mono text-text-quaternary tabular-nums">
           {trade.opened_at ? new Date(trade.opened_at).toLocaleDateString() : ""}
         </span>
       </div>
       <ConvictionBar value={trade.conviction} size="sm" />
-      <p className="text-xs text-text-tertiary mt-2">{trade.thesis}</p>
-      <div className="flex items-center gap-4 mt-2 text-[11px]">
+      <p className="text-[11px] text-text-tertiary mt-2 leading-relaxed">{trade.thesis}</p>
+      <div className="flex items-center gap-4 mt-2 text-[11px] font-mono tabular-nums">
         {trade.stop_loss && (
           <span className="text-text-quaternary">
-            Stop:{" "}
-            <span className="font-mono text-signal-red">${trade.stop_loss}</span>
+            STOP <span className="text-signal-red ml-1">${trade.stop_loss}</span>
           </span>
         )}
         {trade.take_profit && (
           <span className="text-text-quaternary">
-            Target:{" "}
-            <span className="font-mono text-signal-green">${trade.take_profit}</span>
+            TARGET <span className="text-signal-green ml-1">${trade.take_profit}</span>
           </span>
         )}
         <span className="text-text-quaternary">
-          Size:{" "}
-          <span className="font-mono text-text-primary">
-            {trade.position_size_pct}%
-          </span>
+          SIZE <span className="text-text-primary ml-1">{trade.position_size_pct}%</span>
         </span>
         {trade.realized_pnl != null && (
           <span
-            className={`font-mono font-medium ${
+            className={`font-medium ${
               trade.realized_pnl >= 0 ? "text-signal-green" : "text-signal-red"
             }`}
           >
-            P&L: {trade.realized_pnl > 0 ? "+" : ""}
+            P&L {trade.realized_pnl > 0 ? "+" : ""}
             {trade.realized_pnl}%
           </span>
         )}
       </div>
 
       {trade.status === "open" && onClose && (
-        <div className="mt-3 pt-3 border-t border-border-primary">
+        <div className="mt-3 pt-3 border-t border-border-primary/40">
           {showClose ? (
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 onClick={handleCloseAtMarket}
                 disabled={closing || marketLoading}
-                className="px-2 py-1 rounded-lg bg-white text-bg-primary text-[11px] font-medium hover:bg-zinc-200 transition-colors disabled:opacity-40"
+                className="px-2.5 py-1 rounded-md bg-white text-bg-primary text-[11px] font-mono font-semibold hover:bg-zinc-200 transition-colors disabled:opacity-40"
               >
                 {marketLoading
-                  ? "Loading market..."
+                  ? "LOADING…"
                   : marketPrice
-                  ? `Close @ Market $${marketPrice.toFixed(2)}`
-                  : "Fetch Market Price"}
+                  ? `CLOSE @ MARKET $${marketPrice.toFixed(2)}`
+                  : "FETCH MARKET PRICE"}
               </button>
-              <span className="text-[10px] text-text-quaternary">or</span>
+              <span className="text-[10px] font-mono text-text-quaternary">OR</span>
               <input
                 type="number"
                 step="0.01"
                 value={exitPrice}
                 onChange={(e) => setExitPrice(e.target.value)}
                 placeholder="Custom exit"
-                className="bg-bg-primary border border-border-primary rounded-lg px-2 py-1 text-xs text-text-primary outline-none w-24"
+                className="bg-bg-primary border border-border-primary rounded-md px-2 py-1 text-[11px] font-mono text-text-primary outline-none w-24 focus:border-zinc-600"
               />
               <button
                 onClick={() => handleClose()}
                 disabled={closing || !exitPrice}
-                className="px-2 py-1 rounded-lg bg-signal-red/10 text-signal-red text-[11px] font-medium hover:bg-signal-red/20 transition-colors disabled:opacity-40"
+                className="px-2.5 py-1 rounded-md bg-signal-red/10 text-signal-red text-[11px] font-mono font-semibold hover:bg-signal-red/20 transition-colors disabled:opacity-40"
               >
-                {closing ? "Closing..." : "Close"}
+                {closing ? "CLOSING…" : "CLOSE"}
               </button>
               <button
                 onClick={() => setShowClose(false)}
-                className="text-[11px] text-text-quaternary hover:text-text-tertiary"
+                className="text-[11px] font-mono text-text-quaternary hover:text-text-tertiary"
               >
-                Cancel
+                CANCEL
               </button>
             </div>
           ) : (
             <button
               onClick={openCloseUI}
-              className="text-[11px] text-text-tertiary hover:text-text-secondary transition-colors"
+              className="text-[10px] font-mono tracking-wider text-text-tertiary hover:text-text-secondary transition-colors"
             >
-              Close Trade
+              CLOSE TRADE
             </button>
           )}
         </div>
       )}
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: string;
-  color?: string;
-}) {
-  return (
-    <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
-      <p className="text-[10px] text-text-quaternary uppercase tracking-wider mb-1">
-        {label}
-      </p>
-      <p className={`text-lg font-mono font-medium ${color ?? "text-text-primary"}`}>
-        {value}
-      </p>
     </div>
   );
 }
