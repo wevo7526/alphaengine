@@ -1,9 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { api } from "@/lib/api";
 import type { IntelligenceMemo } from "@/lib/types";
 import { MemoPanel } from "@/components/MemoPanel";
+import { TerminalHeader } from "@/components/TerminalHeader";
+import { TerminalPanel } from "@/components/TerminalPanel";
+import { StatusPill } from "@/components/StatusPill";
 
 export default function MemosPage() {
   const [memos, setMemos] = useState<IntelligenceMemo[]>([]);
@@ -53,9 +57,9 @@ export default function MemosPage() {
   };
 
   return (
-    <div className="p-8 max-w-4xl">
+    <div className="p-8 max-w-[1280px] mx-auto">
       {apiError && (
-        <div className="mb-4 flex items-start justify-between rounded-xl border border-signal-red/25 bg-signal-red/[0.06] p-3">
+        <div className="mb-6 flex items-start justify-between rounded-md border border-signal-red/25 bg-signal-red/[0.06] p-3">
           <div>
             <p className="text-xs font-medium text-signal-red">Notice</p>
             <p className="text-[11px] text-text-tertiary mt-0.5">{apiError}</p>
@@ -70,89 +74,120 @@ export default function MemosPage() {
         </div>
       )}
 
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-text-primary mb-1">
-            Analyses
-          </h1>
-          <p className="text-sm text-text-tertiary">
-            Every research memo your account has produced. Click to expand.
-          </p>
-        </div>
-        {memos.length > 0 && (
-          <button
-            onClick={handleFlush}
-            disabled={flushing}
-            title="Hard-delete all analyses for your account"
-            className="px-3 py-1.5 rounded-lg border border-signal-red/30 bg-signal-red/[0.06] text-signal-red text-xs font-medium hover:bg-signal-red/[0.12] transition-colors disabled:opacity-30"
-          >
-            {flushing ? "Flushing..." : `Flush All (${memos.length})`}
-          </button>
-        )}
-      </div>
+      <TerminalHeader
+        eyebrow="MEMO ARCHIVE"
+        title="Analyses"
+        sub="Every research memo your account has produced. Click any row to expand."
+        meta={
+          <div className="flex items-center gap-3">
+            <span>
+              {memos.length} {memos.length === 1 ? "ENTRY" : "ENTRIES"}
+            </span>
+            {memos.length > 0 && (
+              <button
+                onClick={handleFlush}
+                disabled={flushing}
+                title="Hard-delete all analyses for your account"
+                className="px-2.5 py-1 rounded-md border border-signal-red/30 bg-signal-red/[0.06] text-signal-red text-[10px] font-mono tracking-wider hover:bg-signal-red/[0.12] transition-colors disabled:opacity-30"
+              >
+                {flushing ? "FLUSHING…" : "FLUSH ALL"}
+              </button>
+            )}
+          </div>
+        }
+        className="mb-8"
+      />
 
       {loading ? (
-        <p className="text-sm text-text-quaternary">Loading analyses...</p>
+        <p className="text-sm text-text-quaternary font-mono">Loading…</p>
       ) : memos.length === 0 ? (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-8 text-center">
-          <p className="text-[13px] text-text-secondary mb-2">No analyses yet</p>
-          <p className="text-xs text-text-tertiary max-w-sm mx-auto">
-            Go to <a href="/analysis" className="text-accent hover:underline">Analysis</a> to run your first query.
-          </p>
-        </div>
+        <TerminalPanel label="EMPTY" status="0 ENTRIES">
+          <div className="text-center py-6">
+            <p className="text-[13px] text-text-secondary mb-2">No analyses yet.</p>
+            <p className="text-[12px] text-text-tertiary mb-5 max-w-sm mx-auto">
+              Run your first query from the Analysis page and it will land here
+              with its full thesis, trade ideas, and source ledger.
+            </p>
+            <Link
+              href="/analysis"
+              className="inline-block px-4 py-2 rounded-md bg-white text-bg-primary text-[12px] font-semibold hover:bg-zinc-200 transition-colors"
+            >
+              Run an analysis
+            </Link>
+          </div>
+        </TerminalPanel>
       ) : (
-        <>
-          <p className="text-[11px] text-text-quaternary mb-3">
-            {memos.length} {memos.length === 1 ? "analysis" : "analyses"}
-          </p>
-          <div className="space-y-2">
+        <TerminalPanel
+          label="LEDGER"
+          status={`${memos.length} ${memos.length === 1 ? "ENTRY" : "ENTRIES"}`}
+          bodyClassName="p-0"
+        >
+          <div className="divide-y divide-border-primary/40">
             {memos.map((memo, i) => (
               <div key={memo.id ?? i}>
-                <div
+                <button
                   onClick={() => setExpanded(expanded === i ? null : i)}
-                  className="rounded-xl border border-border-primary bg-bg-surface p-4 hover:border-zinc-600 transition-colors cursor-pointer"
+                  className="w-full text-left grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 px-4 py-3 hover:bg-bg-elevated/40 transition-colors"
                 >
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[13px] font-medium text-text-primary">
+                  {/* Decision pill (or neutral MEMO) */}
+                  <StatusPill
+                    label={memo.decision ?? "MEMO"}
+                    tone={
+                      memo.decision === "GO"
+                        ? "green"
+                        : memo.decision === "NO-GO"
+                        ? "red"
+                        : memo.decision === "WATCH"
+                        ? "yellow"
+                        : "blue"
+                    }
+                  />
+                  {/* Title + executive summary */}
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-text-primary truncate">
                       {memo.title || memo.query}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      {memo.trade_ideas && memo.trade_ideas.length > 0 && (
-                        <div className="flex gap-1">
-                          {memo.trade_ideas.slice(0, 5).map((ti, j) => (
-                            <span
-                              key={j}
-                              className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                                ti.direction?.includes("bullish")
-                                  ? "text-signal-green bg-signal-green/10"
-                                  : ti.direction?.includes("bearish")
-                                  ? "text-signal-red bg-signal-red/10"
-                                  : "text-text-quaternary bg-bg-elevated"
-                              }`}
-                            >
-                              {ti.ticker}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      <span className="text-[10px] text-text-quaternary">
-                        {memo.created_at
-                          ? new Date(memo.created_at).toLocaleDateString()
-                          : ""}
-                      </span>
-                      <span className="text-text-quaternary text-xs">
-                        {expanded === i ? "−" : "+"}
-                      </span>
-                    </div>
-                  </div>
-                  {expanded !== i && (
-                    <p className="text-xs text-text-tertiary line-clamp-2">
-                      {memo.executive_summary}
                     </p>
+                    {expanded !== i && (
+                      <p className="text-[11px] text-text-tertiary line-clamp-1">
+                        {memo.executive_summary}
+                      </p>
+                    )}
+                  </div>
+                  {/* Ticker chips */}
+                  {memo.trade_ideas && memo.trade_ideas.length > 0 ? (
+                    <div className="hidden md:flex gap-1">
+                      {memo.trade_ideas.slice(0, 4).map((ti, j) => (
+                        <span
+                          key={j}
+                          className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                            ti.direction?.includes("bullish")
+                              ? "text-signal-green bg-signal-green/10"
+                              : ti.direction?.includes("bearish")
+                              ? "text-signal-red bg-signal-red/10"
+                              : "text-text-quaternary bg-bg-elevated"
+                          }`}
+                        >
+                          {ti.ticker}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span />
                   )}
-                </div>
+                  {/* Date + expand chevron */}
+                  <div className="flex items-center gap-3 text-[10px] font-mono text-text-quaternary shrink-0">
+                    <span>
+                      {memo.created_at
+                        ? new Date(memo.created_at).toLocaleDateString()
+                        : ""}
+                    </span>
+                    <span className="text-text-quaternary text-[12px] w-3 text-center">
+                      {expanded === i ? "−" : "+"}
+                    </span>
+                  </div>
+                </button>
                 {expanded === i && (
-                  <div className="mt-2">
+                  <div className="px-4 pt-3 pb-5 border-t border-border-primary/40 bg-bg-primary/40">
                     <MemoPanel
                       memo={memo}
                       onDelete={(id) =>
@@ -164,7 +199,7 @@ export default function MemosPage() {
               </div>
             ))}
           </div>
-        </>
+        </TerminalPanel>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-function getApiBase(): string {
+export function getApiBase(): string {
   // Build-time env var takes priority
   if (process.env.NEXT_PUBLIC_BACKEND_URL) {
     return process.env.NEXT_PUBLIC_BACKEND_URL;
