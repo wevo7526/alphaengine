@@ -7,8 +7,10 @@ import { ConvictionBar } from "./ConvictionBar";
 import { TickerAnalyticsPanel } from "./TickerAnalytics";
 import { CorrelationHeatmap } from "./CorrelationHeatmap";
 import { OptionsPanel } from "./OptionsPanel";
-import { CitationsRail, CitationIndexPanel } from "./Citations";
+import { CitationsRail, CitationIndexPanel, citationsFromLineage } from "./Citations";
 import { ProseWithCitations } from "./ProseWithCitations";
+import { TerminalPanel } from "./TerminalPanel";
+import { StatusPill } from "./StatusPill";
 import { api } from "@/lib/api";
 
 // Style classification → tailwind classes. Hedge-fund convention: growth in
@@ -67,7 +69,7 @@ interface TakeTradeResponse {
   };
 }
 
-function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; memoId?: string }) {
+function TradeIdeaCard({ idea, rank, memoId, lineage }: { idea: TradeIdea; rank: number; memoId?: string; lineage?: IntelligenceMemo["lineage"] }) {
   const [open, setOpen] = useState(false);
   const [taken, setTaken] = useState(false);
   const [takeError, setTakeError] = useState<string | null>(null);
@@ -108,7 +110,7 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
 
   return (
     <div
-      className="rounded-xl border border-border-primary bg-bg-primary p-4 cursor-pointer hover:border-zinc-600 transition-all"
+      className="rounded-md border border-border-primary bg-bg-primary p-4 cursor-pointer hover:border-zinc-600 transition-all"
       style={{ animation: `fade-in 0.3s ease-out ${rank * 0.1}s both` }}
       onClick={() => setOpen(!open)}
     >
@@ -289,14 +291,21 @@ function TradeIdeaCard({ idea, rank, memoId }: { idea: TradeIdea; rank: number; 
         </div>
       )}
 
-      {/* Source rail — citations resolved against the memo's lineage.
-          Renders nothing when the array is empty. */}
-      <CitationsRail citations={idea.citations} />
+      {/* Source rail — uses the resolver-attached citations when present;
+          falls back to ticker-matched lineage sources so the rail is
+          almost never empty when the memo touched the ticker at all. */}
+      <CitationsRail
+        citations={
+          idea.citations && idea.citations.length > 0
+            ? idea.citations
+            : citationsFromLineage(lineage, idea.ticker)
+        }
+      />
     </div>
   );
 }
 
-function RiskMatrix({ factors }: { factors: RiskFactor[] }) {
+function RiskMatrix({ factors, lineage, primaryTicker }: { factors: RiskFactor[]; lineage?: IntelligenceMemo["lineage"]; primaryTicker?: string }) {
   const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   const sorted = [...factors].sort(
     (a, b) => (sevOrder[a.severity as keyof typeof sevOrder] ?? 4) - (sevOrder[b.severity as keyof typeof sevOrder] ?? 4)
@@ -305,34 +314,54 @@ function RiskMatrix({ factors }: { factors: RiskFactor[] }) {
   return (
     <div className="space-y-2">
       {sorted.map((f, i) => {
-        const sevColor =
+        // Severity drives both the left bar color and the bracket-tag color
+        const sevBar =
           f.severity === "critical"
-            ? "bg-signal-red text-white"
+            ? "bg-signal-red"
             : f.severity === "high"
-              ? "bg-signal-red/20 text-signal-red"
+              ? "bg-signal-red/70"
               : f.severity === "medium"
-                ? "bg-signal-yellow/20 text-signal-yellow"
-                : "bg-bg-elevated text-text-tertiary";
+                ? "bg-signal-yellow"
+                : "bg-text-quaternary";
+        const sevText =
+          f.severity === "critical" || f.severity === "high"
+            ? "text-signal-red"
+            : f.severity === "medium"
+              ? "text-signal-yellow"
+              : "text-text-tertiary";
 
         return (
           <div
             key={i}
-            className="rounded-lg border border-border-primary bg-bg-primary p-3"
+            className="rounded-md border border-border-primary bg-bg-primary overflow-hidden flex"
             style={{ animation: `fade-in 0.3s ease-out ${i * 0.05}s both` }}
           >
-            <div className="flex items-center gap-2 mb-1">
-              <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${sevColor}`}>
-                {f.severity}
-              </span>
-              <span className="text-[10px] text-text-quaternary uppercase tracking-wider">
-                {f.category}
-              </span>
+            {/* Severity left bar — mirrors the PDF treatment so in-app and
+                exported memos read the same way. */}
+            <span aria-hidden className={`w-[3px] shrink-0 ${sevBar}`} />
+            <div className="flex-1 min-w-0 p-3">
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`text-[9px] font-mono tracking-[0.18em] uppercase font-semibold ${sevText}`}>
+                  [{f.severity}]
+                </span>
+                <span className="text-[10px] text-text-quaternary uppercase tracking-wider">
+                  {f.category}
+                </span>
+              </div>
+              <p className="text-xs text-text-secondary">{f.description}</p>
+              {f.mitigation && (
+                <p className="text-[11px] text-text-quaternary mt-1">
+                  <span className="text-text-tertiary font-medium">Mitigation:</span> {f.mitigation}
+                </p>
+              )}
+              <CitationsRail
+                citations={
+                  f.citations && f.citations.length > 0
+                    ? f.citations
+                    : citationsFromLineage(lineage, primaryTicker)
+                }
+              />
             </div>
-            <p className="text-xs text-text-secondary">{f.description}</p>
-            <p className="text-[11px] text-text-quaternary mt-1">
-              Mitigation: {f.mitigation}
-            </p>
-            <CitationsRail citations={f.citations} />
           </div>
         );
       })}
@@ -370,19 +399,20 @@ function LineagePanel({ lineage }: { lineage: NonNullable<IntelligenceMemo["line
   );
 
   return (
-    <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-      <div className="flex items-baseline justify-between">
-        <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider">
-          Sources & Provenance
-        </h3>
+    <div className="rounded-md border border-border-primary bg-bg-surface overflow-hidden">
+      <header className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-border-primary/60">
+        <span className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">
+          <span className="text-accent">///</span> SOURCES &amp; PROVENANCE
+        </span>
         <button
           onClick={() => setExpanded(!expanded)}
-          className="text-[11px] text-text-tertiary hover:text-text-secondary"
+          className="text-[10px] font-mono tracking-wider text-text-tertiary hover:text-text-primary transition-colors"
         >
-          {expanded ? "Hide details" : "Show details"}
+          {expanded ? "HIDE" : "SHOW"}
         </button>
-      </div>
-      <p className="text-[11px] text-text-tertiary mt-1 mb-3">
+      </header>
+      <div className="p-5">
+      <p className="text-[11px] text-text-tertiary mb-3">
         {lineage.n_tool_calls} tool calls produced {lineage.n_unique_sources}{" "}
         unique sources. Every number in this memo traces back to one of these.
       </p>
@@ -447,6 +477,7 @@ function LineagePanel({ lineage }: { lineage: NonNullable<IntelligenceMemo["line
           </p>
         </div>
       )}
+      </div>
     </div>
   );
 }
@@ -509,15 +540,29 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
         ? "bg-signal-red/10 text-signal-red border-signal-red/30"
         : "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30";
 
+  // Phase G — citation coverage drives a VERIFIED / PARTIAL / UNVERIFIED
+  // pill on the header. Falls back to the legacy `Grounded` chip on memos
+  // persisted before verification_status existed.
+  const verification = memo.verification_status;
+  const verificationTone: "green" | "yellow" | "red" =
+    verification === "verified" ? "green"
+      : verification === "partial" ? "yellow"
+        : "red";
+  const verificationLabel =
+    verification === "verified" ? "VERIFIED"
+      : verification === "partial" ? "PARTIAL"
+        : verification === "unverified" ? "UNVERIFIED"
+          : null;
+
   return (
     <div className="space-y-4" style={{ animation: "fade-in 0.5s ease-out" }}>
       {/* Title + Executive Summary + Decision Badge */}
-      <div className="rounded-xl border border-border-primary bg-bg-surface p-6">
+      <div className="rounded-md border border-border-primary bg-bg-surface p-6">
         <div className="flex items-start justify-between gap-4 mb-3">
           <div className="flex-1">
             {memo.decision && (
               <div className="flex items-center gap-2 mb-3 flex-wrap">
-                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-[11px] font-semibold uppercase tracking-wider ${decisionColor}`}>
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-semibold uppercase tracking-wider ${decisionColor}`}>
                   <svg width="10" height="10" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                     <path d="M6 1L2 2.5V6C2 8.5 3.5 10.5 6 11C8.5 10.5 10 8.5 10 6V2.5L6 1Z" />
                   </svg>
@@ -528,69 +573,59 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                     conviction {memo.decision_confidence}
                   </span>
                 )}
-                {/* Grounding tripwire: tells the audience whether the LLM cited real numbers */}
-                {memo.grounding && memo.grounding.confidence && memo.grounding.confidence !== "n/a" && (
-                  <span
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider ${
+                {/* Phase G — citation coverage. Replaces the legacy
+                    grounding chip below when the new field is present. */}
+                {verificationLabel && (
+                  <StatusPill
+                    label={
+                      verification === "verified"
+                        ? `${verificationLabel} ${memo.coverage?.citation_coverage_pct ?? 100}%`
+                        : verification === "partial"
+                          ? `${verificationLabel} ${memo.coverage?.citation_coverage_pct ?? 0}%`
+                          : verificationLabel
+                    }
+                    tone={verificationTone}
+                  />
+                )}
+                {/* Legacy grounding fallback — only for memos persisted
+                    before verification_status existed. */}
+                {!verificationLabel && memo.grounding && memo.grounding.confidence && memo.grounding.confidence !== "n/a" && (
+                  <StatusPill
+                    label={
                       memo.grounding.confidence === "high"
-                        ? "bg-signal-green/10 text-signal-green border-signal-green/30"
-                        : memo.grounding.confidence === "medium"
-                          ? "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
-                          : "bg-signal-red/10 text-signal-red border-signal-red/30"
-                    }`}
-                    title={`${memo.grounding.numeric_claims ?? 0} numeric claims, ${memo.grounding.ungrounded_count ?? 0} not traced to a tool result`}
-                  >
-                    {memo.grounding.confidence === "high"
-                      ? "Grounded"
-                      : memo.grounding.confidence === "medium"
-                        ? `${memo.grounding.ungrounded_count ?? 0} unverified`
-                        : `${memo.grounding.ungrounded_count ?? 0} unverified`}
-                  </span>
+                        ? "GROUNDED"
+                        : `${memo.grounding.ungrounded_count ?? 0} UNVERIFIED`
+                    }
+                    tone={
+                      memo.grounding.confidence === "high" ? "green"
+                        : memo.grounding.confidence === "medium" ? "yellow"
+                          : "red"
+                    }
+                  />
                 )}
-                {/* Plan confidence: only flag when low — keeps the chrome quiet at 70+ */}
                 {memo.plan_confidence !== undefined && memo.plan_confidence > 0 && memo.plan_confidence < 60 && (
-                  <span
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
-                    title={memo.plan_confidence_reason || "Query was ambiguous; some inferences were made."}
-                  >
-                    Plan {memo.plan_confidence}
-                  </span>
+                  <StatusPill label={`PLAN ${memo.plan_confidence}`} tone="yellow" />
                 )}
-                {/* Data quality: surface only when degraded/critical */}
                 {memo.data_quality && memo.data_quality !== "complete" && (
-                  <span
-                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider ${
-                      memo.data_quality === "critical"
-                        ? "bg-signal-red/10 text-signal-red border-signal-red/30"
-                        : "bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
-                    }`}
-                    title={`Some pipeline desks ran in ${memo.data_quality} mode (timeouts or failures). Treat results with care.`}
-                  >
-                    Data {memo.data_quality}
-                  </span>
+                  <StatusPill
+                    label={`DATA ${memo.data_quality.toUpperCase()}`}
+                    tone={memo.data_quality === "critical" ? "red" : "yellow"}
+                  />
                 )}
-                {/* Sub-question coverage: flag if not all answered */}
                 {memo.sub_question_coverage && memo.sub_question_coverage.length > 0 && (() => {
                   const total = memo.sub_question_coverage.length;
                   const answered = memo.sub_question_coverage.filter((c) => c.answered).length;
-                  if (answered === total) return null;  // hide on full coverage
-                  return (
-                    <span
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
-                      title={`${answered}/${total} sub-questions addressed in research.`}
-                    >
-                      Q {answered}/{total}
-                    </span>
-                  );
+                  if (answered === total) return null;
+                  return <StatusPill label={`Q ${answered}/${total}`} tone="yellow" />;
                 })()}
-                {/* Diversity flag: surfaced if Strategist output is monolithic */}
                 {memo.diversity && memo.diversity.monolithic && (
-                  <span
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[10px] font-medium uppercase tracking-wider bg-signal-yellow/10 text-signal-yellow border-signal-yellow/30"
-                    title={memo.diversity.reason || "Trade ideas show low structural diversity"}
-                  >
-                    Concentrated
-                  </span>
+                  <StatusPill label="CONCENTRATED" tone="yellow" />
+                )}
+                {memo.mandate_warnings && memo.mandate_warnings.length > 0 && (
+                  <StatusPill
+                    label={`MANDATE · ${memo.mandate_warnings.length}`}
+                    tone="yellow"
+                  />
                 )}
               </div>
             )}
@@ -602,7 +637,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
             {memo.id && (
               <a
                 href={`/analysis?q=${encodeURIComponent("Follow up: ")}&parent=${memo.id}`}
-                className="px-2 py-1 rounded-lg text-[11px] font-medium text-text-quaternary hover:text-accent hover:bg-accent/10 transition-colors"
+                className="px-2 py-1 rounded-md text-[11px] font-medium text-text-quaternary hover:text-accent hover:bg-accent/10 transition-colors"
                 title="Continue this research thread"
               >
                 Follow up
@@ -612,7 +647,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
               <button
                 onClick={handleExport}
                 disabled={exporting}
-                className="px-2 py-1 rounded-lg text-[11px] font-medium text-text-quaternary hover:text-text-primary hover:bg-white/[0.04] transition-colors disabled:opacity-30"
+                className="px-2 py-1 rounded-md text-[11px] font-medium text-text-quaternary hover:text-text-primary hover:bg-white/[0.04] transition-colors disabled:opacity-30"
                 title="Export as PDF"
               >
                 {exporting ? "..." : "Export PDF"}
@@ -622,7 +657,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
               <button
                 onClick={handleDelete}
                 disabled={deleting}
-                className="px-2 py-1 rounded-lg text-[11px] font-medium text-text-quaternary hover:text-signal-red hover:bg-signal-red/10 transition-colors disabled:opacity-30"
+                className="px-2 py-1 rounded-md text-[11px] font-medium text-text-quaternary hover:text-signal-red hover:bg-signal-red/10 transition-colors disabled:opacity-30"
                 title="Delete this analysis"
               >
                 {deleting ? "..." : "Delete"}
@@ -695,10 +730,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
 
       {/* Key Findings */}
       {memo.key_findings?.length > 0 && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-            Key Findings
-          </h3>
+        <TerminalPanel label="KEY FINDINGS">
           <div className="space-y-2">
             {(memo.key_findings || []).map((f, i) => (
               <div
@@ -706,20 +738,19 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                 className="flex items-start gap-2.5 text-[13px] text-text-secondary"
                 style={{ animation: `fade-in 0.3s ease-out ${i * 0.08}s both` }}
               >
-                <span className="text-accent font-bold mt-0.5 shrink-0">{i + 1}</span>
+                <span className="text-accent font-mono font-semibold tabular-nums mt-0.5 shrink-0">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
                 <span className="leading-relaxed">{f}</span>
               </div>
             ))}
           </div>
-        </div>
+        </TerminalPanel>
       )}
 
       {/* Plan Shape — surfaces what the Interpreter actually decided */}
       {(memo.question_type || memo.benchmark || memo.instrument_preference || (memo.idea_archetype && memo.idea_archetype.length > 0)) && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-            Plan Shape
-          </h3>
+        <TerminalPanel label="PLAN SHAPE">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]">
             {memo.question_type && (
               <div>
@@ -795,15 +826,15 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
               </div>
             </div>
           )}
-        </div>
+        </TerminalPanel>
       )}
 
       {/* Sub-questions answered (if Research engaged with them) */}
       {memo.sub_question_coverage && memo.sub_question_coverage.length > 0 && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-            Sub-Questions ({memo.sub_question_coverage.filter((c) => c.answered).length}/{memo.sub_question_coverage.length} addressed)
-          </h3>
+        <TerminalPanel
+          label="SUB-QUESTIONS"
+          status={`${memo.sub_question_coverage.filter((c) => c.answered).length} / ${memo.sub_question_coverage.length} ADDRESSED`}
+        >
           <ul className="space-y-1.5">
             {memo.sub_question_coverage.map((c, i) => (
               <li key={i} className="flex items-start gap-2 text-[12px]">
@@ -814,15 +845,12 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
               </li>
             ))}
           </ul>
-        </div>
+        </TerminalPanel>
       )}
 
       {/* Falsification — what would change the view */}
       {memo.falsification_criteria && memo.falsification_criteria.length > 0 && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-            What Would Change Our View
-          </h3>
+        <TerminalPanel label="WHAT WOULD CHANGE OUR VIEW">
           <ul className="space-y-1.5">
             {memo.falsification_criteria.map((c, i) => {
               const score = (memo.falsification_probabilities || []).find((fp) => fp.criterion === c);
@@ -845,17 +873,19 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
               );
             })}
           </ul>
-        </div>
+        </TerminalPanel>
       )}
 
       {/* Regime sensitivity */}
       {memo.regime_sensitivity && memo.regime_sensitivity.length > 0 && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-            Regime Sensitivity {memo.macro_context?.current_regime && (
-              <span className="ml-1 text-text-tertiary normal-case">(current: {memo.macro_context.current_regime})</span>
-            )}
-          </h3>
+        <TerminalPanel
+          label="REGIME SENSITIVITY"
+          status={
+            memo.macro_context?.current_regime
+              ? `CURRENT · ${memo.macro_context.current_regime.toUpperCase()}`
+              : undefined
+          }
+        >
           <div className="space-y-2">
             {memo.regime_sensitivity.map((rs, i) => {
               const isCurrent = rs.regime === memo.macro_context?.current_regime;
@@ -884,49 +914,53 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
               );
             })}
           </div>
-        </div>
+        </TerminalPanel>
       )}
 
       {/* Trade Ideas */}
       {memo.trade_ideas?.length > 0 && (
-        <div className="mb-4">
-          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3 px-1">
-            Trade Ideas — ranked by conviction
-          </h3>
+        <TerminalPanel
+          label={`TRADE IDEAS · ${memo.trade_ideas.length}`}
+          status="RANKED BY CONVICTION"
+          bodyClassName="p-4"
+        >
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {(memo.trade_ideas || []).map((idea, i) => (
-              <TradeIdeaCard key={i} idea={idea} rank={i + 1} memoId={(memo as unknown as Record<string, unknown>).id as string} />
+              <TradeIdeaCard
+                key={i}
+                idea={idea}
+                rank={i + 1}
+                memoId={(memo as unknown as Record<string, unknown>).id as string}
+                lineage={memo.lineage}
+              />
             ))}
           </div>
-        </div>
+        </TerminalPanel>
       )}
 
       {/* Risk + Hedging side by side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {memo.risk_factors?.length > 0 && (
-          <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-            <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-              Risk Factors
-            </h3>
-            <RiskMatrix factors={memo.risk_factors} />
-          </div>
+          <TerminalPanel label="RISK FACTORS">
+            <RiskMatrix
+              factors={memo.risk_factors}
+              lineage={memo.lineage}
+              primaryTicker={memo.tickers_analyzed?.[0]}
+            />
+          </TerminalPanel>
         )}
 
         {memo.hedging_recommendations?.length > 0 && (
-          <div className="rounded-xl border border-border-primary bg-bg-surface p-5">
-            <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3">
-              Hedging Recommendations
-            </h3>
+          <TerminalPanel label="HEDGING RECOMMENDATIONS">
             <div className="space-y-2">
               {(memo.hedging_recommendations || []).map((h, i) => {
-                // Try to split on " — " for instrument vs rationale
                 const parts = h.split(" — ");
                 const instrument = parts[0];
                 const rationale = parts.length > 1 ? parts.slice(1).join(" — ") : null;
                 return (
                   <div
                     key={i}
-                    className="rounded-lg border border-border-primary bg-bg-primary p-3.5 flex items-start gap-3"
+                    className="rounded-md border border-border-primary bg-bg-primary p-3.5 flex items-start gap-3"
                     style={{ animation: `fade-in 0.3s ease-out ${i * 0.05}s both` }}
                   >
                     <span className="text-[10px] font-mono font-bold text-signal-yellow bg-signal-yellow/10 px-1.5 py-0.5 rounded shrink-0 mt-0.5">
@@ -946,29 +980,41 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                 );
               })}
             </div>
-          </div>
+          </TerminalPanel>
         )}
       </div>
 
+      {/* Mandate warnings — surfaced if the Strategist breached the user's
+          mandate. Empty array hides the block entirely. */}
+      {memo.mandate_warnings && memo.mandate_warnings.length > 0 && (
+        <TerminalPanel label={`MANDATE CHECK · ${memo.mandate_warnings.length}`}>
+          <ul className="space-y-1.5">
+            {memo.mandate_warnings.map((w, i) => (
+              <li key={i} className="flex items-start gap-2 text-[12px]">
+                <span className="text-signal-yellow shrink-0 mt-0.5">▲</span>
+                <span className="text-text-secondary">{w}</span>
+              </li>
+            ))}
+          </ul>
+        </TerminalPanel>
+      )}
+
       {/* Computed Analytics — this is what ChatGPT can't do */}
       {enrichLoading && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface p-4 flex items-center gap-2">
+        <div className="rounded-md border border-border-primary bg-bg-surface p-4 flex items-center gap-2">
           <div className="w-3 h-3 rounded-full border-[1.5px] border-accent border-t-transparent" style={{ animation: "spin-slow 0.8s linear infinite" }} />
           <span className="text-xs text-text-tertiary">Computing analytics...</span>
         </div>
       )}
 
       {enrichment && Object.keys(enrichment.analytics).length > 0 && (
-        <div className="mb-4">
-          <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3 px-1">
-            Computed Analytics
-          </h3>
+        <TerminalPanel label="COMPUTED ANALYTICS" bodyClassName="p-4">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {Object.entries(enrichment.analytics).map(([ticker, data]) => (
               <TickerAnalyticsPanel key={ticker} ticker={ticker} analytics={data} />
             ))}
           </div>
-        </div>
+        </TerminalPanel>
       )}
 
       {/* Options Flow Analytics */}
@@ -979,10 +1025,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
             .slice(0, 4);
           if (tickersWithOptions.length === 0) return null;
           return (
-            <div>
-              <h3 className="text-[11px] font-medium text-text-quaternary uppercase tracking-wider mb-3 px-1">
-                Options Flow
-              </h3>
+            <TerminalPanel label="OPTIONS FLOW" bodyClassName="p-4">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
                 {tickersWithOptions.map(([ticker, data]) => (
                   <OptionsPanel
@@ -992,7 +1035,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                   />
                 ))}
               </div>
-            </div>
+            </TerminalPanel>
           );
         })()
       )}
@@ -1008,13 +1051,15 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
 
       {/* Full Analysis (collapsible) */}
       {memo.analysis && (
-        <div className="rounded-xl border border-border-primary bg-bg-surface overflow-hidden">
+        <div className="rounded-md border border-border-primary bg-bg-surface overflow-hidden">
           <button
             onClick={() => setShowFull(!showFull)}
-            className="w-full px-5 py-3 text-left text-[11px] font-medium text-text-quaternary uppercase tracking-wider hover:text-text-tertiary transition-colors flex items-center justify-between"
+            className="w-full px-4 py-2.5 text-left flex items-center justify-between border-b border-border-primary/60 hover:bg-bg-elevated/40 transition-colors"
           >
-            Full Analysis
-            <span className="text-text-quaternary">{showFull ? "−" : "+"}</span>
+            <span className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">
+              <span className="text-accent">///</span> FULL ANALYSIS
+            </span>
+            <span className="text-text-quaternary text-[13px]">{showFull ? "−" : "+"}</span>
           </button>
           {showFull && (
             <div

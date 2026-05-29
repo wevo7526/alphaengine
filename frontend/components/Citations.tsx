@@ -1,6 +1,86 @@
 "use client";
 
-import type { Citation } from "@/lib/types";
+import type { Citation, IntelligenceMemo } from "@/lib/types";
+
+type LineageSource = NonNullable<IntelligenceMemo["lineage"]>["sources"][number];
+
+// Build a human-readable label from a raw lineage source. Mirrors the
+// shape backend/infra/citations_resolver._label_for_lineage emits so
+// fallback-rendered citations look identical to resolver-emitted ones.
+function labelFromLineage(src: LineageSource): string {
+  const t = (src.type ?? "other").toLowerCase();
+  const id = src.id ?? "";
+  const ticker = src.ticker ?? "";
+  const form = src.form_type ?? "";
+  if (t === "sec_filing") return form ? `SEC ${form} · ${id}` : `SEC filing · ${id}`;
+  if (t === "sec_insider") return `Insider transaction (Form 4) · ${id}`;
+  if (t === "sec_13f") return `13F · ${id}`;
+  if (t === "fred_series") return `FRED · ${id}`;
+  if (t === "market_price") return `Market data · ${ticker || id}`;
+  if (t === "news_article") return `News · ${id.slice(0, 80)}`;
+  if (t === "web_search") return `Web · ${id}`;
+  if (t === "technical") return `Technical · ${id}`;
+  if (t === "screen") return `Screen · ${src.screen ?? id}`;
+  if (t === "computed") return `Computed · ${id}`;
+  return `${t} · ${id}`;
+}
+
+/**
+ * Build a citation list for a ticker by scanning the memo's lineage.
+ *
+ * Used as a last-line-of-defense fallback when the backend resolver
+ * didn't attach explicit citations to a trade idea — the user still
+ * sees the source rail with the tool calls that touched the ticker.
+ *
+ * Matches sources whose `ticker` field equals the requested ticker OR
+ * whose `id` starts with `TICKER@` (the market_price convention used
+ * by infra/lineage.py).
+ */
+export function citationsFromLineage(
+  lineage: IntelligenceMemo["lineage"] | undefined,
+  ticker: string | undefined,
+  max = 4,
+): Citation[] {
+  if (!lineage || !ticker) return [];
+  const want = ticker.toUpperCase();
+  const out: Citation[] = [];
+  const seen = new Set<string>();
+  // Priority: market_price > sec_filing > sec_insider > sec_13f > technical > news > web > screen > computed > other
+  const priority: Record<string, number> = {
+    market_price: 0, sec_filing: 1, sec_insider: 2, sec_13f: 3,
+    technical: 4, news_article: 5, web_search: 6, screen: 7,
+    computed: 8, other: 9,
+  };
+  const candidates: LineageSource[] = [];
+  for (const src of lineage.sources ?? []) {
+    const srcTicker = (src.ticker ?? "").toUpperCase();
+    const idPrefix = (src.id ?? "").split("@")[0]?.toUpperCase() ?? "";
+    if (srcTicker === want || idPrefix === want) {
+      candidates.push(src);
+    }
+  }
+  candidates.sort(
+    (a, b) =>
+      (priority[(a.type ?? "other").toLowerCase()] ?? 9) -
+      (priority[(b.type ?? "other").toLowerCase()] ?? 9),
+  );
+  for (const src of candidates) {
+    const t = (src.type ?? "other").toLowerCase();
+    const id = src.id ?? "";
+    const key = `${t}:${id}`;
+    if (!id || seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      source_type: t,
+      source_id: id,
+      url: src.url ?? null,
+      label: labelFromLineage(src),
+      excerpt: null,
+    });
+    if (out.length >= max) break;
+  }
+  return out;
+}
 
 /**
  * Citation components — render the per-claim citation system end-to-end.

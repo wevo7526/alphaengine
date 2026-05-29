@@ -81,25 +81,34 @@ class _HeaderFooterCanvas(canvas.Canvas):
             self.setFillColor(INK)
             self.setFont("Helvetica-Bold", 8.5)
             self.drawString(MARGIN_X, PAGE_H - 0.4 * inch, "ALPHA ")
-            wm_left = MARGIN_X + self.stringWidth("ALPHA ", "Helvetica-Bold", 8.5)
+            cursor = MARGIN_X + self.stringWidth("ALPHA ", "Helvetica-Bold", 8.5)
             self.setFillColor(ACCENT)
-            self.drawString(wm_left, PAGE_H - 0.4 * inch, "ENGINE")
-            wm_left += self.stringWidth("ENGINE", "Helvetica-Bold", 8.5)
+            self.drawString(cursor, PAGE_H - 0.4 * inch, "ENGINE")
+            cursor += self.stringWidth("ENGINE", "Helvetica-Bold", 8.5)
+            # Report title in muted weight after the wordmark — short label
+            # only (e.g. "Intelligence Memo"); subtitle goes on the right.
             self.setFillColor(INK_MUTED)
             self.setFont("Helvetica", 8.5)
-            self.drawString(wm_left, PAGE_H - 0.4 * inch, f"  ·  {self._report_title}")
+            title_seg = f"  ·  {self._report_title}"
+            self.drawString(cursor, PAGE_H - 0.4 * inch, title_seg)
+            cursor += self.stringWidth(title_seg, "Helvetica", 8.5)
 
             if self._report_subtitle:
                 self.setFillColor(INK_MUTED)
                 self.setFont("Helvetica", 8)
-                # Truncate subtitle that would collide with the wordmark
-                max_w = PAGE_W - MARGIN_X - wm_left - 1.5 * inch
+                # Reserve a 0.4" buffer so the subtitle never touches the
+                # report_title text on the left. Truncate hard with an
+                # ellipsis when needed.
+                max_w = PAGE_W - MARGIN_X - cursor - 0.4 * inch
                 sub = self._report_subtitle
-                while sub and self.stringWidth(sub, "Helvetica", 8) > max_w and len(sub) > 10:
-                    sub = sub[:-1]
-                if sub != self._report_subtitle:
-                    sub = sub.rstrip() + "…"
-                self.drawRightString(PAGE_W - MARGIN_X, PAGE_H - 0.4 * inch, sub)
+                ellipsis_w = self.stringWidth("…", "Helvetica", 8)
+                # Iteratively trim until the string + ellipsis fits.
+                if self.stringWidth(sub, "Helvetica", 8) > max_w:
+                    while sub and self.stringWidth(sub, "Helvetica", 8) + ellipsis_w > max_w and len(sub) > 6:
+                        sub = sub[:-1]
+                    sub = sub.rstrip(" -—·") + "…"
+                if max_w > 20:  # Only draw if there's room to be readable
+                    self.drawRightString(PAGE_W - MARGIN_X, PAGE_H - 0.4 * inch, sub)
             self.setStrokeColor(DIVIDER)
             self.setLineWidth(0.4)
             self.line(MARGIN_X, PAGE_H - 0.5 * inch, PAGE_W - MARGIN_X, PAGE_H - 0.5 * inch)
@@ -212,6 +221,23 @@ def _escape(text: Any) -> str:
         return ""
     s = str(text)
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _trim_for_header(text: str, max_chars: int = 65) -> str:
+    """Trim a long string to a word boundary and append an ellipsis.
+
+    Used for the continuation-page header subtitle so a long memo title
+    never gets cut mid-word and never reaches the page edge.
+    """
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    cut = text[: max_chars - 1]
+    space = cut.rfind(" ")
+    if space > max_chars * 0.6:
+        cut = cut[:space]
+    return cut.rstrip(" -—·,;:") + "…"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -354,7 +380,12 @@ def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
     dir_color = direction_color(direction)
     conviction = int(idea.get("conviction") or 0)
 
-    ticker = _escape(idea.get("ticker") or "?")
+    # Visible ticker is capped so very long symbols (BERKSHIRE-HATHAWAY-B,
+    # foreign listings, share-class suffixes) don't blow out the card
+    # header and run into the direction pill.
+    raw_ticker = (idea.get("ticker") or "?").strip()
+    display_ticker = raw_ticker if len(raw_ticker) <= 10 else raw_ticker[:9] + "…"
+    ticker = _escape(display_ticker)
     thesis = _escape(idea.get("thesis") or "")
 
     # Header row: #N ticker · direction pill · conviction bar
@@ -391,8 +422,13 @@ def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
 
     thesis_para = Paragraph(thesis, S["IdeaThesis"])
 
-    # Stat strip: 6 metrics in a single bordered row
-    entry = idea.get("entry_zone") or "—"
+    # Stat strip: 6 metrics in a single bordered row. ENTRY gets a wider
+    # column because entry zones are the longest values ("$523.78 to
+    # $550.64 wide range"); the other 5 columns get equal smaller widths.
+    entry_raw = (idea.get("entry_zone") or "—")
+    # Cap the entry zone too — overly verbose ranges from the LLM are the
+    # main cause of cell wrapping. 28 chars fits the wider column nicely.
+    entry = entry_raw if len(entry_raw) <= 28 else entry_raw[:27] + "…"
     stop = f"${idea['stop_loss']}" if idea.get("stop_loss") else "—"
     target = f"${idea['take_profit']}" if idea.get("take_profit") else "—"
     rr = f"{idea['risk_reward_ratio']}:1" if idea.get("risk_reward_ratio") else "—"
@@ -405,6 +441,9 @@ def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
             Paragraph(_escape(value), S["CardValue"]),
         ]
 
+    # ENTRY column gets ~25% of width; others share the remaining 75%.
+    entry_w = CONTENT_W * 0.25
+    other_w = (CONTENT_W - entry_w) / 5
     stat_tbl = Table(
         [[
             _cell("ENTRY", entry),
@@ -414,7 +453,7 @@ def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
             _cell("SIZE", size),
             _cell("HORIZON", horizon),
         ]],
-        colWidths=[CONTENT_W / 6] * 6,
+        colWidths=[entry_w, other_w, other_w, other_w, other_w, other_w],
     )
     stat_tbl.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), PAPER_SOFT),
@@ -432,10 +471,14 @@ def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
     catalysts = idea.get("catalysts")
     if catalysts:
         cats = catalysts if isinstance(catalysts, list) else [catalysts]
+        # Cap at 3 catalysts to keep the card height predictable.
+        cat_text = " · ".join(str(c) for c in cats[:3])
+        if len(cats) > 3:
+            cat_text += f"  (+{len(cats) - 3} more)"
         body_flowables.append(Spacer(1, 6))
         body_flowables.append(Paragraph(
             f"<font color='{INK_MUTED.hexval()}'><b>CATALYSTS</b></font> &nbsp; "
-            f"{_escape(' · '.join(str(c) for c in cats[:4]))}",
+            f"{_escape(cat_text)}",
             S["Small"],
         ))
 
@@ -611,7 +654,9 @@ def render_memo(memo: dict) -> bytes:
     story.append(_CoverBand(eyebrow="INTELLIGENCE MEMO", date_text=created_at, width=CONTENT_W))
     story.append(Spacer(1, 28))
 
-    # Decision badge + KPI strip in a two-column header
+    # Decision badge + KPI strip in a two-column header. Dropped DATE from
+    # the strip — it's already prominent in the cover band, and three cards
+    # gives each room to breathe without bumping the right page edge.
     badge_w = 0.95 * inch
     badge = DecisionBadge(decision, width=badge_w, height=24)
     kpi_items = [
@@ -621,7 +666,6 @@ def render_memo(memo: dict) -> bytes:
             else YELLOW if "MODERATE" in risk_level
             else INK),
         ("CONVICTION", str(conf) if conf else "—", INK),
-        ("DATE", created_at, INK),
     ]
     cover_top = Table(
         [[badge, _kpi_strip(kpi_items)]],
@@ -714,7 +758,7 @@ def render_memo(memo: dict) -> bytes:
         story.extend(_source_ledger(lineage))
 
     _build(
-        buf, "Intelligence Memo", title_text[:80], story,
+        buf, "Intelligence Memo", _trim_for_header(title_text), story,
         suppress_first_page_header=True,
     )
     buf.seek(0)
