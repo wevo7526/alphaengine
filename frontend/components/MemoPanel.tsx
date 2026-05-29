@@ -256,7 +256,7 @@ function TradeIdeaCard({ idea, rank, memoId, lineage }: { idea: TradeIdea; rank:
             <button
               onClick={handleTakeTrade}
               disabled={submitting || taken}
-              className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors ${
+              className={`px-3 py-1.5 rounded-sm text-[11px] font-medium transition-colors ${
                 taken
                   ? "bg-signal-green/10 text-signal-green border border-signal-green/20 cursor-default"
                   : submitting
@@ -933,7 +933,7 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
               return (
                 <div
                   key={i}
-                  className={`text-[12px] rounded-lg p-3 ${isCurrent ? "border border-accent/40 bg-accent/[0.04]" : "bg-bg-elevated"}`}
+                  className={`text-[12px] rounded-sm p-3 ${isCurrent ? "border border-accent/40 bg-accent/[0.04]" : "bg-bg-elevated"}`}
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span className={`font-mono uppercase ${isCurrent ? "text-accent" : "text-text-tertiary"}`}>

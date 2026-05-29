@@ -10,8 +10,13 @@
   --text-secondary: #a1a1aa;
   --text-tertiary: #71717a;
   --text-quaternary: #52525b;
-  --accent: #3b82f6;
-  --accent-subtle: rgba(59, 130, 246, 0.08);
+  /* Institutional monochrome: the interaction accent is near-white, so
+     actions / links / active states read by brightness, not hue. Blue
+     survives only as the brand mark (--brand, used on the logo). */
+  --accent: #fafafa;
+  --accent-subtle: rgba(255, 255, 255, 0.08);
+  --brand: #3b82f6;
+  /* Functional color is KEPT — P&L, risk, and signal direction rely on it. */
   --signal-green: #10b981;
   --signal-red: #ef4444;
   --signal-yellow: #eab308;
@@ -29,6 +34,7 @@
   --color-text-quaternary: var(--text-quaternary);
   --color-accent: var(--accent);
   --color-accent-subtle: var(--accent-subtle);
+  --color-brand: var(--brand);
   --color-signal-green: var(--signal-green);
   --color-signal-red: var(--signal-red);
   --color-signal-yellow: var(--signal-yellow);

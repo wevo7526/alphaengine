@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import Link from "next/link";
 import { api } from "@/lib/api";
-import { BrandConstellation } from "@/components/BrandConstellation";
 
 type Role = "pm" | "analyst" | "allocator" | "other";
 type Mandate = "long_only" | "long_short" | "market_neutral" | "macro" | "multi_strat";
@@ -147,17 +146,14 @@ export default function OnboardingPage() {
   return (
     <div className="min-h-screen w-full grid lg:grid-cols-[1.05fr_1fr] bg-bg-primary text-text-primary">
       {/* LEFT — brand panel */}
-      <aside className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden border-r border-border-primary bg-gradient-to-br from-bg-primary via-bg-primary to-[#0a0e1a]">
-        <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-          <div className="absolute -top-40 -left-40 w-[42rem] h-[42rem] rounded-full bg-accent/[0.10] blur-[120px]" />
-          <div className="absolute bottom-0 -right-40 w-[36rem] h-[36rem] rounded-full bg-signal-green/[0.06] blur-[120px]" />
-        </div>
-        <BrandConstellation />
+      <aside className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden border-r border-border-primary bg-bg-surface/30">
+        {/* Faint structural grid only — flat institutional, no glow/constellation. */}
+        <div className="absolute inset-0 grid-bg opacity-[0.10]" aria-hidden="true" />
         <Link
           href="/"
           className="relative z-10 inline-block self-start text-[17px] font-semibold tracking-tight hover:opacity-90 transition-opacity"
         >
-          alpha<span className="text-accent">engine</span>
+          alpha<span className="text-brand">engine</span>
         </Link>
 
         {/* Identity card — surfaces who is signing in (avatar + name) */}
@@ -253,7 +249,7 @@ export default function OnboardingPage() {
                     <button
                       key={p.value}
                       onClick={() => setPortfolioSize(p.value)}
-                      className={`rounded-xl border px-4 py-3 text-left transition-all ${
+                      className={`rounded-sm border px-4 py-3 text-left transition-all ${
                         portfolioSize === p.value
                           ? "border-accent bg-accent/[0.08]"
                           : "border-border-primary bg-bg-surface hover:border-zinc-600"
@@ -284,7 +280,7 @@ export default function OnboardingPage() {
                     }
                     step={10000}
                     min={0}
-                    className="w-full pl-8 pr-4 h-12 bg-bg-surface border border-border-primary rounded-xl text-[14px] font-mono text-text-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-colors"
+                    className="w-full pl-8 pr-4 h-12 bg-bg-surface border border-border-primary rounded-sm text-[14px] font-mono text-text-primary focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 transition-colors"
                   />
                 </div>
                 <p className="mt-3 text-[11px] text-text-quaternary">
@@ -321,7 +317,7 @@ export default function OnboardingPage() {
                     <button
                       key={b.value}
                       onClick={() => setBenchmark(b.value)}
-                      className={`rounded-xl border p-3 text-left transition-all ${
+                      className={`rounded-sm border p-3 text-left transition-all ${
                         benchmark === b.value
                           ? "border-accent bg-accent/[0.08]"
                           : "border-border-primary bg-bg-surface hover:border-zinc-600"
@@ -370,7 +366,7 @@ export default function OnboardingPage() {
               <button
                 onClick={handleRoleNext}
                 disabled={!role}
-                className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Continue →
               </button>
@@ -379,7 +375,7 @@ export default function OnboardingPage() {
               <button
                 onClick={handlePortfolioNext}
                 disabled={portfolioSize <= 0}
-                className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
                 Continue →
               </button>
@@ -387,7 +383,7 @@ export default function OnboardingPage() {
             {step === "mandate" && (
               <button
                 onClick={handleMandateNext}
-                className="px-5 py-2.5 rounded-xl bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 transition-colors"
+                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 transition-colors"
               >
                 Review →
               </button>
@@ -396,7 +392,7 @@ export default function OnboardingPage() {
               <button
                 onClick={handleFinish}
                 disabled={submitting}
-                className="ml-auto px-5 py-2.5 rounded-xl bg-accent text-white text-[13px] font-semibold hover:bg-accent/90 disabled:opacity-60 transition-colors"
+                className="ml-auto px-5 py-2.5 rounded-sm bg-accent text-bg-primary text-[13px] font-semibold hover:bg-accent/90 disabled:opacity-60 transition-colors"
               >
                 {submitting ? "Saving…" : "Enter Alpha Engine →"}
               </button>
@@ -455,7 +451,7 @@ function SelectCard({
   return (
     <button
       onClick={onClick}
-      className={`w-full text-left rounded-xl border p-4 transition-all ${
+      className={`w-full text-left rounded-sm border p-4 transition-all ${
         active
           ? "border-accent bg-accent/[0.08]"
           : "border-border-primary bg-bg-surface hover:border-zinc-600"
@@ -531,7 +527,7 @@ function DoneReveal({
         </p>
       </div>
 
-      <div className="rounded-2xl border border-border-primary bg-bg-surface overflow-hidden fade-up-2">
+      <div className="rounded-sm border border-border-primary bg-bg-surface overflow-hidden fade-up-2">
         <div className="px-4 py-2.5 border-b border-border-primary bg-bg-primary/40">
           <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">
             YOUR PROFILE
@@ -553,7 +549,7 @@ function DoneReveal({
         ].map((s) => (
           <div
             key={s.tag}
-            className="rounded-lg border border-border-primary bg-bg-surface px-3 py-3"
+            className="rounded-sm border border-border-primary bg-bg-surface px-3 py-3"
           >
             <p className="text-[9px] font-mono tracking-wider text-text-quaternary mb-1">
               {s.tag}

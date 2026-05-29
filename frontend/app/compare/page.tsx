@@ -526,7 +526,7 @@ export default function ComparePage() {
 
 /**
  * BloombergInput — bordered cell with mono label + mono value.
- * No rounded-lg, no ring. Sharp, terminal-style.
+ * No rounded-sm, no ring. Sharp, terminal-style.
  */
 function BloombergInput({
   label,

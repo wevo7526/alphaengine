@@ -45,7 +45,7 @@ function TopNav({ isSignedIn }: { isSignedIn: boolean }) {
     <header className="border-b border-border-primary/60 bg-bg-primary/85 backdrop-blur-lg sticky top-0 z-50">
       <div className="max-w-[1280px] mx-auto px-6 h-14 flex items-center justify-between">
         <Link href="/" className="text-[15px] font-semibold tracking-tight">
-          alpha<span className="text-accent">engine</span>
+          alpha<span className="text-brand">engine</span>
         </Link>
         <nav className="hidden md:flex items-center gap-8 text-[12px] font-medium tracking-wide text-text-tertiary">
           <a href="#product" className="hover:text-text-primary transition-colors">PRODUCT</a>
@@ -767,7 +767,7 @@ function Footer() {
       <div className="max-w-[1280px] mx-auto px-6 py-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-[11px] font-mono tracking-wider text-text-quaternary">
         <div className="flex items-center gap-5">
           <span className="font-semibold text-text-secondary">
-            alpha<span className="text-accent">engine</span>
+            alpha<span className="text-brand">engine</span>
           </span>
           <span>© {new Date().getFullYear()}</span>
         </div>

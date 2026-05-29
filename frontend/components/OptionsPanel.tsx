@@ -62,7 +62,7 @@ export function OptionsPanel({
 
   return (
     <div
-      className="rounded-xl border border-border-primary bg-bg-surface p-4"
+      className="rounded-sm border border-border-primary bg-bg-surface p-4"
       style={{ animation: "fade-in 0.4s ease-out" }}
     >
       <div className="flex items-center justify-between mb-3">
@@ -114,7 +114,7 @@ export function OptionsPanel({
             {(data.unusual_activity || []).map((u, i) => (
               <div
                 key={i}
-                className="flex items-center justify-between rounded-lg bg-bg-primary px-2.5 py-1.5 text-[11px]"
+                className="flex items-center justify-between rounded-sm bg-bg-primary px-2.5 py-1.5 text-[11px]"
               >
                 <div className="flex items-center gap-2">
                   <span

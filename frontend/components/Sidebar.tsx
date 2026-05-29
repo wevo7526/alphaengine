@@ -182,7 +182,7 @@ export function Sidebar() {
       <div className="px-4 pt-5 pb-4 border-b border-border-primary/60">
         <Link href="/dashboard" className="block">
           <span className="text-[15px] font-semibold tracking-tight text-text-primary">
-            alpha<span className="text-accent">engine</span>
+            alpha<span className="text-brand">engine</span>
           </span>
         </Link>
       </div>

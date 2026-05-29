@@ -107,7 +107,7 @@ export function TickerAnalyticsPanel({
 
   return (
     <div
-      className="rounded-xl border border-border-primary bg-bg-surface p-4"
+      className="rounded-sm border border-border-primary bg-bg-surface p-4"
       style={{ animation: "fade-in 0.4s ease-out" }}
     >
       <div className="flex items-center justify-between mb-3">

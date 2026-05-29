@@ -9,7 +9,7 @@ import type { ReactNode } from "react";
  *   │  body                                       │
  *   └─────────────────────────────────────────────┘
  *
- * Replaces every `rounded-xl border bg-bg-surface` panel across the
+ * Replaces every `rounded-sm border bg-bg-surface` panel across the
  * authenticated app. Use compound subcomponents for header + body, or
  * pass `label` + `status` props for the common case.
  */

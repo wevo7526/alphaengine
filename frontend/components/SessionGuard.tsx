@@ -186,7 +186,7 @@ function BrandedLoader({ caption }: { caption: string }) {
     <div className="fixed inset-0 flex items-center justify-center bg-bg-primary">
       <div className="flex flex-col items-center gap-4">
         <span className="text-[14px] font-semibold tracking-tight text-text-primary">
-          alpha<span className="text-accent">engine</span>
+          alpha<span className="text-brand">engine</span>
         </span>
         <div className="flex items-center gap-2">
           <div

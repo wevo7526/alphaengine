@@ -26,7 +26,7 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
           href="/"
           className="relative z-10 inline-block self-start text-[17px] font-semibold tracking-tight hover:opacity-90 transition-opacity"
         >
-          alpha<span className="text-accent">engine</span>
+          alpha<span className="text-brand">engine</span>
         </Link>
 
         {/* Center: hero copy. */}
@@ -66,7 +66,7 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
           href="/"
           className="lg:hidden mb-10 text-[17px] font-semibold tracking-tight hover:opacity-90 transition-opacity"
         >
-          alpha<span className="text-accent">engine</span>
+          alpha<span className="text-brand">engine</span>
         </Link>
 
         <div className="w-full max-w-[400px]">

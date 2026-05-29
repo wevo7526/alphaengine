@@ -166,7 +166,7 @@ function ButtonShell({
       <button
         onClick={onClick}
         disabled={loading}
-        className="group w-full relative flex items-center justify-center gap-3 h-12 px-4 rounded-xl bg-white text-zinc-900 text-[14px] font-semibold hover:bg-zinc-50 active:bg-zinc-100 disabled:opacity-70 disabled:cursor-wait transition-all shadow-[0_1px_2px_rgba(0,0,0,0.4),0_0_0_1px_rgba(255,255,255,0.04)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.5),0_0_0_1px_rgba(255,255,255,0.06)]"
+        className="group w-full relative flex items-center justify-center gap-3 h-12 px-4 rounded-sm bg-white text-zinc-900 text-[14px] font-semibold hover:bg-zinc-50 active:bg-zinc-100 disabled:opacity-70 disabled:cursor-wait transition-all shadow-[0_1px_2px_rgba(0,0,0,0.4),0_0_0_1px_rgba(255,255,255,0.04)] hover:shadow-[0_4px_12px_rgba(0,0,0,0.5),0_0_0_1px_rgba(255,255,255,0.06)]"
       >
         {loading ? (
           <span className="flex items-center gap-2">

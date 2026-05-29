@@ -27,7 +27,7 @@ export function MacroChart({
 }: MacroChartProps) {
   if (!data || data.length === 0) {
     return (
-      <div className="rounded-xl border border-border-primary bg-bg-surface p-4 h-48 flex items-center justify-center">
+      <div className="rounded-sm border border-border-primary bg-bg-surface p-4 h-48 flex items-center justify-center">
         <span className="text-xs text-text-quaternary">{title} — no data</span>
       </div>
     );
@@ -42,7 +42,7 @@ export function MacroChart({
     : isUp ? "text-signal-green" : "text-signal-red";
 
   return (
-    <div className="rounded-xl border border-border-primary bg-bg-surface p-4">
+    <div className="rounded-sm border border-border-primary bg-bg-surface p-4">
       <div className="flex items-center justify-between mb-3">
         <div>
           <p className="text-[11px] text-text-quaternary uppercase tracking-wider">
