@@ -50,6 +50,20 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--bg-elevated); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
 
+/* Hide browser-native number-input spinners — the default chrome looks
+   broken on dark backgrounds, especially in the risk-gates editor. We
+   use plain text entry; values are validated on blur. */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 @keyframes fade-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }

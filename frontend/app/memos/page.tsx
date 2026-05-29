@@ -14,6 +14,9 @@ export default function MemosPage() {
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [flushing, setFlushing] = useState(false);
+  // Per-row delete state — track which memo id is currently being deleted
+  // so the row can show a spinner / disabled state without blocking others.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [apiError, setApiError] = useState<string | null>(null);
 
   const load = () => {
@@ -56,6 +59,32 @@ export default function MemosPage() {
     setFlushing(false);
   };
 
+  // Delete a single memo from the row. Stops propagation so clicking the
+  // delete button doesn't also toggle expand.
+  const handleDeleteOne = async (e: React.MouseEvent, memo: IntelligenceMemo) => {
+    e.stopPropagation();
+    const id = memo.id;
+    if (!id || deletingId) return;
+    if (typeof window !== "undefined") {
+      const ok = window.confirm(
+        `Delete "${(memo.title || memo.query || "this analysis").slice(0, 80)}"? This cannot be undone.`
+      );
+      if (!ok) return;
+    }
+    setDeletingId(id);
+    try {
+      await api.deleteMemo(id);
+      setMemos((prev) => prev.filter((m) => m.id !== id));
+      // Collapse the expanded view if we just deleted the open one
+      setExpanded((cur) => (cur != null && memos[cur]?.id === id ? null : cur));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setApiError(`delete: ${msg}`);
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div className="p-8 max-w-[1280px] mx-auto">
       {apiError && (
@@ -77,23 +106,11 @@ export default function MemosPage() {
       <TerminalHeader
         eyebrow="MEMO ARCHIVE"
         title="Analyses"
-        sub="Every research memo your account has produced. Click any row to expand."
+        sub="Every research memo your account has produced. Click any row to expand. Use the × on each row to delete a single analysis."
         meta={
-          <div className="flex items-center gap-3">
-            <span>
-              {memos.length} {memos.length === 1 ? "ENTRY" : "ENTRIES"}
-            </span>
-            {memos.length > 0 && (
-              <button
-                onClick={handleFlush}
-                disabled={flushing}
-                title="Hard-delete all analyses for your account"
-                className="px-2.5 py-1 rounded-md border border-signal-red/30 bg-signal-red/[0.06] text-signal-red text-[10px] font-mono tracking-wider hover:bg-signal-red/[0.12] transition-colors disabled:opacity-30"
-              >
-                {flushing ? "FLUSHING…" : "FLUSH ALL"}
-              </button>
-            )}
-          </div>
+          <span>
+            {memos.length} {memos.length === 1 ? "ENTRY" : "ENTRIES"}
+          </span>
         }
         className="mb-8"
       />
@@ -123,11 +140,15 @@ export default function MemosPage() {
           bodyClassName="p-0"
         >
           <div className="divide-y divide-border-primary/40">
-            {memos.map((memo, i) => (
+            {memos.map((memo, i) => {
+              const isDeleting = deletingId != null && deletingId === memo.id;
+              return (
               <div key={memo.id ?? i}>
-                <button
-                  onClick={() => setExpanded(expanded === i ? null : i)}
-                  className="w-full text-left grid grid-cols-[auto_1fr_auto_auto] items-center gap-4 px-4 py-3 hover:bg-bg-elevated/40 transition-colors"
+                <div
+                  onClick={() => !isDeleting && setExpanded(expanded === i ? null : i)}
+                  className={`text-left grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-4 px-4 py-3 transition-colors ${
+                    isDeleting ? "opacity-50" : "hover:bg-bg-elevated/40 cursor-pointer"
+                  }`}
                 >
                   {/* Decision pill (or neutral MEMO) */}
                   <StatusPill
@@ -185,7 +206,25 @@ export default function MemosPage() {
                       {expanded === i ? "−" : "+"}
                     </span>
                   </div>
-                </button>
+                  {/* Per-row delete — stays quiet until hover, then surfaces.
+                      Click stops propagation so it doesn't toggle expand. */}
+                  <button
+                    onClick={(e) => handleDeleteOne(e, memo)}
+                    disabled={isDeleting || !memo.id}
+                    title="Delete this analysis"
+                    aria-label="Delete this analysis"
+                    className="shrink-0 w-7 h-7 flex items-center justify-center rounded-md text-text-quaternary hover:text-signal-red hover:bg-signal-red/10 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                  >
+                    {isDeleting ? (
+                      <span
+                        className="w-3 h-3 rounded-full border-[1.5px] border-current border-t-transparent"
+                        style={{ animation: "spin-slow 0.8s linear infinite" }}
+                      />
+                    ) : (
+                      <span className="text-[16px] leading-none">×</span>
+                    )}
+                  </button>
+                </div>
                 {expanded === i && (
                   <div className="px-4 pt-3 pb-5 border-t border-border-primary/40 bg-bg-primary/40">
                     <MemoPanel
@@ -197,9 +236,25 @@ export default function MemosPage() {
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </TerminalPanel>
+      )}
+
+      {/* Bulk-delete moved to a quiet footer — it's a rare destructive
+          action, not something to keep promoted in the header. */}
+      {memos.length > 1 && (
+        <div className="mt-6 flex items-center justify-end">
+          <button
+            onClick={handleFlush}
+            disabled={flushing}
+            title="Hard-delete every analysis on your account"
+            className="px-2.5 py-1 rounded-md border border-border-primary text-text-tertiary text-[10px] font-mono tracking-wider hover:text-signal-red hover:border-signal-red/40 transition-colors disabled:opacity-30"
+          >
+            {flushing ? "FLUSHING…" : "FLUSH ALL"}
+          </button>
+        </div>
       )}
     </div>
   );
