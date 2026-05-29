@@ -790,10 +790,18 @@ class PortfolioStrategist(BaseAgent):
             f"secondary universe above.\n"
         )
 
+        # User context — single biggest steer on sizing and mandate fit.
+        # Strategist will refuse to propose ideas that violate mandate
+        # (long_only never shorts; market_neutral always pairs; macro
+        # favors cross-asset structures over single-name longs).
+        from infra.user_context import _format_user_context_block
+        user_block = _format_user_context_block(context.get("user_context"))
+
         return (
             f"Query: {plan.get('query', '')} | Primary tickers: {', '.join(plan.get('tickers', []))} | Horizon: {plan.get('time_horizon', 'weeks')}\n"
             f"Question type: {plan.get('question_type', 'alpha_finding')} | Target ideas: {target_count}\n"
             f"Regime: {risk.get('macro_regime', '?')} | Risk: {risk.get('overall_risk_level', '?')}\n"
+            f"{user_block}"
             f"{macro_block_strat}"
             f"Research:\n{summary}\n"
             f"{ticker_block}"
@@ -809,6 +817,13 @@ class PortfolioStrategist(BaseAgent):
             f"{regime_block}"
             f"{calibration_block}"
             f"{idea_count_directive}\n"
+            f"MANDATE COMPLIANCE: Every trade idea must satisfy the mandate rule in the "
+            f"USER CONTEXT block above. The platform runs a hard validator after you respond — "
+            f"ideas that break the mandate will be rejected and emit a mandate warning on the memo. "
+            f"Specifically:\n"
+            f"  - long_only: NO shorts, NO puts, NO net-short structures.\n"
+            f"  - market_neutral: EVERY long needs a paired short or hedge; aim for net beta ≈ 0.\n"
+            f"  - macro: favor index ETFs, futures proxies, rates/credit/FX over single-name equities.\n"
             f"Anchor every entry/stop/target to the LIVE PRICES block above. "
             f"You may call get_current_price for additional tickers (especially secondary universe names) "
             f"but do NOT override prices already given. "

@@ -58,6 +58,11 @@ class ResearchDeskState(TypedDict):
     # and downstream agent context. Empty dict for fresh threads.
     parent_memo_id: str | None
     thread_context: dict | None
+    # Phase F — per-user runtime context. Loaded once at pipeline start
+    # from infra/user_context.resolve_user_context. Carries portfolio
+    # size, role, mandate, and benchmark so every agent reasons against
+    # the user's actual book, not a $100k retail placeholder.
+    user_context: dict | None
 
 
 async def _with_timeout(coro, seconds: int, label: str):
@@ -218,6 +223,7 @@ async def run_interpreter(state: ResearchDeskState) -> ResearchDeskState:
                 macro_context=macro_ctx,
                 scorecard=sc,
                 thread_context=tc,
+                user_context=state.get("user_context"),
             ),
             seconds=45, label="Query Interpreter"
         )
@@ -272,7 +278,10 @@ async def run_research(state: ResearchDeskState) -> ResearchDeskState:
     state["current_phase"] = "researching"
     logger.info("[orchestrator] Research Analyst gathering data")
     output = await _with_timeout(
-        _research_analyst.analyze({"plan": state["plan_data"]}),
+        _research_analyst.analyze({
+            "plan": state["plan_data"],
+            "user_context": state.get("user_context"),
+        }),
         seconds=180, label="Research Analyst"
     )
     if output is None:
@@ -303,6 +312,7 @@ async def run_risk(state: ResearchDeskState) -> ResearchDeskState:
         _risk_manager.analyze({
             "plan": state["plan_data"],
             "research": state["research_data"],
+            "user_context": state.get("user_context"),
         }),
         seconds=90, label="Risk Manager"
     )
@@ -362,6 +372,7 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
             "scorecard": state.get("scorecard_data"),
             "live_prices": live_prices,
             "macro_context": state.get("macro_context"),
+            "user_context": state.get("user_context"),
         }),
         seconds=90, label="Portfolio Strategist"
     )
@@ -395,6 +406,26 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
             ideas, required_style_labels=plan_dict.get("required_style_labels", [])
         )
         output.output["_tier_compliance"] = validate_tier_compliance(ideas)
+
+        # Mandate enforcement — deterministic safety net for the prompt-
+        # level guidance the Strategist already received. Long-only books
+        # never see shorts; market-neutral books get a net-beta check;
+        # macro books get flagged on single-name-heavy slates.
+        try:
+            from agents.mandate_gate import enforce_mandate
+            user_ctx = state.get("user_context") or {}
+            mandate = user_ctx.get("mandate")
+            ideas_after_gate, mandate_warnings = enforce_mandate(ideas, mandate)
+            output.output["trade_ideas"] = ideas_after_gate
+            if mandate_warnings:
+                output.output["mandate_warnings"] = mandate_warnings
+                logger.info(
+                    f"[orchestrator] mandate={mandate} produced "
+                    f"{len(mandate_warnings)} warning(s); "
+                    f"{len(ideas)} → {len(ideas_after_gate)} ideas"
+                )
+        except Exception as e:
+            logger.warning(f"[orchestrator] mandate gate failed (non-fatal): {e}")
     if output is None or (output and output.error):
         err = output.error if output else "timed out"
         logger.warning(f"[orchestrator] Portfolio Strategist error: {err}")
@@ -625,6 +656,7 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
             "scorecard": scorecard,
             "prior_memos": prior_memos,
             "macro_context": state.get("macro_context"),
+            "user_context": state.get("user_context"),
         }),
         seconds=120, label="CIO Synthesizer"
     )
@@ -703,6 +735,23 @@ async def run_research_desk(
     """Main entry point — run the full research desk pipeline on a freeform query."""
     logger.info(f"[orchestrator] Starting research desk for: {query}")
 
+    # Resolve the user's runtime context up front. This is the single
+    # load — every agent then reads it from state.user_context instead
+    # of re-querying the DB. Failure-safe: returns the platform defaults
+    # if the profile can't be loaded.
+    from infra.user_context import resolve_user_context, resolve_user_memory
+    user_ctx_obj = await resolve_user_context(user_id)
+    user_ctx = dict(user_ctx_obj)
+    # Augment with the user's actual usage history (watchlist + recent
+    # themes/tickers). Surfaced inside the same USER CONTEXT prompt block
+    # so the LLM treats "who you are" and "what you usually do" together.
+    try:
+        memory = await resolve_user_memory(user_id)
+        if memory:
+            user_ctx["memory"] = memory
+    except Exception as e:
+        logger.debug(f"[orchestrator] user memory fetch failed (non-fatal): {e}")
+
     graph = get_research_desk_graph()
     initial_state: ResearchDeskState = {
         "query": query,
@@ -721,6 +770,7 @@ async def run_research_desk(
         "tool_steps_by_agent": None,
         "parent_memo_id": parent_memo_id,
         "thread_context": None,
+        "user_context": user_ctx,
     }
 
     final_state = await graph.ainvoke(initial_state)
@@ -748,6 +798,9 @@ async def run_research_desk(
     memo_data["trade_ideas"] = strategy.get("trade_ideas", [])  # Always use structured data
     memo_data["portfolio_positioning"] = strategy.get("portfolio_positioning", "")
     memo_data["hedging_recommendations"] = strategy.get("hedging_recommendations", [])
+    # Mandate-gate warnings: surfaced on the memo so the UI can render a
+    # "MANDATE CHECK · N issues" pill. Empty list when no violations.
+    memo_data["mandate_warnings"] = strategy.get("mandate_warnings", []) or []
 
     # Plan confidence (from Query Interpreter)
     memo_data["plan_confidence"] = int(plan.get("plan_confidence", 0) or 0)

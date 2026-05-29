@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { IconHome, IconGlobe, IconBriefcase, IconSettings } from "./icons";
+import { useEffect, useState } from "react";
+import { useUser } from "@clerk/nextjs";
+import { api } from "@/lib/api";
+import {
+  IconHome,
+  IconBriefcase,
+  IconSettings,
+} from "./icons";
 
 // Dynamic import to avoid SSG crash when ClerkProvider isn't available
 import dynamic from "next/dynamic";
@@ -11,7 +18,8 @@ const ClerkUserButton = dynamic(
   { ssr: false }
 );
 
-// Reuse IconGlobe for Analysis, add simple SVG for new pages
+// Inline icons kept lightweight — strokeWidth 1.5, 16px viewBox, no fill.
+// Matches the terminal aesthetic better than heavier filled icons.
 function IconChart(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -25,15 +33,6 @@ function IconShield(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
       <path d="M8 2L3 4.5V8C3 11 5 13.5 8 14.5C11 13.5 13 11 13 8V4.5L8 2Z" />
-    </svg>
-  );
-}
-
-function IconRewind(props: React.SVGProps<SVGSVGElement>) {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" {...props}>
-      <path d="M8 3L3 8L8 13" />
-      <path d="M13 3L8 8L13 13" />
     </svg>
   );
 }
@@ -68,24 +67,96 @@ function IconStack(props: React.SVGProps<SVGSVGElement>) {
   );
 }
 
-const NAV = [
-  { href: "/dashboard", label: "Home", icon: IconHome },
-  { href: "/analysis", label: "Analysis", icon: IconChart },
-  { href: "/memos", label: "Analyses", icon: IconStack },
-  { href: "/portfolio", label: "Portfolio", icon: IconBriefcase },
-  { href: "/risk", label: "Risk", icon: IconShield },
-  { href: "/compare", label: "Compare", icon: IconCompare },
-  { href: "/track-record", label: "Track Record", icon: IconTarget },
+type NavItem = {
+  href: string;
+  label: string;
+  icon: (p: React.SVGProps<SVGSVGElement>) => React.JSX.Element;
+};
+
+// Grouped navigation so the sidebar tells a story instead of being a flat
+// list. Section labels use the same `/// LABEL` motif as TerminalPanel /
+// TerminalHeader so the sidebar feels native to the design system.
+const SECTIONS: Array<{ label: string; items: NavItem[] }> = [
+  {
+    label: "WORKSPACE",
+    items: [
+      { href: "/dashboard", label: "Home", icon: IconHome },
+      { href: "/analysis", label: "Analysis", icon: IconChart },
+      { href: "/memos", label: "Analyses", icon: IconStack },
+    ],
+  },
+  {
+    label: "BOOK",
+    items: [
+      { href: "/portfolio", label: "Portfolio", icon: IconBriefcase },
+      { href: "/risk", label: "Risk", icon: IconShield },
+      { href: "/track-record", label: "Track Record", icon: IconTarget },
+    ],
+  },
+  {
+    label: "TOOLS",
+    items: [{ href: "/compare", label: "Compare", icon: IconCompare }],
+  },
 ];
 
-const BOTTOM = [{ href: "/settings", label: "Settings", icon: IconSettings }];
+// Role + mandate labels for the footer chips. Keep short so two chips
+// fit comfortably on the same row inside the 208px sidebar.
+const ROLE_LABEL: Record<string, string> = {
+  pm: "PM",
+  analyst: "Analyst",
+  allocator: "Allocator",
+  other: "Other",
+};
+
+const MANDATE_LABEL: Record<string, string> = {
+  long_only: "Long Only",
+  long_short: "L/S",
+  market_neutral: "Mkt Neutral",
+  macro: "Macro",
+  multi_strat: "Multi",
+};
+
+function formatPortfolioSize(usd: number | null | undefined): string | null {
+  if (!usd || usd <= 0) return null;
+  if (usd >= 1_000_000_000) return `$${(usd / 1_000_000_000).toFixed(1)}B`;
+  if (usd >= 1_000_000) return `$${(usd / 1_000_000).toFixed(usd >= 10_000_000 ? 0 : 1)}M`;
+  if (usd >= 1_000) return `$${(usd / 1_000).toFixed(0)}K`;
+  return `$${usd.toFixed(0)}`;
+}
 
 export function Sidebar() {
   const pathname = usePathname();
+  const { user } = useUser();
+  const [profile, setProfile] = useState<{
+    role: string | null;
+    portfolio_size_usd: number | null;
+    mandate: string;
+    benchmark: string;
+  } | null>(null);
 
-  // Hide sidebar on full-screen routes: marketing landing, auth flow,
-  // SSO callback, and the onboarding wizard. Each owns its own layout.
-  // MainContent.tsx mirrors this list — keep them in sync.
+  // Pull the user profile once for the footer chips. The same call backs
+  // SessionGuard, so this is usually a warm-cache fetch. Failures are
+  // silent — the sidebar still renders, just without the role/size badges.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .myProfile()
+      .then((d) => {
+        if (cancelled || !d?.profile) return;
+        setProfile({
+          role: d.profile.role,
+          portfolio_size_usd: d.profile.portfolio_size_usd,
+          mandate: d.profile.mandate,
+          benchmark: d.profile.benchmark,
+        });
+      })
+      .catch(() => { /* silent — sidebar still works without it */ });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Hide sidebar on full-screen routes. MainContent.tsx mirrors this list.
   if (
     pathname === "/" ||
     pathname.startsWith("/sign-in") ||
@@ -97,68 +168,161 @@ export function Sidebar() {
   }
 
   const isActive = (href: string) =>
-    href === "/dashboard"
-      ? pathname === "/dashboard"
-      : pathname.startsWith(href);
+    href === "/dashboard" ? pathname === "/dashboard" : pathname.startsWith(href);
+
+  const isSettings = pathname.startsWith("/settings") || pathname.startsWith("/risk-config");
+  const portfolioLabel = formatPortfolioSize(profile?.portfolio_size_usd);
+  const roleLabel = profile?.role ? ROLE_LABEL[profile.role] ?? profile.role.toUpperCase() : null;
+  const mandateLabel = profile?.mandate ? MANDATE_LABEL[profile.mandate] ?? null : null;
+  const firstName = user?.firstName ?? null;
 
   return (
     <aside className="fixed inset-y-0 left-0 w-52 bg-bg-primary border-r border-border-primary flex flex-col z-50">
-      <div className="px-4 py-5">
-        <span className="text-[15px] font-semibold tracking-tight text-text-primary">
-          alpha<span className="text-accent">engine</span>
-        </span>
+      {/* ──────────────────────────── HEADER ─────────────────────────── */}
+      <div className="px-4 pt-5 pb-4 border-b border-border-primary/60">
+        <div className="flex items-center justify-between mb-1">
+          <p className="text-[9px] font-mono tracking-[0.22em] text-text-quaternary">
+            <span className="text-accent">///</span> WORKSPACE
+          </p>
+          <span className="flex items-center gap-1.5">
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-signal-green"
+              style={{ animation: "core-breathe 2.4s ease-in-out infinite" }}
+            />
+            <span className="text-[9px] font-mono tracking-[0.18em] text-text-quaternary">LIVE</span>
+          </span>
+        </div>
+        <Link href="/dashboard" className="block">
+          <span className="text-[15px] font-semibold tracking-tight text-text-primary">
+            alpha<span className="text-accent">engine</span>
+          </span>
+        </Link>
       </div>
 
-      <nav className="flex-1 px-2 space-y-0.5">
-        {NAV.map((item) => {
-          const active = isActive(item.href);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={[
-                "flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors",
-                active
-                  ? "bg-white/[0.07] text-text-primary"
-                  : "text-text-tertiary hover:text-text-secondary hover:bg-white/[0.03]",
-              ].join(" ")}
-            >
-              <Icon className={active ? "text-text-primary" : "text-text-quaternary"} />
-              {item.label}
-            </Link>
-          );
-        })}
+      {/* ──────────────────────────── NAV ────────────────────────────── */}
+      <nav className="flex-1 overflow-y-auto px-2 py-3 space-y-4">
+        {SECTIONS.map((section) => (
+          <div key={section.label}>
+            <p className="px-2 mb-1.5 text-[9px] font-mono tracking-[0.22em] text-text-quaternary">
+              <span className="text-accent">///</span> {section.label}
+            </p>
+            <div className="space-y-px">
+              {section.items.map((item) => {
+                const active = isActive(item.href);
+                const Icon = item.icon;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={[
+                      "group relative flex items-center gap-2.5 pl-3 pr-3 py-1.5 rounded-md text-[13px] font-medium transition-colors",
+                      active
+                        ? "bg-bg-elevated/60 text-text-primary"
+                        : "text-text-tertiary hover:text-text-secondary hover:bg-bg-surface/60",
+                    ].join(" ")}
+                  >
+                    {/* Left accent bar on the active item — design-system
+                        marker that doesn't add visual weight. */}
+                    <span
+                      aria-hidden
+                      className={[
+                        "absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full transition-colors",
+                        active ? "bg-accent" : "bg-transparent",
+                      ].join(" ")}
+                    />
+                    <Icon
+                      className={
+                        active ? "text-accent shrink-0" : "text-text-quaternary group-hover:text-text-tertiary shrink-0"
+                      }
+                    />
+                    <span className="truncate">{item.label}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
-      <div className="px-2 pb-4 space-y-0.5">
-        {BOTTOM.map((item) => {
-          const active = isActive(item.href);
-          const Icon = item.icon;
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
+      {/* ──────────────────────────── FOOTER ─────────────────────────── */}
+      <div className="border-t border-border-primary/60 px-2 pt-3 pb-3 space-y-2">
+        {/* User identity card — name, role, mandate, portfolio size.
+            Shows the user that the platform "knows" who they are without
+            them having to open Settings to remember what they configured.
+            All values come from /api/me/profile so editing Settings
+            updates this card on next mount. */}
+        <Link
+          href="/settings"
+          className={[
+            "block rounded-md border px-3 py-2.5 transition-colors",
+            isSettings
+              ? "border-accent/40 bg-accent/[0.05]"
+              : "border-border-primary bg-bg-surface/60 hover:border-zinc-700 hover:bg-bg-surface",
+          ].join(" ")}
+        >
+          <div className="flex items-center justify-between mb-1.5 min-w-0">
+            <span className="text-[12px] font-medium text-text-primary truncate">
+              {firstName ?? "Account"}
+            </span>
+            {portfolioLabel && (
+              <span className="text-[10px] font-mono text-text-secondary tabular-nums shrink-0 ml-2">
+                {portfolioLabel}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {roleLabel && (
+              <span className="text-[9px] font-mono tracking-[0.16em] uppercase text-text-tertiary border border-border-primary rounded px-1.5 py-0.5">
+                {roleLabel}
+              </span>
+            )}
+            {mandateLabel && (
+              <span className="text-[9px] font-mono tracking-[0.16em] uppercase text-text-tertiary border border-border-primary rounded px-1.5 py-0.5">
+                {mandateLabel}
+              </span>
+            )}
+            {!roleLabel && !mandateLabel && (
+              <span className="text-[10px] text-text-quaternary">Configure profile →</span>
+            )}
+          </div>
+        </Link>
+
+        {/* Settings row + Clerk avatar trigger. Settings link uses the
+            same active treatment as the main nav items above so the user
+            never sees "two ways into the same place" looking different. */}
+        <div className="flex items-center gap-1.5">
+          <Link
+            href="/settings"
+            className={[
+              "group relative flex-1 flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-md text-[12px] font-medium transition-colors",
+              isSettings
+                ? "bg-bg-elevated/60 text-text-primary"
+                : "text-text-tertiary hover:text-text-secondary hover:bg-bg-surface/60",
+            ].join(" ")}
+          >
+            <span
+              aria-hidden
               className={[
-                "flex items-center gap-2.5 px-3 py-1.5 rounded-lg text-[13px] font-medium transition-colors",
-                active
-                  ? "bg-white/[0.07] text-text-primary"
-                  : "text-text-tertiary hover:text-text-secondary hover:bg-white/[0.03]",
+                "absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-full transition-colors",
+                isSettings ? "bg-accent" : "bg-transparent",
               ].join(" ")}
-            >
-              <Icon className={active ? "text-text-primary" : "text-text-quaternary"} />
-              {item.label}
-            </Link>
-          );
-        })}
-        <div className="px-3 py-2">
-          <ClerkUserButton
-            appearance={{
-              elements: {
-                avatarBox: "w-7 h-7",
-              },
-            }}
-          />
+            />
+            <IconSettings
+              className={
+                isSettings ? "text-accent shrink-0" : "text-text-quaternary group-hover:text-text-tertiary shrink-0"
+              }
+            />
+            <span>Settings</span>
+          </Link>
+          <div className="shrink-0 px-1.5 py-1 rounded-md border border-border-primary bg-bg-surface/60 flex items-center justify-center">
+            <ClerkUserButton
+              appearance={{
+                elements: {
+                  avatarBox: "w-6 h-6",
+                },
+              }}
+            />
+          </div>
         </div>
       </div>
     </aside>

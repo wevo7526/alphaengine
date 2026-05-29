@@ -19,6 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 from agents.base_agent import get_llm
 from agents.schemas import AnalysisPlan, AgentOutput
 from data.market_client import MarketDataClient
+from infra.user_context import _format_user_context_block
 
 logger = logging.getLogger(__name__)
 
@@ -378,6 +379,7 @@ class QueryInterpreter:
         macro_context: dict | None = None,
         scorecard: dict | None = None,
         thread_context: dict | None = None,
+        user_context: dict | None = None,
     ) -> AnalysisPlan:
         """Parse a freeform query into a structured AnalysisPlan."""
         logger.info(f"[query_interpreter] Interpreting: {query}")
@@ -459,10 +461,15 @@ class QueryInterpreter:
                 "is asking to drill in.\n"
             )
 
+        # User context block — anchors the plan around the user's actual
+        # book (size, role, mandate, benchmark). Without it, the Interpreter
+        # produces $100k-retail-flavored plans for $10M Macro PMs.
+        user_block = _format_user_context_block(user_context)
+
         config = {"callbacks": callbacks} if callbacks else {}
         result = await self.llm.ainvoke([
             SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"Query: {query}{macro_block}{scorecard_block}{thread_block}\n\nProduce the analysis plan as JSON."),
+            HumanMessage(content=f"Query: {query}{user_block}{macro_block}{scorecard_block}{thread_block}\n\nProduce the analysis plan as JSON."),
         ], config=config)
 
         text = result.content.strip()

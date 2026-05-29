@@ -41,6 +41,10 @@ def evaluate_trade_gate(
     marginal_var_block_pct: float | None = None,
     silent_squeeze_threshold: float | None = None,
     min_position_size: float | None = None,
+    # User-resolved portfolio basis — drives the liquidity ADV check so a
+    # $10M PM hitting 5% gets liquidity-evaluated as a $500k order, not
+    # a $5k one. Caller threads this in from infra.user_context.
+    portfolio_base_usd: float = 100_000.0,
 ) -> dict:
     """
     Run the full pre-trade risk check on a proposed trade.
@@ -169,8 +173,7 @@ def evaluate_trade_gate(
         fund = _market.get_fundamentals(ticker) or {}
         adv_shares = fund.get("avg_volume_3m") or fund.get("avg_volume_10d")
         price = fund.get("current_price")
-        portfolio_base = 100000.0  # paper-trading default; matches risk dashboard
-        proposed_notional = (adjusted_proposed / 100.0) * portfolio_base
+        proposed_notional = (adjusted_proposed / 100.0) * portfolio_base_usd
         liquidity = assess_liquidity(
             proposed_notional=proposed_notional,
             avg_daily_volume_shares=float(adv_shares) if adv_shares else None,

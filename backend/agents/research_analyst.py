@@ -890,6 +890,12 @@ class ResearchAnalyst(BaseAgent):
                 + "\n".join(f"  - {r}" for r in plan.get("data_requests", []))
             )
 
+        # User context — anchors the framing to the user's actual book
+        # (size, role, mandate, benchmark). Empty string when not provided
+        # so old callers continue to work without any change.
+        from infra.user_context import _format_user_context_block
+        user_block = _format_user_context_block(context.get("user_context"))
+
         return (
             f"Execute the following research plan:\n\n"
             f"Query: {plan.get('query', '')}\n"
@@ -899,6 +905,7 @@ class ResearchAnalyst(BaseAgent):
             f"Themes: {', '.join(plan.get('themes', []))}\n"
             f"Time Horizon: {plan.get('time_horizon', 'weeks')}\n"
             f"Benchmark: {benchmark or 'not specified'}\n"
+            f"{user_block}"
             f"{priority_block}"
             f"{sub_q_block}"
             f"{comparison_block}"

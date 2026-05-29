@@ -199,9 +199,16 @@ class CIOSynthesizer:
                 + "\nReconcile with prior view. If thesis changed, say so. If unchanged, note continuity.\n"
             )
 
+        # User context — drives the CIO's voice and decision threshold.
+        # PM gets decision-first language; Analyst gets analytical depth;
+        # Allocator gets portfolio-construction framing.
+        from infra.user_context import _format_user_context_block
+        user_block = _format_user_context_block(context.get("user_context"))
+
         user_prompt = (
             f"Query: {plan.get('query', '')}\n"
             f"Intent: {plan.get('intent', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Themes: {', '.join(plan.get('themes', []))}\n"
+            f"{user_block}"
             f"{plan_shape_block}"
             f"{macro_block}"
             f"=== RESEARCH ===\n{data_summary}\n"
@@ -215,7 +222,9 @@ class CIOSynthesizer:
             f"{continuity_block}\n"
             f"Produce the final intelligence memo as JSON. Open paragraph 1 with the macro backdrop. "
             f"Cite Q1/Q2/... by name in subsequent paragraphs. Include a paragraph on 'what would change "
-            f"our view' citing the falsification criteria. Include the trade ideas as structured objects."
+            f"our view' citing the falsification criteria. Include the trade ideas as structured objects. "
+            f"Tune voice/depth to the audience guidance in the USER CONTEXT block above. "
+            f"Where you cite position sizing or dollar P&L, express it against the user's actual book size."
         )
 
         try:

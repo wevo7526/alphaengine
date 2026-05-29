@@ -25,6 +25,11 @@ from db.models import IntelligenceMemoRecord, WatchlistRecord, SignalScoreRecord
 from infra.logging_ctx import RequestIdMiddleware, install_logging, get_request_id
 from infra.status_store import AnalysisStatusStore
 from infra.timeout import RequestTimeoutMiddleware
+from infra.user_context import (
+    DEFAULT_PORTFOLIO_BASE_USD,
+    resolve_portfolio_base,
+    resolve_user_context,
+)
 
 # Install structured-logging filter before any app logging happens.
 logging.basicConfig(level=logging.INFO)
@@ -860,9 +865,13 @@ async def portfolio_risk_analysis(req: Request):
         port_returns.append(daily)
 
     # Compute (covariance with Ledoit-Wolf shrinkage; VaR with bootstrap CI + Cornish-Fisher)
+    # Dollar VaR/CVaR anchored on the user's actual book size — see
+    # infra/user_context.resolve_portfolio_base. A $10M Macro PM should
+    # never see VaR rendered against a $100k retail base.
+    portfolio_base = await resolve_portfolio_base(user_id)
     cov = compute_ewma_covariance(returns_dict)
     var_result = compute_portfolio_var(
-        weights, cov, portfolio_value=100000, portfolio_returns=port_returns,
+        weights, cov, portfolio_value=portfolio_base, portfolio_returns=port_returns,
     )
     cvar_result = compute_portfolio_cvar(port_returns)
 
@@ -886,6 +895,7 @@ async def portfolio_risk_analysis(req: Request):
         "correlation_matrix": cov,
         "positions_count": len(tickers),
         "portfolio_drawdown_pct": round(float(real_dd), 2),
+        "portfolio_base": portfolio_base,
     }
 
 
@@ -938,7 +948,8 @@ async def stress_panel(req: Request):
             "direction": t.direction or "bullish",
         })
 
-    return run_full_stress_panel(positions, portfolio_base=100000)
+    portfolio_base = await resolve_portfolio_base(user_id)
+    return run_full_stress_panel(positions, portfolio_base=portfolio_base)
 
 
 @app.post("/api/quant/scenario/custom")
@@ -992,7 +1003,8 @@ async def custom_scenario(payload: dict, req: Request):
             for t in trades
         ]
 
-    return custom_macro_scenario(positions, shock, portfolio_base=100000)
+    portfolio_base = await resolve_portfolio_base(user_id)
+    return custom_macro_scenario(positions, shock, portfolio_base=portfolio_base)
 
 
 @app.get("/api/quant/cross-asset-correlation")
@@ -1113,7 +1125,10 @@ async def run_backtest(request: dict, req: Request):
     user_id = require_user_id(req)
     tickers = request.get("tickers", ["AAPL", "MSFT", "GOOGL"])
     period = request.get("period", "1y")
-    initial_capital = request.get("initial_capital", 100000)
+    # Default backtest capital to the user's actual book size so the
+    # equity curve is denominated in the right units. Override allowed
+    # via request body for "what-if" scenarios at other sizes.
+    initial_capital = request.get("initial_capital") or await resolve_portfolio_base(user_id)
 
     # Save run scoped to authenticated user
     run_id = await BacktestRepository.save_run({
@@ -1260,7 +1275,12 @@ async def yield_curve_krd(payload: dict):
 # === FACTOR ANALYSIS ===
 
 @app.get("/api/quant/factors")
-async def factor_analysis(tickers: str = "SPY", model: str = "single"):
+async def factor_analysis(
+    req: Request,
+    tickers: str = "SPY",
+    model: str = "single",
+    benchmark: str | None = None,
+):
     """
     Factor loadings and attribution for given tickers.
 
@@ -1295,13 +1315,22 @@ async def factor_analysis(tickers: str = "SPY", model: str = "single"):
         except Exception:
             logger.warning(f"Factor analysis: failed to fetch {t}")
 
-    # Benchmark
+    # Benchmark — honor the user's preference from /api/me/profile so
+    # a QQQ-benchmarked PM doesn't see all their alpha quoted vs SPY.
+    # Query-string override (`benchmark=...`) wins over profile.
+    user_id = get_user_id(req)
+    if benchmark:
+        bench_ticker = benchmark.upper()
+    else:
+        user_ctx = await resolve_user_context(user_id)
+        bench_ticker = user_ctx["benchmark"]
+
     try:
-        spy = market_client.get_price_history("SPY", period="6mo")
-        spy_closes = [b["close"] for b in spy]
-        benchmark = [(spy_closes[i] - spy_closes[i-1]) / spy_closes[i-1] for i in range(1, len(spy_closes))]
+        bench_hist = market_client.get_price_history(bench_ticker, period="6mo")
+        bench_closes = [b["close"] for b in bench_hist]
+        benchmark = [(bench_closes[i] - bench_closes[i-1]) / bench_closes[i-1] for i in range(1, len(bench_closes))]
     except Exception as e:
-        logger.warning(f"Factor analysis: failed to fetch SPY benchmark: {e}")
+        logger.warning(f"Factor analysis: failed to fetch {bench_ticker} benchmark: {e}")
         benchmark = []
 
     if not ticker_returns or not benchmark:
@@ -1323,6 +1352,7 @@ async def factor_analysis(tickers: str = "SPY", model: str = "single"):
 
     response: dict = {
         "tickers": ticker_list,
+        "benchmark": bench_ticker,
         "model": "single",
         **single,
         "rolling_exposures": rolling,
@@ -1397,9 +1427,18 @@ async def pre_trade_check(ticker: str, size_pct: float = 0.03, action: str = "BU
 
 
 @app.get("/api/quant/regime/conditional-returns")
-async def regime_conditional(ticker: str = "SPY"):
-    """Historical average returns of an asset in each regime."""
+async def regime_conditional(req: Request, ticker: str | None = None):
+    """Historical average returns of an asset in each regime.
+
+    Defaults `ticker` to the user's preferred benchmark when not specified
+    so a QQQ-benchmarked PM sees QQQ regime returns by default, not SPY's.
+    """
     from quant.regime import classify_regime, fit_regime_model, get_regime_history, regime_conditional_returns
+
+    if not ticker:
+        user_id = get_user_id(req)
+        user_ctx = await resolve_user_context(user_id)
+        ticker = user_ctx["benchmark"]
 
     # Get macro history for regime classification — concurrent + bounded.
     try:
@@ -1626,6 +1665,10 @@ async def pre_trade_gate(req: RiskCheckRequest, request: Request):
     # Per-user limit overrides (falls back to platform defaults on lookup failure)
     limits = await _resolve_user_limits(user_id)
 
+    # Resolve the user's actual book size so liquidity checks size in
+    # real dollars, not the legacy $100k retail default.
+    portfolio_base_usd = await resolve_portfolio_base(user_id)
+
     result = evaluate_trade_gate(
         ticker=req.ticker.upper(),
         direction=req.direction,
@@ -1639,6 +1682,7 @@ async def pre_trade_gate(req: RiskCheckRequest, request: Request):
         marginal_var_block_pct=limits.get("marginal_var_block_pct"),
         silent_squeeze_threshold=limits.get("silent_squeeze_threshold"),
         min_position_size=limits.get("min_position_pct"),
+        portfolio_base_usd=portfolio_base_usd,
     )
     return result
 
@@ -1685,6 +1729,9 @@ async def take_trade(req: TakeTradeRequest, request: Request):
             # Per-user limit overrides (falls back to platform defaults on lookup failure)
             limits = await _resolve_user_limits(user_id)
 
+            # User-resolved book size for the liquidity ADV check
+            portfolio_base_usd = await resolve_portfolio_base(user_id)
+
             gate = evaluate_trade_gate(
                 ticker=req.ticker.upper(),
                 direction=req.direction,
@@ -1698,6 +1745,7 @@ async def take_trade(req: TakeTradeRequest, request: Request):
                 marginal_var_block_pct=limits.get("marginal_var_block_pct"),
                 silent_squeeze_threshold=limits.get("silent_squeeze_threshold"),
                 min_position_size=limits.get("min_position_pct"),
+                portfolio_base_usd=portfolio_base_usd,
             )
 
             if not gate.get("approved"):
@@ -2459,9 +2507,12 @@ async def portfolio_positions(req: Request):
             for ticker, price in pool.map(_fetch_price, tickers):
                 prices[ticker] = price
 
-    # Compute per-position metrics
+    # Compute per-position metrics.
+    # portfolio_base honors the user's onboarding/Settings value so the
+    # "based on $X portfolio" label and every dollar figure in the panel
+    # reflect their actual book, not the legacy $100k retail default.
     positions = []
-    portfolio_base = 100000.0  # Default portfolio value for % → $ conversion
+    portfolio_base = await resolve_portfolio_base(user_id)
     total_unrealized = 0.0
     total_cost_basis = 0.0
     total_market_value = 0.0

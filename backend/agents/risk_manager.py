@@ -377,14 +377,23 @@ class RiskManager(BaseAgent):
         elif "tail" in risk_focus or question_type == "hedging":
             focus_directive = "Call get_market_breadth FIRST; check macro stress indicators (VIX, credit) before per-ticker.\n"
 
+        # User context — book size, mandate, benchmark drive the risk
+        # framing. A $10M Macro mandate should NEVER hear "5% position"
+        # in the abstract; it should hear "5% = $500k".
+        from infra.user_context import _format_user_context_block
+        user_block = _format_user_context_block(context.get("user_context"))
+
         return (
             f"Query: {plan.get('query', '')} | Question type: {question_type} | "
-            f"Tickers: {', '.join(plan.get('tickers', []))} | Risk Focus: {', '.join(risk_focus)}\n\n"
+            f"Tickers: {', '.join(plan.get('tickers', []))} | Risk Focus: {', '.join(risk_focus)}\n"
+            f"{user_block}\n"
             f"Research Summary:\n{summary}\n"
             f"{structured_block}"
             f"{falsification_block}\n"
             f"{focus_directive}"
             f"Use get_realized_correlation, get_market_breadth, get_factor_loadings as needed.\n"
             f"Evaluate the risks and produce your risk assessment JSON, including "
-            f"`falsification_probabilities` if the plan provided falsification_criteria."
+            f"`falsification_probabilities` if the plan provided falsification_criteria. "
+            f"Where you cite a position size, express it in BOTH percentage AND dollar terms "
+            f"using the user's book size from the USER CONTEXT block."
         )

@@ -420,6 +420,10 @@ class IntelligenceMemo(BaseModel):
     secondary_universe: list[str] = Field(default_factory=list)
     target_idea_count: int = 10
     required_style_labels: list[str] = Field(default_factory=list)
+    # Phase F — mandate enforcement warnings emitted by the post-Strategist
+    # mandate gate. Empty list when no violations. UI renders these as a
+    # "MANDATE CHECK · N issues" pill on the memo header.
+    mandate_warnings: list[str] = Field(default_factory=list)
 
     @field_validator("intent", mode="before")
     @classmethod
