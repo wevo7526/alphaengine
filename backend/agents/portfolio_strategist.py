@@ -765,8 +765,13 @@ class PortfolioStrategist(BaseAgent):
                 f"  {', '.join(secondary_universe)}\n"
                 f"REQUIRED: at least {min_secondary} of your {target_count} trade ideas must come "
                 f"from this secondary list (or other non-mega-cap names supported by research). "
-                f"Use research.ticker_data to inform conviction; if a secondary name lacks "
-                f"research data, call get_current_price first then justify from public knowledge.\n"
+                f"These secondaries are FIRST-CLASS trade ideas, not afterthoughts — the platform "
+                f"renders them in their own SECONDARIES section alongside the core trade ideas. "
+                f"Treat them with the same rigor: full thesis, entry/stop/target, catalysts, sizing. "
+                f"Tag each one with the appropriate `tier` (2 = mid-cap, 3 = small-cap, "
+                f"4 = special-situation) AND `market_cap_bucket` so the renderer can route it "
+                f"correctly. Use research.ticker_data to inform conviction; if a secondary name "
+                f"lacks research data, call get_current_price first then justify from public knowledge.\n"
             )
 
         # Style coverage — every idea has style_label; required labels MUST appear

@@ -26,7 +26,10 @@ from .styles import (
     INK, INK_MUTED, INK_GHOST, DIVIDER, ACCENT, GREEN, RED, YELLOW,
     PAPER_SOFT,
 )
-from .charts import correlation_heatmap, drawdown_chart, attribution_decomposition, conviction_hit_rate
+from .charts import (
+    correlation_heatmap, drawdown_chart, attribution_decomposition,
+    conviction_hit_rate, trade_idea_conviction_distribution,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -347,8 +350,18 @@ def ParagraphStyle_section_eyebrow():
     )
 
 
-def _kpi_strip(items: list[tuple[str, str, colors.Color | None]]) -> Table:
-    """Cover-page KPI row. Each item: (label, value, optional value color)."""
+def _kpi_strip(
+    items: list[tuple[str, str, colors.Color | None]],
+    total_width: float | None = None,
+) -> Table:
+    """Cover-page KPI row. Each item: (label, value, optional value color).
+
+    `total_width` defaults to CONTENT_W but the cover passes a narrower
+    value because the KPI strip sits next to the decision badge — using
+    CONTENT_W there made the rightmost card hang off the page edge.
+    """
+    if total_width is None:
+        total_width = CONTENT_W
     cells = []
     for label, value, val_color in items:
         val_style = S["KPIValue"].clone("kpiVal")
@@ -359,18 +372,25 @@ def _kpi_strip(items: list[tuple[str, str, colors.Color | None]]) -> Table:
             Spacer(1, 2),
             Paragraph(value, val_style),
         ])
-    tbl = Table([cells], colWidths=[CONTENT_W / max(1, len(items))] * len(items))
+    tbl = Table([cells], colWidths=[total_width / max(1, len(items))] * len(items))
     tbl.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), PAPER_SOFT),
         ("BOX", (0, 0), (-1, -1), 0.5, DIVIDER),
         ("LINEAFTER", (0, 0), (-2, -1), 0.4, DIVIDER),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 12),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
         ("TOPPADDING", (0, 0), (-1, -1), 12),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
     ]))
     return tbl
+
+
+# Trade-idea card uses 14pt LEFT/RIGHT padding on its outer border. Inner
+# tables (head row, stat strip) must reserve that 28pt or they spill past
+# the card border — that was the visible "lines bleeding off cards" bug.
+_CARD_PADDING = 14
+INNER_W = CONTENT_W - 2 * _CARD_PADDING
 
 
 def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
@@ -408,7 +428,7 @@ def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
 
     head_tbl = Table(
         [[ticker_line, direction_pill, [bar_label, Spacer(1, 2), bar]]],
-        colWidths=[CONTENT_W * 0.45, CONTENT_W * 0.20, CONTENT_W * 0.35],
+        colWidths=[INNER_W * 0.45, INNER_W * 0.20, INNER_W * 0.35],
     )
     head_tbl.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -441,9 +461,10 @@ def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
             Paragraph(_escape(value), S["CardValue"]),
         ]
 
-    # ENTRY column gets ~25% of width; others share the remaining 75%.
-    entry_w = CONTENT_W * 0.25
-    other_w = (CONTENT_W - entry_w) / 5
+    # ENTRY column gets ~25% of inner width; others share the remaining 75%.
+    # Using INNER_W (not CONTENT_W) so the strip stays inside the card border.
+    entry_w = INNER_W * 0.25
+    other_w = (INNER_W - entry_w) / 5
     stat_tbl = Table(
         [[
             _cell("ENTRY", entry),
@@ -484,13 +505,14 @@ def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
 
     # Wrap the card in an outer single-cell table so we get a clean border
     # AND can use KeepTogether so a card never splits across pages.
+    # Padding constant matches _CARD_PADDING used to compute INNER_W above.
     outer = Table([[body_flowables]], colWidths=[CONTENT_W])
     outer.setStyle(TableStyle([
         ("BOX", (0, 0), (-1, -1), 0.6, DIVIDER),
-        ("LEFTPADDING", (0, 0), (-1, -1), 14),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
-        ("TOPPADDING", (0, 0), (-1, -1), 14),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+        ("LEFTPADDING", (0, 0), (-1, -1), _CARD_PADDING),
+        ("RIGHTPADDING", (0, 0), (-1, -1), _CARD_PADDING),
+        ("TOPPADDING", (0, 0), (-1, -1), _CARD_PADDING),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), _CARD_PADDING),
     ]))
     return KeepTogether([outer, Spacer(1, 10)])
 
@@ -503,6 +525,33 @@ def ParagraphStyle_pill(color):
         "Pill", fontName="Helvetica-Bold", fontSize=8, leading=10,
         textColor=color, alignment=TA_CENTER,
     )
+
+
+_SECONDARY_BUCKETS = frozenset({"mid_cap", "small_cap", "micro_cap"})
+
+
+def _is_secondary_idea(idea: dict) -> bool:
+    """Classify a trade idea as core vs secondary for the rendering split.
+
+    Mirrors the frontend `isSecondaryIdea` so in-app and exported memos
+    partition the same way. Any of tier ≥ 2, mid/small/micro-cap bucket,
+    or screen_source set marks the idea as secondary. Untagged ideas
+    default to core (safe for legacy memos).
+    """
+    if not isinstance(idea, dict):
+        return False
+    tier = idea.get("tier")
+    try:
+        if tier is not None and int(tier) >= 2:
+            return True
+    except (TypeError, ValueError):
+        pass
+    bucket = (idea.get("market_cap_bucket") or "").lower()
+    if bucket in _SECONDARY_BUCKETS:
+        return True
+    if idea.get("screen_source"):
+        return True
+    return False
 
 
 def _risk_factor_block(rf: dict) -> KeepTogether:
@@ -546,6 +595,230 @@ def _risk_factor_block(rf: dict) -> KeepTogether:
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
     ]))
     return KeepTogether([outer, Spacer(1, 6)])
+
+
+def _plan_shape_block(memo: dict) -> list:
+    """Render PLAN SHAPE — Interpreter's structural directives.
+
+    Returns a list of flowables. Empty list when no plan shape fields
+    were emitted (older memos).
+    """
+    qt = memo.get("question_type") or ""
+    bench = memo.get("benchmark") or ""
+    instr = memo.get("instrument_preference") or ""
+    archetype = memo.get("idea_archetype") or []
+    target_n = memo.get("target_idea_count")
+    required_styles = memo.get("required_style_labels") or []
+    secondary = memo.get("secondary_universe") or []
+
+    if not (qt or bench or instr or archetype or target_n or required_styles or secondary):
+        return []
+
+    flows: list = [_section_title("Plan Shape")]
+
+    # Key-value 2×N table for the structural fields
+    rows: list = []
+    if qt:
+        rows.append(("Question type", qt.replace("_", " ")))
+    if bench:
+        rows.append(("Benchmark", bench))
+    if instr:
+        rows.append(("Instrument preference", instr.replace("_", " ")))
+    if target_n:
+        rows.append(("Target idea count", str(target_n)))
+    if rows:
+        kv_tbl = Table(
+            [[Paragraph(_escape(k), S["CardLabel"]), Paragraph(_escape(v), S["CardValue"])]
+             for k, v in rows],
+            colWidths=[1.6 * inch, CONTENT_W - 1.6 * inch],
+        )
+        kv_tbl.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LINEBELOW", (0, 0), (-1, -2), 0.3, DIVIDER),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ]))
+        flows.append(kv_tbl)
+        flows.append(Spacer(1, 8))
+
+    # Archetype + style coverage as pill rows so they don't bleed off the page
+    if archetype:
+        flows.append(Paragraph(
+            f"<font color='{INK_MUTED.hexval()}'><b>ARCHETYPE DIRECTIVE</b></font>",
+            S["Small"],
+        ))
+        flows.append(Paragraph(_escape(" · ".join(archetype)), S["Body"]))
+        flows.append(Spacer(1, 4))
+
+    if required_styles:
+        covered = set((memo.get("diversity") or {}).get("styles_covered") or [])
+        items = []
+        for s in required_styles:
+            mark = "✓" if s in covered else "✗"
+            color = GREEN if s in covered else RED
+            items.append(f"<font color='{color.hexval()}'>{mark}</font> {_escape(s.replace('_', ' '))}")
+        flows.append(Paragraph(
+            f"<font color='{INK_MUTED.hexval()}'><b>REQUIRED STYLE COVERAGE</b></font>",
+            S["Small"],
+        ))
+        flows.append(Paragraph("  ·  ".join(items), S["Body"]))
+        flows.append(Spacer(1, 4))
+
+    if secondary:
+        flows.append(Paragraph(
+            f"<font color='{INK_MUTED.hexval()}'><b>SECONDARY UNIVERSE</b></font> "
+            f"<font color='{INK_GHOST.hexval()}'>· non-mega-cap candidates</font>",
+            S["Small"],
+        ))
+        flows.append(Paragraph(_escape(", ".join(secondary[:25])), S["Mono"]))
+        flows.append(Spacer(1, 6))
+
+    return flows
+
+
+def _open_questions_block(memo: dict) -> list:
+    """Render OPEN QUESTIONS — sub-question coverage with ✓/? markers.
+
+    Mirrors the in-app Sub-Questions panel so the PDF reader sees the
+    same answered / unanswered breakdown.
+    """
+    coverage = memo.get("sub_question_coverage") or []
+    if not coverage:
+        return []
+    answered = sum(1 for c in coverage if isinstance(c, dict) and c.get("answered"))
+    total = len(coverage)
+    flows: list = [
+        _section_title(f"Open Questions  ·  {answered} of {total} addressed"),
+    ]
+    for c in coverage:
+        if not isinstance(c, dict):
+            continue
+        q = c.get("question") or ""
+        ok = bool(c.get("answered"))
+        mark_color = GREEN if ok else YELLOW
+        mark = "✓" if ok else "?"
+        flows.append(Paragraph(
+            f"<font color='{mark_color.hexval()}' face='Courier-Bold' size='10'>{mark}</font> "
+            f"&nbsp; <font color='{INK_SOFT.hexval() if ok else INK_MUTED.hexval()}'>"
+            f"{_escape(q)}</font>",
+            S["BulletItem"],
+        ))
+    return flows
+
+
+def _falsification_block(memo: dict) -> list:
+    """Render WHAT WOULD CHANGE OUR VIEW — falsification criteria + probs."""
+    criteria = memo.get("falsification_criteria") or []
+    probs = memo.get("falsification_probabilities") or []
+    if not criteria:
+        return []
+    prob_map: dict[str, str] = {}
+    for p in probs:
+        if isinstance(p, dict) and p.get("criterion"):
+            prob_map[p["criterion"]] = (p.get("probability") or "").lower()
+    flows: list = [_section_title("What Would Change Our View")]
+    for c in criteria:
+        if not isinstance(c, str):
+            continue
+        prob = prob_map.get(c)
+        pc = (
+            RED if prob == "high" else GREEN if prob == "low"
+            else YELLOW if prob == "medium" else INK_MUTED
+        )
+        tag = (
+            f"<font color='{pc.hexval()}' face='Courier-Bold' size='8'>"
+            f"[{prob.upper()}]</font> &nbsp; " if prob else ""
+        )
+        flows.append(Paragraph(
+            f"{tag}<font color='{INK_SOFT.hexval()}'>{_escape(c)}</font>",
+            S["BulletItem"],
+        ))
+    return flows
+
+
+def _regime_sensitivity_block(memo: dict) -> list:
+    """Render REGIME SENSITIVITY — Strategist's per-regime positioning view."""
+    rs = memo.get("regime_sensitivity") or []
+    if not rs:
+        return []
+    current = ((memo.get("macro_context") or {}).get("current_regime") or "").lower()
+    flows: list = [_section_title("Regime Sensitivity")]
+    rows = []
+    head = [
+        Paragraph("REGIME", S["CardLabel"]),
+        Paragraph("IDEAL POSITION", S["CardLabel"]),
+        Paragraph("SIZE ×", S["CardLabel"]),
+        Paragraph("KEY ASSUMPTION", S["CardLabel"]),
+    ]
+    rows.append(head)
+    for r in rs:
+        if not isinstance(r, dict):
+            continue
+        regime = (r.get("regime") or "—").lower()
+        ideal = r.get("ideal_position") or "—"
+        mult = r.get("conviction_multiplier")
+        mult_s = f"×{mult}" if mult is not None else "—"
+        assume = r.get("key_assumption") or "—"
+        is_cur = regime == current
+        regime_label = f"{regime} ★" if is_cur else regime
+        regime_para = Paragraph(
+            f"<font color='{ACCENT.hexval() if is_cur else INK.hexval()}'>"
+            f"<b>{_escape(regime_label)}</b></font>",
+            S["Body"],
+        )
+        rows.append([
+            regime_para,
+            Paragraph(_escape(ideal), S["Body"]),
+            Paragraph(_escape(mult_s), S["Body"]),
+            Paragraph(_escape(assume), S["IdeaThesis"]),
+        ])
+    tbl = Table(
+        rows,
+        colWidths=[1.3 * inch, 2.4 * inch, 0.7 * inch, CONTENT_W - 4.4 * inch],
+    )
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), PAPER_SOFT),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, DIVIDER),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.3, DIVIDER),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    flows.append(tbl)
+    return flows
+
+
+def _citation_index_block(memo: dict) -> list:
+    """Render CITATIONS — the deduplicated numbered footnote index.
+
+    This is the in-app CitationIndexPanel equivalent for the PDF. Empty
+    list when the memo carries no citation_index (legacy or uncited).
+    """
+    index = memo.get("citation_index") or []
+    if not index:
+        return []
+    flows: list = [_section_title(f"Citations  ·  {len(index)}")]
+    for c in index[:40]:
+        if not isinstance(c, dict):
+            continue
+        n = c.get("n") or 0
+        label = c.get("label") or c.get("source_id") or "—"
+        url = c.get("url")
+        line = (
+            f"<font color='{ACCENT.hexval()}' face='Courier-Bold' size='9'>[{n}]</font> "
+            f"&nbsp; <font color='{INK_SOFT.hexval()}' size='9'>{_escape(label)}</font>"
+        )
+        if url:
+            line += (
+                f" &nbsp; <font color='{ACCENT.hexval()}' size='7.5'>"
+                f"<link href='{_escape(url)}'>OPEN &#8594;</link></font>"
+            )
+        flows.append(Paragraph(line, S["SourceItem"]))
+    return flows
 
 
 def _source_ledger(lineage: dict | None) -> list:
@@ -657,8 +930,11 @@ def render_memo(memo: dict) -> bytes:
     # Decision badge + KPI strip in a two-column header. Dropped DATE from
     # the strip — it's already prominent in the cover band, and three cards
     # gives each room to breathe without bumping the right page edge.
+    # KPI strip width matches its column EXACTLY (not CONTENT_W) so the
+    # rightmost card never hangs off the page.
     badge_w = 0.95 * inch
     badge = DecisionBadge(decision, width=badge_w, height=24)
+    kpi_col_w = CONTENT_W - badge_w - 0.25 * inch
     kpi_items = [
         ("MACRO REGIME", macro_regime, INK),
         ("RISK LEVEL", risk_level,
@@ -668,8 +944,8 @@ def render_memo(memo: dict) -> bytes:
         ("CONVICTION", str(conf) if conf else "—", INK),
     ]
     cover_top = Table(
-        [[badge, _kpi_strip(kpi_items)]],
-        colWidths=[badge_w + 0.25 * inch, CONTENT_W - badge_w - 0.25 * inch],
+        [[badge, _kpi_strip(kpi_items, total_width=kpi_col_w)]],
+        colWidths=[badge_w + 0.25 * inch, kpi_col_w],
     )
     cover_top.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
@@ -715,13 +991,71 @@ def render_memo(memo: dict) -> bytes:
             if para:
                 story.append(Paragraph(_escape(para), S["BodyJustified"]))
 
+    # ── PLAN SHAPE ──────────────────────────────────────────────
+    # The Interpreter's structural directives — what kind of question
+    # this is, the benchmark, the target idea count, required style
+    # coverage. Hidden when no plan-shape fields were emitted.
+    plan_shape = _plan_shape_block(memo)
+    if plan_shape:
+        story.append(PageBreak())
+        story.extend(plan_shape)
+
+    # ── OPEN QUESTIONS ──────────────────────────────────────────
+    # Sub-question coverage: which research questions the desk
+    # actually addressed and which it didn't. Surfaces gaps the in-app
+    # view shows as the `Q M/N` pill.
+    open_q = _open_questions_block(memo)
+    if open_q:
+        story.extend(open_q)
+
+    # ── WHAT WOULD CHANGE OUR VIEW ──────────────────────────────
+    # Falsification criteria — bear cases scored low/medium/high. The
+    # `[HIGH]` prefix tells the reader where to push back hardest.
+    falsification = _falsification_block(memo)
+    if falsification:
+        story.extend(falsification)
+
     # ── TRADE IDEAS ─────────────────────────────────────────────
+    # Split into CORE and SECONDARIES so non-mega-cap alpha names get
+    # their own section. The numbering is global so #1 / #2 / #N stays
+    # consistent between the two sections — readers always know which
+    # idea is which regardless of how the split shakes out.
     trade_ideas = memo.get("trade_ideas") or []
     if trade_ideas:
-        story.append(PageBreak())
-        story.append(_section_title(f"Trade Ideas  ·  {len(trade_ideas)}"))
+        # Conviction distribution chart — drawn once over the full slate
+        # so the reader sees the spread before drilling into individual
+        # cards. Skipped when there are <2 ideas.
+        chart = trade_idea_conviction_distribution(trade_ideas, width_pts=CONTENT_W)
+
+        core_ideas: list[tuple[int, dict]] = []
+        secondary_ideas: list[tuple[int, dict]] = []
         for i, idea in enumerate(trade_ideas[:12], 1):
-            story.append(_trade_idea_card(idea, i))
+            (secondary_ideas if _is_secondary_idea(idea) else core_ideas).append((i, idea))
+
+        if core_ideas:
+            story.append(PageBreak())
+            story.append(_section_title(f"Trade Ideas  ·  {len(core_ideas)}  ·  Core"))
+            if chart is not None:
+                story.append(chart)
+                story.append(Spacer(1, 10))
+            for rank, idea in core_ideas:
+                story.append(_trade_idea_card(idea, rank))
+
+        if secondary_ideas:
+            story.append(PageBreak())
+            story.append(_section_title(
+                f"Secondaries  ·  {len(secondary_ideas)}  ·  Alpha Sleeve · Mid / Small / Special"
+            ))
+            for rank, idea in secondary_ideas:
+                story.append(_trade_idea_card(idea, rank))
+
+    # ── REGIME SENSITIVITY ──────────────────────────────────────
+    # Strategist's view of how positioning should shift across the four
+    # macro regimes; current regime is starred.
+    regime = _regime_sensitivity_block(memo)
+    if regime:
+        story.append(PageBreak())
+        story.extend(regime)
 
     # ── RISK FACTORS ────────────────────────────────────────────
     risk_factors = memo.get("risk_factors") or []
@@ -751,10 +1085,19 @@ def render_memo(memo: dict) -> bytes:
                 S["BulletItem"],
             ))
 
-    # ── SOURCES / PROVENANCE ────────────────────────────────────
+    # ── CITATIONS (numbered footnote index) ─────────────────────
+    citations = _citation_index_block(memo)
+    if citations:
+        story.append(PageBreak())
+        story.extend(citations)
+
+    # ── SOURCES / PROVENANCE (tool-call lineage) ────────────────
     lineage = memo.get("lineage") or {}
     if lineage.get("sources"):
-        story.append(PageBreak())
+        # No PageBreak — flows naturally after the citation index when
+        # both are present; if only sources exists, it gets its own page.
+        if not citations:
+            story.append(PageBreak())
         story.extend(_source_ledger(lineage))
 
     _build(

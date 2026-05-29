@@ -151,6 +151,57 @@ def attribution_decomposition(alpha_pct: float, beta_pct: float, residual_pct: f
         return None
 
 
+def trade_idea_conviction_distribution(
+    trade_ideas: list[dict],
+    width_pts: float = 450,
+) -> Image | None:
+    """Horizontal bar chart of trade-idea conviction values.
+
+    One bar per idea, colored by direction (green = bullish, red = bearish).
+    Sorted by conviction descending so the highest-conviction names anchor
+    the top. Returns None when there are fewer than 2 ideas to chart.
+    """
+    try:
+        if not trade_ideas or len(trade_ideas) < 2:
+            return None
+        items: list[tuple[str, int, str]] = []
+        for idea in trade_ideas:
+            if not isinstance(idea, dict):
+                continue
+            tk = (idea.get("ticker") or "?").strip()[:8]
+            cv = int(idea.get("conviction") or 0)
+            d = (idea.get("direction") or "neutral").lower()
+            items.append((tk, cv, d))
+        if not items:
+            return None
+        items.sort(key=lambda x: x[1])  # ascending so highest is at top in barh
+        labels = [i[0] for i in items]
+        values = [i[1] for i in items]
+        colors_list = [
+            "#059669" if "bullish" in d else "#dc2626" if "bearish" in d else "#71717a"
+            for _, _, d in items
+        ]
+
+        # Height scales with idea count so 12 ideas fit cleanly
+        fig, ax = plt.subplots(figsize=(5, max(1.6, 0.32 * len(items) + 0.6)))
+        bars = ax.barh(labels, values, color=colors_list, edgecolor="white", linewidth=0.6)
+        ax.set_xlim(0, 100)
+        ax.set_xlabel("Conviction (0–100)", fontsize=8)
+        ax.set_title("Conviction by Idea", pad=6, fontsize=10)
+        # Reference lines at 50 (WATCH threshold) and 75 (GO threshold)
+        ax.axvline(50, color="#a1a1aa", linewidth=0.6, linestyle=":")
+        ax.axvline(75, color="#71717a", linewidth=0.6, linestyle="--")
+        for bar, val in zip(bars, values):
+            ax.text(val + 1.5, bar.get_y() + bar.get_height() / 2,
+                    f"{val}", va="center", fontsize=7.5, color="#3f3f46")
+        ax.tick_params(axis="y", labelsize=8)
+        ax.tick_params(axis="x", labelsize=7)
+        return _fig_to_image(fig, width_pts)
+    except Exception as e:
+        logger.warning(f"trade_idea_conviction_distribution failed: {e}")
+        return None
+
+
 def conviction_hit_rate(buckets: dict, width_pts: float = 450) -> Image | None:
     """Bar chart: hit rate by conviction bucket."""
     try:

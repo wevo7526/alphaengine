@@ -52,6 +52,19 @@ const ACTION_MAP: Record<string, { label: string; color: string }> = {
   neutral: { label: "NEUTRAL", color: "bg-bg-elevated text-text-tertiary border-border-primary" },
 };
 
+// A trade idea belongs in the "secondaries" sleeve when ANY of these signals
+// indicates it's not a mega-cap core position. The Strategist tags ideas
+// with tier / market_cap_bucket / screen_source — we read whichever it set.
+// Missing tags default to "core" so the split is safe on legacy memos.
+const _SECONDARY_BUCKETS = new Set(["mid_cap", "small_cap", "micro_cap"]);
+function isSecondaryIdea(idea: TradeIdea): boolean {
+  if (typeof idea.tier === "number" && idea.tier >= 2) return true;
+  const bucket = (idea.market_cap_bucket || "").toLowerCase();
+  if (_SECONDARY_BUCKETS.has(bucket)) return true;
+  if (idea.screen_source) return true;
+  return false;
+}
+
 interface TakeTradeResponse {
   id?: string;
   status?: string;
@@ -917,26 +930,64 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
         </TerminalPanel>
       )}
 
-      {/* Trade Ideas */}
-      {memo.trade_ideas?.length > 0 && (
-        <TerminalPanel
-          label={`TRADE IDEAS · ${memo.trade_ideas.length}`}
-          status="RANKED BY CONVICTION"
-          bodyClassName="p-4"
-        >
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-            {(memo.trade_ideas || []).map((idea, i) => (
-              <TradeIdeaCard
-                key={i}
-                idea={idea}
-                rank={i + 1}
-                memoId={(memo as unknown as Record<string, unknown>).id as string}
-                lineage={memo.lineage}
-              />
-            ))}
-          </div>
-        </TerminalPanel>
-      )}
+      {/* Trade Ideas — split into CORE and SECONDARIES so non-mega-cap
+          alpha names get their own visual sleeve instead of being buried
+          inside one long ranked list. Classification reads tier /
+          market_cap_bucket / screen_source on the TradeIdea object.
+          Legacy memos with no tagging fall entirely into CORE — no
+          regression. */}
+      {memo.trade_ideas?.length > 0 && (() => {
+        const all = memo.trade_ideas || [];
+        const memoId = (memo as unknown as Record<string, unknown>).id as string;
+        const core: { idea: TradeIdea; rank: number }[] = [];
+        const secondaries: { idea: TradeIdea; rank: number }[] = [];
+        all.forEach((idea, i) => {
+          const bucket = isSecondaryIdea(idea) ? secondaries : core;
+          bucket.push({ idea, rank: i + 1 });
+        });
+        return (
+          <>
+            {core.length > 0 && (
+              <TerminalPanel
+                label={`TRADE IDEAS · ${core.length}`}
+                status="CORE · RANKED BY CONVICTION"
+                bodyClassName="p-4"
+              >
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  {core.map(({ idea, rank }) => (
+                    <TradeIdeaCard
+                      key={rank}
+                      idea={idea}
+                      rank={rank}
+                      memoId={memoId}
+                      lineage={memo.lineage}
+                    />
+                  ))}
+                </div>
+              </TerminalPanel>
+            )}
+            {secondaries.length > 0 && (
+              <TerminalPanel
+                label={`SECONDARIES · ${secondaries.length}`}
+                status="ALPHA SLEEVE · MID / SMALL / SPECIAL"
+                bodyClassName="p-4"
+              >
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                  {secondaries.map(({ idea, rank }) => (
+                    <TradeIdeaCard
+                      key={rank}
+                      idea={idea}
+                      rank={rank}
+                      memoId={memoId}
+                      lineage={memo.lineage}
+                    />
+                  ))}
+                </div>
+              </TerminalPanel>
+            )}
+          </>
+        );
+      })()}
 
       {/* Risk + Hedging side by side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
