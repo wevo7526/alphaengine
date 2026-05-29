@@ -29,6 +29,27 @@ def test_quote_to_candidate_shape():
     assert c["market_cap"] == 4.2e8 and c["sector"] == "Technology"
 
 
+def test_discovery_blend_caps_megacaps_and_injects_screened():
+    from agents.query_interpreter import blend_discovery_universe
+    from agents.universe import MEGA_CAPS
+    mega = {m.upper() for m in MEGA_CAPS}
+    primary = ["MSFT", "GOOGL", "META", "ORCL", "CRM", "ADBE", "INTU", "NOW"]
+    screened = ["RPAY", "TYGO", "ASYS", "RMNI", "PDYN"]
+    out = blend_discovery_universe(primary, screened, keep_mega=2, target=8)
+    assert len([t for t in out if t.upper() in mega]) <= 2      # mega-caps capped
+    assert any(t in screened for t in out)                       # discoveries injected
+    assert len(out) <= 8
+
+
+def test_discovery_blend_pure_discovery_drops_all_megacaps():
+    from agents.query_interpreter import blend_discovery_universe
+    from agents.universe import MEGA_CAPS
+    mega = {m.upper() for m in MEGA_CAPS}
+    out = blend_discovery_universe(["AAPL", "MSFT"], ["RPAY", "TYGO", "ASYS"], keep_mega=0, target=6)
+    assert not [t for t in out if t.upper() in mega]             # zero mega-caps
+    assert set(out) <= {"RPAY", "TYGO", "ASYS"}
+
+
 def test_av_movers_never_raises_without_key(monkeypatch):
     # With no AV key the client returns {} → movers is an empty list, never raises.
     from config import settings

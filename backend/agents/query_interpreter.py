@@ -26,6 +26,39 @@ logger = logging.getLogger(__name__)
 _market = MarketDataClient()
 
 
+def blend_discovery_universe(
+    primary: list[str],
+    secondary: list[str],
+    *,
+    keep_mega: int = 2,
+    target: int = 8,
+) -> list[str]:
+    """Blend the LLM's primary tickers with live-screened under-covered names.
+
+    The desks research the PRIMARY set, so leaving it as the LLM's instinctive
+    mega-cap picks makes every memo coalesce on big names. This keeps at most
+    `keep_mega` mega-caps as liquid anchors, preserves any non-mega names the
+    LLM already chose, then fills the remaining slots (up to `target`) with the
+    screened discoveries — so the analysis is dominated by the undiscovered
+    field. Pure + deterministic; order: non-mega LLM picks → kept mega anchors
+    → screened names.
+    """
+    from agents.universe import MEGA_CAPS
+    mega = {m.upper() for m in MEGA_CAPS}
+    primary = [t for t in (primary or []) if t]
+    non_mega = [t for t in primary if t.upper() not in mega]
+    kept_mega = [t for t in primary if t.upper() in mega][:max(0, keep_mega)]
+    blended = list(dict.fromkeys([*non_mega, *kept_mega]))
+    have = {t.upper() for t in blended}
+    for t in (secondary or []):
+        if len(blended) >= target:
+            break
+        if t and t.upper() not in have:
+            blended.append(t)
+            have.add(t.upper())
+    return blended[:target]
+
+
 SYSTEM_PROMPT = """You are the Chief Investment Officer's research lead at a quantitative hedge
 fund. You receive freeform queries from the CIO and translate them into a
 *structured research plan* that ALL six downstream desks consume directly.
@@ -540,6 +573,29 @@ class QueryInterpreter:
                 )
             except Exception:
                 data["secondary_universe"] = []
+
+        # DISCOVERY BLEND — the desks research `tickers` (the PRIMARY set). Left
+        # as the LLM's instinct, that's always mega-caps, so the whole memo
+        # coalesces on big names. For discovery queries we cap mega-caps and
+        # fill the primary set with the live-screened under-covered names, so
+        # the Research/Risk/Strategy desks actually analyze the undiscovered
+        # field. Specific-ticker / comparison queries are left untouched.
+        try:
+            from config import settings as _blend_settings
+            intent = (data.get("intent") or "").lower()
+            is_discovery = ("ticker_analysis" not in intent) and not (data.get("comparison_set") or [])
+            secondary = data.get("secondary_universe") or []
+            if is_discovery and secondary:
+                primary = list(data.get("tickers") or [])
+                data["tickers"] = blend_discovery_universe(
+                    primary, secondary,
+                    keep_mega=int(getattr(_blend_settings, "DISCOVERY_MAX_MEGA_CAPS", 2)),
+                    target=int(getattr(_blend_settings, "DISCOVERY_PRIMARY_CAP", 8)),
+                )
+                logger.info("[query_interpreter] discovery blend: primary %s -> %s",
+                            primary, data["tickers"])
+        except Exception as e:
+            logger.warning(f"[query_interpreter] discovery blend skipped: {e}")
 
         # Defaults for new fields if the LLM didn't emit them
         if "target_idea_count" not in data or not data.get("target_idea_count"):

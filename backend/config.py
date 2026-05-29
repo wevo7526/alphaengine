@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     STRATEGIST_PRICING_CAP: int = 50      # candidates priced + handed to the Strategist
     PRICING_MAX_WORKERS: int = 12
     PRICING_TIMEOUT_S: float = 30.0
+    # For discovery queries, the PRIMARY tickers the desks research are blended
+    # with the live-screened under-covered names — keeping at most this many of
+    # the LLM's instinctive mega-cap picks as anchors. Set 0 for pure discovery.
+    DISCOVERY_MAX_MEGA_CAPS: int = 2
+    DISCOVERY_PRIMARY_CAP: int = 8        # total primary tickers after blending
 
     # Data Sources
     SEC_API_KEY: str = ""
