@@ -107,16 +107,16 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
           </div>
 
           <h1 className="text-[44px] sm:text-[56px] lg:text-[64px] font-semibold tracking-[-0.02em] leading-[1.02] mb-8">
-            Find the names
+            Research like a desk
             <br />
-            the market hasn&apos;t.
+            ten times your size.
           </h1>
 
           <p className="text-[16px] text-text-secondary leading-relaxed mb-11 max-w-md">
-            Ask in plain language. Alpha Engine scans the live market for
-            under-covered names, writes a memo where every number traces to
-            its source, and tells you &mdash; with a deflated Sharpe and
-            calibration &mdash; when an idea is probably just noise.
+            Alpha Engine is the research analyst for managers who run lean.
+            Ask a question in plain English &mdash; get back a sourced,
+            risk-checked memo with trade ideas across names you&apos;d never
+            have the hours to screen. Minutes, not days.
           </p>
 
           <div className="flex items-center gap-5 flex-wrap">
@@ -166,13 +166,13 @@ function TaglineStrip() {
     <section className="relative border-y border-border-primary/60 bg-bg-surface/20">
       <div className="max-w-[920px] mx-auto px-6 py-32 text-center">
         <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-6">
-          <span className="text-accent">///</span> HOW IT FEELS
+          <span className="text-accent">///</span> FOR LEAN DESKS
         </p>
         <p className="text-[28px] sm:text-[34px] font-semibold tracking-[-0.02em] leading-[1.15] text-text-primary">
-          Coverage of a whole desk. The rigor of a quant.
+          Spend your time deciding, not digging.
           <br className="hidden sm:block" />
           <span className="text-text-tertiary">
-            {" "}It mines more names than a small team can cover, sources every claim, and flags the ideas that are probably noise.
+            {" "}Every memo lands sourced, risk-checked, and ready to defend in the next meeting &mdash; so you cover more ground without adding headcount.
           </span>
         </p>
       </div>
