@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
-import { BrandConstellation } from "@/components/BrandConstellation";
 
 /**
  * Marketing landing page.
@@ -57,14 +56,14 @@ function TopNav({ isSignedIn }: { isSignedIn: boolean }) {
           {isSignedIn ? (
             <Link
               href="/dashboard"
-              className="px-3.5 py-1.5 rounded-md bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
+              className="px-3.5 py-1.5 rounded-sm bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
             >
               Go to dashboard
             </Link>
           ) : (
             <Link
               href="/sign-up"
-              className="px-3.5 py-1.5 rounded-md bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
+              className="px-3.5 py-1.5 rounded-sm bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
             >
               Get started
             </Link>
@@ -82,28 +81,17 @@ function TopNav({ isSignedIn }: { isSignedIn: boolean }) {
 // ────────────────────────────────────────────────────────────────────────
 function Hero({ isSignedIn }: { isSignedIn: boolean }) {
   return (
-    <section className="relative isolate min-h-[92vh] flex flex-col justify-center overflow-hidden">
-      {/* Layered background */}
-      <div className="absolute inset-0 grid-bg opacity-40" aria-hidden="true" />
-      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-        <div className="absolute -top-48 -left-48 w-[48rem] h-[48rem] rounded-full bg-accent/[0.08] blur-[120px]" />
-        <div className="absolute bottom-0 -right-48 w-[42rem] h-[42rem] rounded-full bg-signal-green/[0.05] blur-[120px]" />
-      </div>
-      <div className="absolute right-0 top-0 bottom-0 w-1/2 lg:w-3/5 opacity-80" aria-hidden="true">
-        <BrandConstellation />
-      </div>
-      <div
-        className="pointer-events-none absolute inset-y-0 left-0 w-2/3 bg-gradient-to-r from-bg-primary via-bg-primary/90 to-transparent"
-        aria-hidden="true"
-      />
+    <section className="relative isolate min-h-[78vh] flex flex-col justify-center overflow-hidden border-b border-border-primary/60">
+      {/* Faint structural grid only — no glow, no orbs, no animation. */}
+      <div className="absolute inset-0 grid-bg opacity-[0.10]" aria-hidden="true" />
 
       <div className="relative z-10 max-w-[1280px] mx-auto px-6 w-full py-28">
         <div className="max-w-xl">
           <div className="inline-flex items-center gap-2 mb-9 text-[10px] font-mono tracking-[0.22em] text-text-quaternary">
-            <span className="text-accent">///</span>
+            <span className="text-text-tertiary">///</span>
             <span>ALPHA ENGINE · v1.0</span>
             <span className="w-1 h-1 rounded-full bg-text-quaternary" />
-            <span className="text-signal-green">LIVE</span>
+            <span className="text-text-tertiary">LIVE</span>
           </div>
 
           <h1 className="font-display text-[38px] sm:text-[48px] lg:text-[54px] font-semibold tracking-[-0.01em] leading-[1.06] mb-8">
@@ -122,14 +110,14 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
             {isSignedIn ? (
               <Link
                 href="/dashboard"
-                className="px-5 py-2.5 rounded-md bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
+                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
               >
                 Go to dashboard
               </Link>
             ) : (
               <Link
                 href="/sign-up"
-                className="px-5 py-2.5 rounded-md bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
+                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
               >
                 Get started
               </Link>
@@ -137,17 +125,17 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
           </div>
 
           {/* Terminal command preview — evocative, not literal */}
-          <div className="mt-16 max-w-md rounded-md border border-border-primary bg-bg-surface/60 backdrop-blur-sm overflow-hidden">
+          <div className="mt-16 max-w-md rounded-sm border border-border-primary bg-bg-surface/60 backdrop-blur-sm overflow-hidden">
             <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-              <span className="w-1.5 h-1.5 rounded-full bg-signal-red/60" />
-              <span className="w-1.5 h-1.5 rounded-full bg-signal-yellow/60" />
-              <span className="w-1.5 h-1.5 rounded-full bg-signal-green/60" />
+              <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary" />
+              <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary" />
+              <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary" />
               <span className="ml-2">ANALYSIS · NEW</span>
               <span className="ml-auto text-[9px]">~10 min</span>
             </div>
             <div className="px-4 py-3 font-mono text-[12px] text-text-secondary leading-relaxed">
-              <span className="text-accent">{">"}</span> under-covered mid-cap
-              industrials that can beat the S&amp;P<span className="terminal-cursor text-accent" />
+              <span className="text-text-tertiary">{">"}</span> under-covered mid-cap
+              industrials that can beat the S&amp;P<span className="terminal-cursor text-text-tertiary" />
             </div>
           </div>
         </div>
@@ -165,7 +153,7 @@ function TaglineStrip() {
     <section className="relative border-y border-border-primary/60 bg-bg-surface/20">
       <div className="max-w-[920px] mx-auto px-6 py-20 text-center">
         <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-6">
-          <span className="text-accent">///</span> THE DESK
+          <span className="text-text-tertiary">///</span> THE DESK
         </p>
         <p className="font-display text-[26px] sm:text-[32px] font-semibold tracking-[-0.01em] leading-[1.2] text-text-primary">
           A team of agents, one workflow.
@@ -189,13 +177,13 @@ function StatusStrip() {
       <div className="max-w-[1280px] mx-auto px-6 py-20">
         <div className="text-center mb-14 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-4">
-            <span className="text-accent">///</span> A TYPICAL RUN
+            <span className="text-text-tertiary">///</span> A TYPICAL RUN
           </p>
           <h2 className="font-display text-[26px] sm:text-[32px] font-semibold tracking-[-0.01em] leading-[1.2]">
             What a single question feels like, at a glance.
           </h2>
         </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-sm overflow-hidden">
           <StatPanel
             label="NAMES SCANNED"
             value="50+"
@@ -275,13 +263,13 @@ function MiniSparkline({ kind }: { kind: "flat" | "up" | "down" }) {
       <path
         d={d}
         fill="none"
-        stroke="#3b82f6"
+        stroke="#a1a1aa"
         strokeWidth="1.5"
         strokeLinecap="round"
         strokeLinejoin="round"
         className="sparkline-path"
       />
-      <circle cx={9 * (points.length - 1)} cy={points[points.length - 1]} r="2.5" fill="#3b82f6" />
+      <circle cx={9 * (points.length - 1)} cy={points[points.length - 1]} r="2.5" fill="#a1a1aa" />
     </svg>
   );
 }
@@ -307,7 +295,7 @@ function MiniDots() {
       {[0, 1, 2, 3, 4].map((i) => (
         <div
           key={i}
-          className="aspect-square rounded-full bg-signal-green/80 counter-tick"
+          className="aspect-square rounded-full bg-text-quaternary counter-tick"
           style={{ animationDelay: `${i * 0.3}s` }}
         />
       ))}
@@ -325,7 +313,7 @@ function ProductShowcase() {
       <div className="max-w-[1280px] mx-auto px-6 py-24">
         <div className="text-center mb-20 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
-            <span className="text-accent">///</span> PRODUCT
+            <span className="text-text-tertiary">///</span> PRODUCT
           </p>
           <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
             Four things you&apos;ll reach for, day in and day out.
@@ -380,8 +368,7 @@ function ShowcaseCard({
   visual: React.ReactNode;
 }) {
   return (
-    <article className="group relative rounded-md border border-border-primary bg-bg-surface overflow-hidden hover:border-zinc-700 transition-colors">
-      <div className="absolute inset-0 bg-gradient-to-br from-accent/[0.03] via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+    <article className="group relative rounded-sm border border-border-primary bg-bg-surface overflow-hidden hover:border-zinc-700 transition-colors">
       <div className="grid lg:grid-cols-[1.05fr_1fr] gap-10 p-8 lg:p-12 relative items-center">
         <div className="max-w-md">
           <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-5">{tag}</p>
@@ -405,10 +392,10 @@ function DiscoveryViz() {
     { ticker: "FIVE",  reason: "52w low + insider buy",    score: 64, color: "accent" },
   ];
   return (
-    <div className="rounded-md border border-border-primary bg-bg-primary/60 overflow-hidden">
+    <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
         <span>SCREEN OUTPUT</span>
-        <span className="text-signal-green">● LIVE</span>
+        <span className="text-text-tertiary">● LIVE</span>
       </div>
       <div className="divide-y divide-border-primary/40">
         {rows.map((r) => (
@@ -430,25 +417,25 @@ function TrackRecordViz() {
     .map((y, i) => `${i === 0 ? "M" : "L"} ${i * 18} ${72 - y * 0.6}`)
     .join(" ");
   return (
-    <div className="rounded-md border border-border-primary bg-bg-primary/60 overflow-hidden">
+    <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
         <span>SIGNAL IC · TRAILING 90D</span>
-        <span className="text-signal-green">+0.08</span>
+        <span className="text-text-tertiary">+0.08</span>
       </div>
       {/* rigor readout below the curve — see TrackRecordViz footer */}
       <div className="p-3">
         <svg viewBox="0 0 280 80" className="w-full h-20 overflow-visible">
           <defs>
             <linearGradient id="ic-fill" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.25" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+              <stop offset="0%" stopColor="#a1a1aa" stopOpacity="0.25" />
+              <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" />
             </linearGradient>
           </defs>
           <path d={`${d} L ${(points.length - 1) * 18} 80 L 0 80 Z`} fill="url(#ic-fill)" />
           <path
             d={d}
             fill="none"
-            stroke="#10b981"
+            stroke="#a1a1aa"
             strokeWidth="1.5"
             strokeLinecap="round"
             strokeLinejoin="round"
@@ -474,16 +461,16 @@ function RiskViz() {
     { label: "Liquidity", ok: true,  val: "2.1% < 10%" },
   ];
   return (
-    <div className="rounded-md border border-border-primary bg-bg-primary/60 overflow-hidden">
+    <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider">
         <span className="text-text-quaternary">PRE-TRADE GATE</span>
-        <span className="text-signal-red">BLOCKED</span>
+        <span className="text-text-tertiary">BLOCKED</span>
       </div>
       <div className="divide-y divide-border-primary/40">
         {gates.map((g) => (
           <div key={g.label} className="flex items-center justify-between px-3 py-2 text-[11px] font-mono">
             <span className="text-text-tertiary">{g.label}</span>
-            <span className={g.ok ? "text-signal-green" : "text-signal-red"}>
+            <span className={g.ok ? "text-text-tertiary" : "text-text-tertiary"}>
               {g.ok ? "✓" : "✗"} {g.val}
             </span>
           </div>
@@ -496,15 +483,15 @@ function RiskViz() {
 function ThreadViz() {
   const items = [
     { tag: "FRESH",      text: "Best L/S in regional banks?",            color: "text-text-quaternary" },
-    { tag: "DRILLDOWN",  text: "Capital position on MTB?",               color: "text-accent" },
-    { tag: "RISK CHECK", text: "Stress at +100bp on the 10Y",            color: "text-accent" },
-    { tag: "VALIDATION", text: "Challenge the FITB bull case",           color: "text-accent" },
+    { tag: "DRILLDOWN",  text: "Capital position on MTB?",               color: "text-text-tertiary" },
+    { tag: "RISK CHECK", text: "Stress at +100bp on the 10Y",            color: "text-text-tertiary" },
+    { tag: "VALIDATION", text: "Challenge the FITB bull case",           color: "text-text-tertiary" },
   ];
   return (
-    <div className="rounded-md border border-border-primary bg-bg-primary/60 overflow-hidden">
+    <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
         <span>THREAD · 4 MESSAGES</span>
-        <span className="text-signal-green">● ACTIVE</span>
+        <span className="text-text-tertiary">● ACTIVE</span>
       </div>
       <div className="divide-y divide-border-primary/40">
         {items.map((m, i) => (
@@ -526,15 +513,11 @@ function ThreadViz() {
 function IntelligenceLayer() {
   return (
     <section id="intelligence" className="relative border-b border-border-primary/60 overflow-hidden">
-      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-        <div className="absolute top-1/3 left-1/4 w-[32rem] h-[32rem] rounded-full bg-accent/[0.05] blur-[120px]" />
-        <div className="absolute bottom-0 right-1/4 w-[32rem] h-[32rem] rounded-full bg-signal-green/[0.04] blur-[120px]" />
-      </div>
 
       <div className="max-w-[1280px] mx-auto px-6 py-24 relative">
         <div className="text-center mb-20 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
-            <span className="text-accent">///</span> INTELLIGENCE LAYER
+            <span className="text-text-tertiary">///</span> INTELLIGENCE LAYER
           </p>
           <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
             Reasoning meets math.
@@ -551,7 +534,7 @@ function IntelligenceLayer() {
           {/* Left rail — the dual-engine badges */}
           <div>
             <div className="space-y-3">
-              <div className="rounded-md border border-border-primary bg-bg-surface px-5 py-4">
+              <div className="rounded-sm border border-border-primary bg-bg-surface px-5 py-4">
                 <div className="flex items-center gap-2.5 mb-2">
                   <span className="w-1.5 h-1.5 rounded-full bg-accent" />
                   <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary">PROBABILISTIC</p>
@@ -560,9 +543,9 @@ function IntelligenceLayer() {
                   Reads the filings, frames the question, drafts a thesis with you.
                 </p>
               </div>
-              <div className="rounded-md border border-border-primary bg-bg-surface px-5 py-4">
+              <div className="rounded-sm border border-border-primary bg-bg-surface px-5 py-4">
                 <div className="flex items-center gap-2.5 mb-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-signal-green" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary" />
                   <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary">DETERMINISTIC</p>
                 </div>
                 <p className="text-[13px] text-text-secondary leading-relaxed">
@@ -605,33 +588,33 @@ function IntelligenceVisual() {
   const PILL_H = 42;
 
   return (
-    <div className="relative aspect-[5/3] rounded-md border border-border-primary bg-bg-surface overflow-hidden">
-      <div className="absolute inset-0 grid-bg opacity-30" />
+    <div className="relative aspect-[5/3] rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
+      <div className="absolute inset-0 grid-bg opacity-[0.10]" />
       <svg viewBox="0 0 500 300" className="w-full h-full relative">
         <defs>
           <radialGradient id="glyph-blue" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.78" />
-            <stop offset="55%" stopColor="#3b82f6" stopOpacity="0.10" />
-            <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
+            <stop offset="0%" stopColor="#a1a1aa" stopOpacity="0.78" />
+            <stop offset="55%" stopColor="#a1a1aa" stopOpacity="0.10" />
+            <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="glyph-green" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#10b981" stopOpacity="0.78" />
-            <stop offset="55%" stopColor="#10b981" stopOpacity="0.10" />
-            <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+            <stop offset="0%" stopColor="#a1a1aa" stopOpacity="0.78" />
+            <stop offset="55%" stopColor="#a1a1aa" stopOpacity="0.10" />
+            <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" />
           </radialGradient>
           {/* Horizontal flow gradient: blue → neutral → green, edges fade. */}
           <linearGradient id="flow-stroke" x1="0%" y1="50%" x2="100%" y2="50%">
-            <stop offset="0%"   stopColor="#3b82f6" stopOpacity="0" />
-            <stop offset="22%"  stopColor="#3b82f6" stopOpacity="0.55" />
+            <stop offset="0%"   stopColor="#a1a1aa" stopOpacity="0" />
+            <stop offset="22%"  stopColor="#a1a1aa" stopOpacity="0.55" />
             <stop offset="50%"  stopColor="#a1a1aa" stopOpacity="0.38" />
-            <stop offset="78%"  stopColor="#10b981" stopOpacity="0.55" />
-            <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+            <stop offset="78%"  stopColor="#a1a1aa" stopOpacity="0.55" />
+            <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" />
           </linearGradient>
           {/* Vertical merge gradient — neutral at top fades into accent green
               as it enters the VERIFIED pill. */}
           <linearGradient id="merge-stroke" x1="50%" y1="0%" x2="50%" y2="100%">
             <stop offset="0%"   stopColor="#a1a1aa" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#10b981" stopOpacity="0.85" />
+            <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0.85" />
           </linearGradient>
         </defs>
 
@@ -650,11 +633,11 @@ function IntelligenceVisual() {
               const y = CY + Math.sin(a) * ORBIT_R;
               // Alternating opacity gives a faint probability-cloud feel.
               const op = i % 3 === 0 ? 0.55 : 0.95;
-              return <circle key={i} cx={x} cy={y} r="3" fill="#3b82f6" opacity={op} />;
+              return <circle key={i} cx={x} cy={y} r="3" fill="#a1a1aa" opacity={op} />;
             })}
           </g>
           <circle
-            cx={CX_L} cy={CY} r="6.5" fill="#3b82f6"
+            cx={CX_L} cy={CY} r="6.5" fill="#a1a1aa"
             className="constellation-core"
             style={{ transformOrigin: `${CX_L}px ${CY}px` }}
           />
@@ -672,7 +655,7 @@ function IntelligenceVisual() {
                 y={CY   + dy * GRID_STEP - SQ / 2}
                 width={SQ}
                 height={SQ}
-                fill="#10b981"
+                fill="#a1a1aa"
                 opacity={dx === 0 && dy === 0 ? 1 : 0.85}
                 className="constellation-node"
                 style={{ animationDelay: `${(dx + dy + 2) * 0.25}s` }}
@@ -680,7 +663,7 @@ function IntelligenceVisual() {
             ))
           )}
           <circle
-            cx={CX_R} cy={CY} r="5.5" fill="#10b981"
+            cx={CX_R} cy={CY} r="5.5" fill="#a1a1aa"
             className="constellation-core"
             style={{ transformOrigin: `${CX_R}px ${CY}px` }}
           />
@@ -724,7 +707,7 @@ function IntelligenceVisual() {
         <g transform={`translate(250, ${PILL_Y + PILL_H / 2 + 4})`} textAnchor="middle">
           <text
             x="0" y="0"
-            fill="#10b981"
+            fill="#a1a1aa"
             fontSize="11"
             fontFamily="ui-monospace, monospace"
             letterSpacing="0.16em"
@@ -754,7 +737,7 @@ function SourceLedger() {
       <div className="max-w-[1280px] mx-auto px-6 py-24">
         <div className="text-center mb-20 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
-            <span className="text-accent">///</span> SOURCE LEDGER
+            <span className="text-text-tertiary">///</span> SOURCE LEDGER
           </p>
           <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
             Every claim comes with a receipt.
@@ -767,7 +750,7 @@ function SourceLedger() {
           </p>
         </div>
 
-        <div className="max-w-[760px] mx-auto rounded-md border border-border-primary bg-bg-surface overflow-hidden">
+        <div className="max-w-[760px] mx-auto rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
           <div className="px-4 py-3 border-b border-border-primary flex items-center justify-between">
             <span className="text-[10px] font-mono tracking-wider text-text-tertiary">SOURCE LEDGER</span>
             <span className="text-[10px] font-mono text-text-quaternary">22 ENTRIES</span>
@@ -778,7 +761,7 @@ function SourceLedger() {
                 key={s.id}
                 className="grid grid-cols-[110px_1fr_auto] items-center gap-4 px-4 py-3 hover:bg-bg-elevated/40 transition-colors"
               >
-                <span className="text-[10px] font-mono tracking-wider text-accent bg-accent/10 border border-accent/20 px-2 py-0.5 rounded text-center">
+                <span className="text-[10px] font-mono tracking-wider text-text-tertiary bg-accent/10 border border-accent/20 px-2 py-0.5 rounded text-center">
                   {s.kind}
                 </span>
                 <span className="text-[12px] font-mono text-text-secondary truncate">{s.id}</span>
@@ -788,7 +771,7 @@ function SourceLedger() {
           </div>
           <div className="px-4 py-2.5 border-t border-border-primary flex items-center justify-between text-[10px] font-mono text-text-quaternary">
             <span>+ 17 MORE</span>
-            <span className="text-signal-green">● ALL VERIFIED</span>
+            <span className="text-text-tertiary">● ALL VERIFIED</span>
           </div>
         </div>
       </div>
@@ -802,13 +785,10 @@ function SourceLedger() {
 function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
   return (
     <section className="relative overflow-hidden">
-      <div className="absolute inset-0 grid-bg opacity-30" aria-hidden="true" />
-      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[48rem] h-[24rem] bg-accent/[0.08] blur-[120px] rounded-full" />
-      </div>
+      <div className="absolute inset-0 grid-bg opacity-[0.08]" aria-hidden="true" />
       <div className="max-w-[920px] mx-auto px-6 py-24 text-center relative">
         <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-6">
-          <span className="text-accent">///</span> READY WHEN YOU ARE
+          <span className="text-text-tertiary">///</span> READY WHEN YOU ARE
         </p>
         <h2 className="font-display text-[34px] sm:text-[46px] font-semibold tracking-[-0.01em] leading-[1.08] mb-7">
           Your next memo is ten
@@ -822,14 +802,14 @@ function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
         {isSignedIn ? (
           <Link
             href="/dashboard"
-            className="inline-block px-6 py-3 rounded-md bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
+            className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
           >
             Go to dashboard
           </Link>
         ) : (
           <Link
             href="/sign-up"
-            className="inline-block px-6 py-3 rounded-md bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
+            className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
           >
             Get started
           </Link>

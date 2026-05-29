@@ -43,6 +43,12 @@ body {
   color: var(--text-primary);
 }
 
+/* Editorial serif on display headings across the board (per direction).
+   Major headings only (h1/h2) so dense UI labels stay on the grotesque. */
+h1, h2 {
+  font-family: var(--font-display);
+}
+
 ::selection {
   background: rgba(59, 130, 246, 0.3);
 }
