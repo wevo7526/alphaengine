@@ -23,7 +23,9 @@ export interface DeskActivity {
     | "tool_error"
     | "agent_thinking"
     | "risk_gate"
-    | "decision";
+    | "decision"
+    | "nlp_signal"
+    | "provenance";
   desk: string;
   agent?: string;
   tool?: string;
@@ -38,6 +40,17 @@ export interface DeskActivity {
   confidence?: number;
   duration_ms?: number;
   timestamp: number;
+  // Phase 2 NLP signal events
+  ticker?: string;
+  signal?: string;
+  direction?: string;
+  value?: number;
+  model?: string;
+  // Phase 1 provenance event
+  fact_sheet_entries?: number;
+  citations?: number;
+  verification?: string;
+  coverage_pct?: number;
 }
 
 export interface DeskState {
@@ -152,6 +165,17 @@ export function useAnalysis() {
             confidence: event.confidence as number,
             duration_ms: event.duration_ms as number,
             timestamp: (event.timestamp as number) || Date.now() / 1000,
+            // Phase 2 NLP signal fields
+            ticker: event.ticker as string,
+            signal: event.signal as string,
+            direction: event.direction as string,
+            value: event.value as number,
+            model: event.model as string,
+            // Phase 1 provenance fields
+            fact_sheet_entries: event.fact_sheet_entries as number,
+            citations: event.citations as number,
+            verification: event.verification as string,
+            coverage_pct: event.coverage_pct as number,
           };
 
           // Merge tool_result into preceding tool_call with same tool name

@@ -86,6 +86,50 @@ function IconChevron({ open }: { open: boolean }) {
 function ActivityRow({ activity }: { activity: DeskActivity }) {
   const { type, tool, args_summary, result_summary, text, error, approved, reasons, decision, reason } = activity;
 
+  // Phase 2 — an NLP signal extracted from a filing / transcript / 8-K.
+  if (type === "nlp_signal") {
+    const dir = (activity.direction || "neutral").toLowerCase();
+    const color = dir === "bullish" ? "text-signal-green" : dir === "bearish" ? "text-signal-red" : "text-signal-yellow";
+    return (
+      <div className="flex items-start gap-2 py-1" style={{ animation: "fade-in 0.25s ease-out" }}>
+        <div className="mt-1 text-accent"><IconTool /></div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="text-[11px] font-mono text-text-secondary">{activity.signal}</span>
+            <span className="text-[10px] font-mono text-text-quaternary">{activity.ticker}</span>
+            <span className={`text-[10px] font-medium ${color}`}>{dir}</span>
+          </div>
+          <p className="text-[11px] text-text-tertiary mt-0.5">
+            strength {typeof activity.value === "number" ? activity.value.toFixed(2) : "—"}
+            {typeof activity.confidence === "number" ? ` · conf ${activity.confidence.toFixed(2)}` : ""}
+            {activity.model ? ` · ${activity.model}` : ""}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // Phase 1 — provenance summary: Fact Sheet built + citations resolved.
+  if (type === "provenance") {
+    const v = (activity.verification || "unverified").toLowerCase();
+    const color = v === "verified" ? "text-signal-green" : v === "partial" ? "text-signal-yellow" : "text-text-quaternary";
+    return (
+      <div className="flex items-start gap-2 py-1" style={{ animation: "fade-in 0.25s ease-out" }}>
+        <div className={`mt-1 ${color}`}><IconShield /></div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <span className="text-[11px] font-medium text-text-secondary">PROVENANCE</span>
+            <span className={`text-[10px] font-medium uppercase ${color}`}>{v}</span>
+          </div>
+          <p className="text-[11px] text-text-tertiary mt-0.5">
+            {activity.fact_sheet_entries ?? 0} receipts · {activity.citations ?? 0} citations
+            {typeof activity.coverage_pct === "number" ? ` · ${activity.coverage_pct}% coverage` : ""}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (type === "tool_call" || type === "tool_result") {
     const hasResult = !!result_summary;
     return (
