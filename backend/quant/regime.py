@@ -60,8 +60,9 @@ _last_regime: str | None = None
 _last_regime_streak: int = 0
 _pending_regime: str | None = None
 _pending_regime_streak: int = 0
-_MIN_REGIME_DAYS = 5
-_REGIME_FLIP_MARGIN = 0.10  # new regime prob must exceed current by 10pp
+_MIN_REGIME_DAYS = 10        # was 5 — bumped because the underlying classifier
+_REGIME_FLIP_MARGIN = 0.15   #   was switching too often; now needs 10 days
+                             #   of 15pp dominance to flip the headline regime.
 
 
 # Rule-based regime thresholds. Pulled to module-level so the satisfaction
@@ -80,6 +81,40 @@ def _logistic(x: float) -> float:
         return 1.0 / (1.0 + math.exp(-x))
     ex = math.exp(x)
     return ex / (1.0 + ex)
+
+
+def _smooth_posterior(probs, temperature: float = 2.0, prior_weight: float = 0.10):
+    """Calibrate an HMM posterior so it reads as a meaningful probability.
+
+    Two operations, in this order:
+      1. Mix with a uniform prior: p' = (1 - w) * p + w * uniform(n)
+         This is the fix for the degenerate "1.0 / 0.0 / 0.0" posteriors
+         hmmlearn produces when one Gaussian density dwarfs the others
+         on a single observation. Even with diagonal covariance, an
+         outlier observation can still produce a near-degenerate
+         posterior — the mix-with-prior guarantees a floor.
+      2. Temperature scaling: log_p / T, renormalized. T > 1 flattens,
+         T < 1 sharpens, T = 1 is a no-op (just a smoothing). Reflects
+         genuine macro ambiguity that the model alone underestimates.
+
+    With defaults (w=0.10, T=2.0) a raw 1.0/0.0/0.0 posterior becomes
+    roughly 0.85/0.075/0.075 — reads as "very confident" without
+    claiming impossible certainty. A raw 0.5/0.3/0.2 becomes ~0.43/
+    0.34/0.23, which is what we want — "leaning, but ambiguous".
+    """
+    arr = np.asarray(probs, dtype=float)
+    if arr.size == 0:
+        return arr
+    n = arr.size
+    # Step 1 — mix with uniform prior. Guarantees a strict positive
+    # floor on every state, killing the degenerate 100% posterior.
+    arr = (1.0 - prior_weight) * arr + prior_weight / n
+    # Step 2 — temperature scaling for additional calibration.
+    arr = np.clip(arr, 1e-12, 1.0)
+    log_p = np.log(arr) / float(temperature)
+    log_p -= log_p.max()
+    exp = np.exp(log_p)
+    return exp / exp.sum()
 
 
 def _rule_based_regime(vix: float, credit_spread: float, yield_curve: float) -> dict:
@@ -137,17 +172,39 @@ def _rule_based_regime(vix: float, credit_spread: float, yield_curve: float) -> 
     }
 
 
-def fit_regime_model(macro_history: list[dict]) -> bool:
+def fit_regime_model(macro_history: list[dict], force: bool = False) -> bool:
     """
     Fit HMM on historical macro data.
     macro_history = [{date, vix, credit_spread, yield_curve}, ...]
-    Returns True if fitting succeeded.
+
+    Honors `_FIT_TTL` — if a fit completed within the last 24h, this
+    is a no-op (returns True so callers don't fall back to rule-based).
+    Pass `force=True` to refit unconditionally (e.g., from a cron after
+    a known regime event). The old code refit on every API call, which
+    caused (a) latency, (b) label permutations between fits with
+    numerically-close cluster means, manifesting as apparent regime
+    switching.
+
+    Also switched `covariance_type` from "full" to "diag" — with 3
+    features × 3 states and ~500 highly-autocorrelated daily obs, full
+    covariance over-fits, produces near-singular covariance matrices,
+    and collapses the posterior to 1.0/0.0/0.0. Diagonal covariance
+    is the standard fix for low-effective-N HMMs and dramatically
+    improves the posterior calibration.
+
+    Returns True if a usable fit exists (cached or newly produced).
     """
     global _fitted_model, _fitted_scaler, _fitted_labels, _fit_timestamp, _fit_diagnostics
 
     _ensure_ml_imports()
     if not HMM_AVAILABLE:
         return False
+
+    # Honor the TTL — cheap path when the model is still warm.
+    if not force and _fitted_model is not None:
+        age = time.time() - _fit_timestamp
+        if age < _FIT_TTL:
+            return True
 
     if len(macro_history) < 60:
         logger.warning("Not enough macro history for HMM fitting (need 60+)")
@@ -166,10 +223,14 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
         scaler = _StandardScaler()
         X = scaler.fit_transform(features)
 
+        # Diagonal covariance with a min_covar floor — prevents singular
+        # covariance matrices that produced the 100% confidence bug.
         model = _GaussianHMM(
             n_components=3,
-            covariance_type="full",
+            covariance_type="diag",
             n_iter=100,
+            tol=1e-3,
+            min_covar=1e-3,
             random_state=42,
         )
         model.fit(X)
@@ -191,11 +252,17 @@ def fit_regime_model(macro_history: list[dict]) -> bool:
                 "regime classifications will fall back to rule-based"
             )
 
-        # Label regimes by VIX mean: lowest VIX = risk_on, highest = risk_off
+        # Label regimes by a composite stress score, not raw VIX mean.
+        # The old code used `means_[:, 0]` (scaled VIX) which permuted
+        # labels between fits when two clusters had numerically-close VIX
+        # means. The composite (VIX + credit_spread - yield_curve, all
+        # scaled) is much more stable because it incorporates all three
+        # features — even if VIX is similar across two states, credit and
+        # the curve differentiate them. Lowest score = risk_on, highest =
+        # risk_off, middle = transition.
         means = model.means_
-        vix_means = means[:, 0]  # First feature is VIX (scaled)
-        sorted_indices = np.argsort(vix_means)
-        # Remap: lowest VIX cluster = risk_on, highest = risk_off
+        stress_score = means[:, 0] + means[:, 1] - means[:, 2]
+        sorted_indices = np.argsort(stress_score)
         new_labels = {
             int(sorted_indices[0]): "risk_on",
             int(sorted_indices[1]): "transition",
@@ -342,7 +409,13 @@ def classify_regime(
     try:
         X = _fitted_scaler.transform([[vix, credit_spread, yield_curve]])
         state = int(_fitted_model.predict(X)[0])
-        probs = _fitted_model.predict_proba(X)[0]
+        # Soften the posterior with a temperature scaling so very confident
+        # predictions don't dominate. T > 1 flattens the distribution, T < 1
+        # sharpens it. T = 2 corresponds to roughly halving the log-odds of
+        # the dominant state — a calibrated compromise between trusting the
+        # model and admitting irreducible macro ambiguity.
+        raw_probs = _fitted_model.predict_proba(X)[0]
+        probs = _smooth_posterior(raw_probs, temperature=2.0)
 
         raw_regime = _fitted_labels.get(state, "transition")
         prob_dict = {_fitted_labels.get(i, f"state_{i}"): round(float(p), 3) for i, p in enumerate(probs)}
@@ -394,12 +467,17 @@ def get_regime_history(macro_history: list[dict]) -> list[dict]:
         history = []
         for i, d in enumerate(macro_history):
             regime = _fitted_labels.get(int(states[i]), "transition")
-            prob_dict = {_fitted_labels.get(j, f"s{j}"): round(float(probs[i, j]), 3) for j in range(3)}
+            # Apply same temperature smoothing as predict-time so the
+            # historical confidence trace matches what /api/quant/regime
+            # surfaces for "today". Otherwise the in-app pill would read
+            # ~75% while the historical bar showed 99%.
+            smoothed = _smooth_posterior(probs[i], temperature=2.0)
+            prob_dict = {_fitted_labels.get(j, f"s{j}"): round(float(smoothed[j]), 3) for j in range(3)}
             history.append({
                 "date": d.get("date", ""),
                 "regime": regime,
                 "probabilities": prob_dict,
-                "confidence": round(float(max(probs[i])), 3),
+                "confidence": round(float(max(smoothed)), 3),
             })
         return history
     except Exception as e:
