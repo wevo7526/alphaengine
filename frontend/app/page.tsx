@@ -107,15 +107,16 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
           </div>
 
           <h1 className="text-[44px] sm:text-[56px] lg:text-[64px] font-semibold tracking-[-0.02em] leading-[1.02] mb-8">
-            A research partner
+            Find the names
             <br />
-            for your investment desk.
+            the market hasn&apos;t.
           </h1>
 
           <p className="text-[16px] text-text-secondary leading-relaxed mb-11 max-w-md">
-            Bring us your toughest questions and we&apos;ll help you work
-            through them in minutes. Every claim comes with its source,
-            and sensible risk checks are built into every trade idea.
+            Ask in plain language. Alpha Engine scans the live market for
+            under-covered names, writes a memo where every number traces to
+            its source, and tells you &mdash; with a deflated Sharpe and
+            calibration &mdash; when an idea is probably just noise.
           </p>
 
           <div className="flex items-center gap-5 flex-wrap">
@@ -146,8 +147,8 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
               <span className="ml-auto text-[9px]">~10 min</span>
             </div>
             <div className="px-4 py-3 font-mono text-[12px] text-text-secondary leading-relaxed">
-              <span className="text-accent">{">"}</span> long/short setup in
-              regional banks ahead of FOMC<span className="terminal-cursor text-accent" />
+              <span className="text-accent">{">"}</span> under-covered mid-cap
+              industrials that can beat the S&amp;P<span className="terminal-cursor text-accent" />
             </div>
           </div>
         </div>
@@ -168,10 +169,10 @@ function TaglineStrip() {
           <span className="text-accent">///</span> HOW IT FEELS
         </p>
         <p className="text-[28px] sm:text-[34px] font-semibold tracking-[-0.02em] leading-[1.15] text-text-primary">
-          Made for the way your desk really works.
+          Coverage of a whole desk. The rigor of a quant.
           <br className="hidden sm:block" />
           <span className="text-text-tertiary">
-            {" "}Ask in plain language, and get back work that holds up when you walk it into the next meeting.
+            {" "}It mines more names than a small team can cover, sources every claim, and flags the ideas that are probably noise.
           </span>
         </p>
       </div>
@@ -197,32 +198,31 @@ function StatusStrip() {
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-md overflow-hidden">
           <StatPanel
+            label="NAMES SCANNED"
+            value="50+"
+            unit="live"
+            sub="Real-time market scan, per query"
+            mini={<MiniDots />}
+          />
+          <StatPanel
+            label="CLAIMS CITED"
+            value="100"
+            unit="%"
+            sub="Every number traces to a source"
+            mini={<MiniSparkline kind="up" />}
+          />
+          <StatPanel
+            label="NOISE-TESTED"
+            value="DSR"
+            sub="Deflated Sharpe on every backtest"
+            mini={<MiniBars />}
+          />
+          <StatPanel
             label="MEMO TURNAROUND"
             value="~10"
             unit="min"
             sub="From query to final memo"
             mini={<MiniSparkline kind="flat" />}
-          />
-          <StatPanel
-            label="SOURCES PER MEMO"
-            value="22"
-            unit="avg"
-            sub="Every claim is cited"
-            mini={<MiniSparkline kind="up" />}
-          />
-          <StatPanel
-            label="RISK GATES"
-            value="6"
-            unit="active"
-            sub="Pre-trade controls"
-            mini={<MiniBars />}
-          />
-          <StatPanel
-            label="DISCOVERY SCREENS"
-            value="5"
-            unit="live"
-            sub="Beyond consensus names"
-            mini={<MiniDots />}
           />
         </div>
       </div>
@@ -332,22 +332,23 @@ function ProductShowcase() {
             Four things you&apos;ll reach for, day in and day out.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            We built each of these because PMs kept asking for them. All four
-            are live today, waiting whenever you need them.
+            Scan the market, pressure-test the edge, size the risk, and keep
+            the thread going. All four are live today, waiting whenever you
+            need them.
           </p>
         </div>
 
         <div className="max-w-[1040px] mx-auto space-y-6">
           <ShowcaseCard
             tag="01 / DISCOVERY"
-            title="Surface names you might have missed."
-            sub="Five always-on screens quietly watch for insider buying clusters, smart-money initiations, post-earnings drift, fresh 52-week lows, and the quiet beneficiaries of themes already moving."
+            title="Scan the whole market, not a watchlist."
+            sub="Every query runs a live scan across sectors, size, and style — surfacing dozens of under-covered names ranked on merit, never a hardcoded list. Insider clusters, fund initiations, post-earnings drift, and 52-week-low setups layer on top."
             visual={<DiscoveryViz />}
           />
           <ShowcaseCard
-            tag="02 / TRACK RECORD"
-            title="See how your calls actually play out."
-            sub="Every signal is scored at 1, 5, and 20 days out, so you can watch your conviction translate to outcomes and see how your edge holds up over time."
+            tag="02 / RIGOR"
+            title="Know when it&apos;s edge, and when it&apos;s noise."
+            sub="Conviction is a decomposable, calibrated score — not a vibe. Signals are graded at 1/5/20 days against realized outcomes (Brier + reliability), and every backtest shows a deflated Sharpe, corrected for how many ideas were tried — never the flattering raw number."
             visual={<TrackRecordViz />}
           />
           <ShowcaseCard
@@ -539,10 +540,11 @@ function IntelligenceLayer() {
             Reasoning meets math.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            Two engines work alongside each other. One reads, frames, and
-            thinks the question through with you. The other quietly runs the
-            math behind every claim. The result feels fast, and stands up to
-            scrutiny.
+            The deterministic engine computes every figure and binds it to a
+            source. The language engine only arranges those pre-sourced facts
+            into prose &mdash; it never originates a number &mdash; and a
+            validator rejects any claim it can&apos;t trace. Agents propose,
+            math disposes, you decide.
           </p>
         </div>
 
@@ -760,8 +762,9 @@ function SourceLedger() {
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
             Each memo carries a complete ledger of the filings, quotes, and
-            data points that shaped it. Open any source. Check any number.
-            Years from now, it still works.
+            computed figures that shaped it &mdash; and a validator refuses to
+            ship a number it can&apos;t trace. Open any source, check any
+            figure. Years from now, it still works.
           </p>
         </div>
 
