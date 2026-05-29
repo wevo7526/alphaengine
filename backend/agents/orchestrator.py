@@ -364,9 +364,11 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     plan_dict_for_prices = state.get("plan_data") or {}
     plan_tickers = plan_dict_for_prices.get("tickers", []) or []
     secondary = plan_dict_for_prices.get("secondary_universe", []) or []
-    # Cap secondary at 8 so we don't blow the API budget on a 12-name pool
-    # the Strategist may not even draw from.
-    all_pricing = list(dict.fromkeys(list(plan_tickers) + list(secondary[:8])))
+    # Consider a WIDE field of under-covered names, not just the mega-caps.
+    # Prices are cached (1h) so the cost amortizes across queries.
+    from config import settings as _uni_settings
+    _sec_cap = max(0, int(_uni_settings.STRATEGIST_PRICING_CAP) - len(plan_tickers))
+    all_pricing = list(dict.fromkeys(list(plan_tickers) + list(secondary[:_sec_cap])))
     live_prices = await _fetch_live_prices_for(all_pricing)
     # Stash for the Phase 1 compute stage (Fact Sheet) in the synthesizer.
     state["live_prices"] = live_prices
@@ -496,9 +498,11 @@ async def _fetch_live_prices_for(tickers: list[str]) -> dict[str, float]:
         return {}
     from data.market_client import MarketDataClient
     from concurrent.futures import ThreadPoolExecutor
+    from config import settings as _px_settings
 
     mc = MarketDataClient()
-    capped = list(dict.fromkeys((t or "").strip().upper() for t in tickers if t))[:12]
+    _cap = int(getattr(_px_settings, "STRATEGIST_PRICING_CAP", 50))
+    capped = list(dict.fromkeys((t or "").strip().upper() for t in tickers if t))[:_cap]
 
     def _one(tk: str) -> tuple[str, float | None]:
         try:
@@ -512,16 +516,19 @@ async def _fetch_live_prices_for(tickers: list[str]) -> dict[str, float]:
 
     loop = asyncio.get_running_loop()
 
+    _workers = int(getattr(_px_settings, "PRICING_MAX_WORKERS", 12))
+
     def _gather() -> dict[str, float]:
         out: dict[str, float] = {}
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=_workers) as pool:
             for tk, px in pool.map(_one, capped):
                 if px is not None:
                     out[tk] = px
         return out
 
     try:
-        return await asyncio.wait_for(loop.run_in_executor(None, _gather), timeout=15.0)
+        _timeout = float(getattr(_px_settings, "PRICING_TIMEOUT_S", 30.0))
+        return await asyncio.wait_for(loop.run_in_executor(None, _gather), timeout=_timeout)
     except asyncio.TimeoutError:
         logger.warning("[orchestrator] live price prefetch timed out — Strategist runs without LIVE PRICES block")
         return {}

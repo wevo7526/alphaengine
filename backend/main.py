@@ -3233,7 +3233,9 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
             # Pre-fetch prices for primary + top 8 secondary so the Strategist
             # has anchoring data for every candidate it might pick from.
             primary_tk = list(plan_data.get("tickers", []) or [])
-            secondary_tk = list((plan_data.get("secondary_universe", []) or [])[:8])
+            # Wide field of under-covered names (cached prices amortize the cost).
+            _sec_cap = max(0, int(settings.STRATEGIST_PRICING_CAP) - len(primary_tk))
+            secondary_tk = list((plan_data.get("secondary_universe", []) or [])[:_sec_cap])
             all_pricing = list(dict.fromkeys(primary_tk + secondary_tk))
             live_prices_for_strategy = await _fetch_live_prices_for(all_pricing)
         except Exception as e:

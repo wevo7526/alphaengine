@@ -51,6 +51,16 @@ class Settings(BaseSettings):
     # sec-api. OFF by default so dev doesn't spend Firecrawl credits.
     TRANSCRIPT_NLP_ENABLED: bool = False
 
+    # Universe breadth — how many non-mega-cap candidates the desk actually
+    # considers. Raised from the old 8/12 so the Strategist evaluates a wide
+    # field of under-covered mid/small caps instead of coalescing on big names.
+    # Prices are cached (1h) so repeated queries are cheap; first run fetches
+    # up to STRATEGIST_PRICING_CAP quotes in parallel.
+    SECONDARY_UNIVERSE_CAP: int = 50      # candidates the Interpreter surfaces
+    STRATEGIST_PRICING_CAP: int = 50      # candidates priced + handed to the Strategist
+    PRICING_MAX_WORKERS: int = 12
+    PRICING_TIMEOUT_S: float = 30.0
+
     # Data Sources
     SEC_API_KEY: str = ""
     FRED_API_KEY: str = ""

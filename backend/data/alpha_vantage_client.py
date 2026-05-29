@@ -81,6 +81,16 @@ class AlphaVantageClient:
         self._cache.set(cache_key, data)
         return data
 
+    def get_top_movers(self) -> dict:
+        """TOP_GAINERS_LOSERS — live top gainers / losers / most-actively-traded.
+
+        One call, cached 4h (via _fetch), so it's budget-safe against the
+        25/day free tier. A live market-wide discovery surface: returns
+        {top_gainers, top_losers, most_actively_traded} each a list of
+        {ticker, price, change_amount, change_percentage, volume}.
+        """
+        return self._fetch({"function": "TOP_GAINERS_LOSERS"})
+
     def get_rsi(self, ticker: str, period: int = 14) -> dict:
         return self._fetch({
             "function": "RSI", "symbol": ticker, "interval": "daily",
@@ -112,6 +122,9 @@ class AlphaVantageClient:
         })
 
     # ── Async wrappers ────────────────────────────────────────────
+
+    async def aget_top_movers(self) -> dict:
+        return await run_sync(self.get_top_movers)
 
     async def aget_rsi(self, ticker: str, period: int = 14) -> dict:
         return await run_sync(self.get_rsi, ticker, period)

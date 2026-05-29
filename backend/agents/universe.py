@@ -275,7 +275,7 @@ SECONDARY_BY_SECTOR: dict[str, list[str]] = {
 # that doesn't map cleanly to one sector (e.g., "AI capex" spans semis +
 # software + utilities for power; "energy transition" spans materials + utilities + industrials).
 SECONDARY_BY_THEME: dict[str, list[str]] = {
-    "ai_capex": ["VRT", "ETN", "EATON", "PWR", "DELL", "ANET", "VST", "TLN", "CEG", "NRG", "SMCI", "MU"],
+    "ai_capex": ["VRT", "ETN", "PWR", "DELL", "ANET", "VST", "TLN", "CEG", "NRG", "SMCI", "MU"],
     "ai_inference": ["MRVL", "AVGO", "QCOM", "AMD", "MU", "VRT", "ANET", "CRWD", "PLTR"],
     "ai_software": ["PLTR", "SNOW", "DDOG", "NET", "CRWD", "PANW", "MDB", "S", "AI"],
     "energy_transition": ["VST", "TLN", "CEG", "NEE", "FSLR", "ENPH", "ALB", "MP", "TECK", "URA", "CCJ"],
@@ -336,5 +336,22 @@ def secondary_candidates(
                 if len(out) >= cap:
                     return out
                 _add(tk)
+
+    # Broaden: if the query's sectors/themes didn't fill the cap, pull from the
+    # rest of the curated pool so the desk still evaluates a wide field of
+    # under-covered names (the whole point — don't coalesce on a handful).
+    # Round-robin across remaining sector buckets so the fill is diversified
+    # rather than dumping one sector's entire list.
+    if len(out) < cap:
+        remaining = [SECONDARY_BY_SECTOR[s] for s in SECONDARY_BY_SECTOR]
+        remaining += [SECONDARY_BY_THEME[t] for t in SECONDARY_BY_THEME]
+        i = 0
+        while len(out) < cap and any(i < len(b) for b in remaining):
+            for bucket in remaining:
+                if i < len(bucket):
+                    _add(bucket[i])
+                    if len(out) >= cap:
+                        break
+            i += 1
 
     return out

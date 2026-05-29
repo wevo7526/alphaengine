@@ -372,35 +372,39 @@ def screen_secondary_universe(
     sectors: str = "",
     themes: str = "",
     exclude: str = "",
-    cap: int = 12,
+    cap: int = 50,
 ) -> dict:
     """
-    Surface non-mega-cap CANDIDATES for trade ideas to break Mag7 monoculture.
+    SCAN THE LIVE MARKET for non-consensus candidates to break Mag7 monoculture.
 
-    Returns up to `cap` mid/small-cap or second-tier large-cap tickers from
-    the curated SECONDARY_BY_SECTOR + SECONDARY_BY_THEME pools. Mega-caps
-    (AAPL/MSFT/NVDA/etc.) are excluded automatically.
+    Runs real-time screeners (yfinance EquityQuery small/mid-cap scans by
+    sector + Alpha Vantage top-movers + predefined style screens) and returns
+    up to `cap` under-covered tickers with live facts (market cap, price,
+    sector). This is genuine market discovery — NOT a filter over a hardcoded
+    list. Mega-caps and excluded names are dropped automatically.
 
     Args:
-      sectors: comma-separated GICS sector names (e.g. "Technology,Healthcare")
-      themes:  comma-separated theme keys (e.g. "ai_capex,obesity_glp1,cybersecurity")
+      sectors: comma-separated sector names (e.g. "Technology,Healthcare")
+      themes:  comma-separated style/theme keys (small_cap, momentum, value,
+               growth, contrarian, ...) — drives which predefined screens run
       exclude: comma-separated tickers to skip (typically the primary `tickers`)
-      cap: max candidates to return
+      cap: max candidates to return (default 50 — cast a wide net)
 
-    Use this BEFORE writing trade ideas. The hedge fund desk hires you to find
-    alpha — that means surfacing names the user hasn't heard of, not echoing
-    consensus mega-cap longs back to them.
+    Use this BEFORE writing trade ideas. The desk hires you to find alpha —
+    surface names the user hasn't heard of, not consensus mega-cap longs.
     """
-    from agents.universe import secondary_candidates
+    from data.market_screener import screen_market
     sec_list = [s.strip() for s in (sectors or "").split(",") if s.strip()]
-    theme_list = [t.strip() for t in (themes or "").split(",") if t.strip()]
+    style_list = [t.strip() for t in (themes or "").split(",") if t.strip()]
     excl = [e.strip().upper() for e in (exclude or "").split(",") if e.strip()]
-    candidates = secondary_candidates(sectors=sec_list, themes=theme_list, exclude=excl, cap=cap)
+    cands = screen_market(sectors=sec_list, styles=style_list, exclude=excl, cap=cap)
     return {
         "sectors_used": sec_list,
-        "themes_used": theme_list,
-        "candidates": candidates,
-        "count": len(candidates),
+        "styles_used": style_list,
+        "candidates": [c["ticker"] for c in cands],
+        "candidate_facts": cands[:cap],   # live market cap / price / sector
+        "count": len(cands),
+        "source": "live_market_scan",
     }
 
 

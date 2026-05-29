@@ -501,31 +501,45 @@ class QueryInterpreter:
         data["tickers"] = validated_tickers
         data["comparison_set"] = validated_comparison
 
-        # Server-side population of secondary_universe so the LLM doesn't have
-        # to know specific mid-cap tickers. We pull from the curated pool by
-        # the LLM-emitted sectors + themes, excluding anything already in
-        # the primary tickers + comparison_set.
+        # Server-side population of secondary_universe by SCANNING THE LIVE
+        # MARKET (yfinance + Alpha Vantage screeners) rather than filtering a
+        # hardcoded list — this is how the desk surfaces genuinely
+        # under-covered names. The curated pool is only a fallback (inside
+        # screen_market) for when the live screen is unavailable.
         try:
-            from agents.universe import secondary_candidates
+            from data.market_screener import screen_market_tickers
+            from config import settings as _qi_settings
             sectors = data.get("sectors") or []
-            # Theme keys can come in many forms; lower/snake them
-            raw_themes = data.get("themes") or []
-            theme_keys = []
-            for t in raw_themes:
-                key = (t or "").lower().strip().replace(" ", "_").replace("-", "_")
-                if key:
-                    theme_keys.append(key)
+            # Styles drive the predefined screens (small_cap / momentum / value
+            # / growth / contrarian). Pull from the plan's archetype + style
+            # labels + themes so the scan matches the requested character.
+            styles: list[str] = []
+            for src in (data.get("idea_archetype"), data.get("required_style_labels"), data.get("themes")):
+                for s in (src or []):
+                    key = (s or "").lower().strip().replace(" ", "_").replace("-", "_")
+                    if key:
+                        styles.append(key)
             exclude = list(validated_tickers) + list(validated_comparison)
-            secondary = secondary_candidates(
+            secondary = screen_market_tickers(
                 sectors=sectors,
-                themes=theme_keys,
+                styles=styles,
                 exclude=exclude,
-                cap=12,
+                cap=int(getattr(_qi_settings, "SECONDARY_UNIVERSE_CAP", 50)),
             )
             data["secondary_universe"] = secondary
+            logger.info("[query_interpreter] live market scan surfaced %d candidates", len(secondary))
         except Exception as e:
-            logger.debug(f"[query_interpreter] secondary universe population skipped: {e}")
-            data["secondary_universe"] = []
+            logger.warning(f"[query_interpreter] live market scan failed, using curated fallback: {e}")
+            try:
+                from agents.universe import secondary_candidates
+                data["secondary_universe"] = secondary_candidates(
+                    sectors=data.get("sectors") or [],
+                    themes=[(t or "").lower().replace(" ", "_") for t in (data.get("themes") or [])],
+                    exclude=list(validated_tickers) + list(validated_comparison),
+                    cap=50,
+                )
+            except Exception:
+                data["secondary_universe"] = []
 
         # Defaults for new fields if the LLM didn't emit them
         if "target_idea_count" not in data or not data.get("target_idea_count"):
