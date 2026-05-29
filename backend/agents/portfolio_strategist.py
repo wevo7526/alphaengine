@@ -755,23 +755,33 @@ class PortfolioStrategist(BaseAgent):
             if parts:
                 macro_block_strat = "\n=== MACRO BACKDROP ===\n  " + " · ".join(parts) + "\n"
 
-        # Secondary universe — non-mega-cap candidates the Research Analyst
-        # has surfaced. Strategist MUST draw from this list, not just primary.
+        # Discovery field — live-screened under-covered names. This is the
+        # PRIMARY alpha source: the desk's edge is finding what the market
+        # hasn't, so most ideas should come from here, selected on MERIT.
         secondary_block = ""
         if secondary_universe:
-            min_secondary = max(3, target_count // 3)  # at least 1/3 of ideas from secondary, min 3
+            # Majority of the slate from the discovery field — mega-caps are
+            # anchors/hedges/pair-legs, not the default longs.
+            min_secondary = max(3, (target_count * 3) // 5)  # ≥60% from discovery
+            # Annotate with live prices so they're concrete, rankable options
+            # (all discovery candidates are priced in the LIVE PRICES block).
+            priced = []
+            for tk in secondary_universe:
+                px = (live_prices or {}).get(tk)
+                priced.append(f"{tk} (${px:.2f})" if isinstance(px, (int, float)) and px > 0 else tk)
             secondary_block = (
-                f"\n=== SECONDARY UNIVERSE (non-mega-cap alpha candidates) ===\n"
-                f"  {', '.join(secondary_universe)}\n"
-                f"REQUIRED: at least {min_secondary} of your {target_count} trade ideas must come "
-                f"from this secondary list (or other non-mega-cap names supported by research). "
-                f"These secondaries are FIRST-CLASS trade ideas, not afterthoughts — the platform "
-                f"renders them in their own SECONDARIES section alongside the core trade ideas. "
-                f"Treat them with the same rigor: full thesis, entry/stop/target, catalysts, sizing. "
-                f"Tag each one with the appropriate `tier` (2 = mid-cap, 3 = small-cap, "
-                f"4 = special-situation) AND `market_cap_bucket` so the renderer can route it "
-                f"correctly. Use research.ticker_data to inform conviction; if a secondary name "
-                f"lacks research data, call get_current_price first then justify from public knowledge.\n"
+                f"\n=== DISCOVERY FIELD — your PRIMARY alpha source ({len(secondary_universe)} live-screened names) ===\n"
+                f"  {', '.join(priced)}\n"
+                f"These are real, under-covered names surfaced by a live market scan — exactly "
+                f"the field the desk is paid to mine. SELECT ON MERIT: rank the whole field by "
+                f"setup quality and conviction, and build your BEST ideas from it.\n"
+                f"REQUIRED: at least {min_secondary} of your {target_count} ideas must come from "
+                f"this discovery field. Mega-caps are ANCHORS/HEDGES/pair-legs only — never the "
+                f"default longs. A slate that is mostly mega-caps is a FAILURE of the mandate.\n"
+                f"Each discovery idea gets the same rigor as a core idea: full thesis, "
+                f"entry/stop/target (bracket its live price above), catalysts, sizing. Tag `tier` "
+                f"(2=mid-cap, 3=small-cap, 4=special-situation) AND `market_cap_bucket`. If a name "
+                f"lacks research data, justify from its live price + public knowledge.\n"
             )
 
         # Style coverage — every idea has style_label; required labels MUST appear

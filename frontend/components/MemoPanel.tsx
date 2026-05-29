@@ -498,6 +498,7 @@ function LineagePanel({ lineage }: { lineage: NonNullable<IntelligenceMemo["line
 
 export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete?: (id: string) => void }) {
   const [showFull, setShowFull] = useState(false);
+  const [showSources, setShowSources] = useState(false);
   const [enrichment, setEnrichment] = useState<EnrichmentData | null>(null);
   const [enrichLoading, setEnrichLoading] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -732,14 +733,8 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
         </div>
       </div>
 
-      {/* Lineage / Sources panel — bulk drill-in */}
-      {memo.lineage && memo.lineage.n_tool_calls > 0 && (
-        <LineagePanel lineage={memo.lineage} />
-      )}
-
-      {/* Numbered footnote index — targets for the inline [N] anchors in
-          the Full Analysis prose. Renders nothing when empty. */}
-      <CitationIndexPanel index={memo.citation_index} />
+      {/* Sources, citations + provenance now render at the BOTTOM, after the
+          Full Analysis, in a single collapsible section (see end of memo). */}
 
       {/* Key Findings */}
       {memo.key_findings?.length > 0 && (
@@ -1121,6 +1116,36 @@ export function MemoPanel({ memo, onDelete }: { memo: IntelligenceMemo; onDelete
                   open the source URL or jump to the CitationIndexPanel.
                   Falls back to raw text when memo has no citations. */}
               <ProseWithCitations text={memo.analysis} index={memo.citation_index} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Sources, Citations & Provenance — collapsible, at the very bottom
+          AFTER the full analysis. Combines the numbered citation index
+          (every receipt) and the bulk tool-call lineage. Renders nothing
+          when there's no provenance at all. */}
+      {((memo.citation_index && memo.citation_index.length > 0) ||
+        (memo.lineage && (memo.lineage.n_tool_calls ?? 0) > 0)) && (
+        <div className="rounded-md border border-border-primary bg-bg-surface overflow-hidden">
+          <button
+            onClick={() => setShowSources(!showSources)}
+            className="w-full px-4 py-2.5 text-left flex items-center justify-between border-b border-border-primary/60 hover:bg-bg-elevated/40 transition-colors"
+          >
+            <span className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">
+              <span className="text-accent">///</span> SOURCES &amp; CITATIONS
+              {memo.citation_index && memo.citation_index.length > 0 && (
+                <span className="ml-2 text-text-tertiary">{memo.citation_index.length} receipts</span>
+              )}
+            </span>
+            <span className="text-text-quaternary text-[13px]">{showSources ? "−" : "+"}</span>
+          </button>
+          {showSources && (
+            <div className="px-4 pb-4 pt-3 space-y-4" style={{ animation: "fade-in 0.3s ease-out" }}>
+              <CitationIndexPanel index={memo.citation_index} />
+              {memo.lineage && (memo.lineage.n_tool_calls ?? 0) > 0 && (
+                <LineagePanel lineage={memo.lineage} />
+              )}
             </div>
           )}
         </div>
