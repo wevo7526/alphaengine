@@ -44,3 +44,7 @@ vaderSentiment
 # PDF generation — pure Python, no system deps (no Cairo/Pango/WebKit)
 reportlab
 matplotlib
+
+# Tests
+pytest
+pytest-asyncio

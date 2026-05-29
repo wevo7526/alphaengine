@@ -205,6 +205,13 @@ class CIOSynthesizer:
         from infra.user_context import _format_user_context_block
         user_block = _format_user_context_block(context.get("user_context"))
 
+        # Phase 1 provenance — the Fact Sheet is the closed set of facts the
+        # memo may state as numbers, with [[ev:n]] citation guidance. Empty
+        # string when the provenance pipeline is disabled. A repair_note is
+        # appended on the auto-repair re-prompt to fix specific orphan numbers.
+        fact_sheet_block = context.get("fact_sheet_block") or ""
+        repair_note = context.get("repair_note") or ""
+
         user_prompt = (
             f"Query: {plan.get('query', '')}\n"
             f"Intent: {plan.get('intent', '')} | Tickers: {', '.join(plan.get('tickers', []))} | Themes: {', '.join(plan.get('themes', []))}\n"
@@ -212,6 +219,7 @@ class CIOSynthesizer:
             f"{plan_shape_block}"
             f"{macro_block}"
             f"=== RESEARCH ===\n{data_summary}\n"
+            f"{fact_sheet_block}"
             f"{sub_q_block}\n"
             f"=== RISK ===\nRegime: {risk.get('macro_regime', '?')} | Level: {risk.get('overall_risk_level', '?')}\n"
             f"{risk.get('risk_narrative', '')}\n{risk_lines}\n"
@@ -229,6 +237,7 @@ class CIOSynthesizer:
             f"marker like `[[src:market_price:AAPL@yfinance]]` or `[[src:fred_series:VIXCLS]]` — the "
             f"platform converts these to numbered footnotes. Markers are OPTIONAL; unresolved ones are "
             f"stripped. Prioritize producing the memo content over emitting markers."
+            f"{repair_note}"
         )
 
         try:

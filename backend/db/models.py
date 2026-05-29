@@ -163,6 +163,96 @@ class RegimeRecord(Base):
 
 
 # ============================================================
+# PROVENANCE LAYER (Build Plan Phase 1) — evidence receipts
+# ============================================================
+
+
+class EvidenceRecord(Base):
+    """A provenance receipt — the atomic unit of traceability.
+
+    Two kinds (Build Plan §1.1):
+      - kind='computed': a number the engine produced (correlation, VaR,
+        Sharpe, P/E, beta, IV skew, a conviction sub-score). Stores the
+        metric name, the value, the inputs, the formula/function reference,
+        and the upstream source(s).
+      - kind='source': a qualitative claim grounded in retrieved text
+        (filing language, news, transcript). Stores the source ref
+        (URL / EDGAR accession), the verbatim passage (≤ a few sentences),
+        and a content hash.
+
+    Deduplicated by `content_hash` (unique): the same datum fetched or
+    computed twice upserts to one row. This doubles as a persistent,
+    content-hash-keyed cache so re-running the same query reuses evidence
+    instead of re-hitting a paid API (Build Plan §1.2 + Cost Discipline).
+    """
+    __tablename__ = "evidence"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    kind = Column(String(10), nullable=False)  # computed | source
+    # Provenance
+    source_name = Column(String(60))   # fred | yahoo | sec | newsapi | finnhub | firecrawl | alpha_vantage | engine
+    source_ref = Column(Text)          # URL / EDGAR accession / API endpoint / function ref
+    # Source receipts
+    passage = Column(Text, nullable=True)        # verbatim extracted text
+    retrieved_at = Column(DateTime(timezone=True), nullable=True)
+    # Computed receipts
+    metric = Column(String(120), nullable=True)
+    value_json = Column(JSON, nullable=True)     # the computed value (number / small object)
+    inputs_json = Column(JSON, nullable=True)    # input series identifiers / params
+    formula_ref = Column(String(160), nullable=True)  # e.g. "quant.risk.parametric_var"
+    # Dedup / cache key — stable hash over the receipt's defining content.
+    content_hash = Column(String(64), nullable=False, unique=True, index=True)
+    # Optional scoping for retrieval + cache reuse.
+    ticker = Column(String(20), nullable=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_evidence_ticker_kind", "ticker", "kind"),
+    )
+
+
+class TrackRecordAnchor(Base):
+    """Tamper-evident anchor for the forward track record (Build Plan §3.3).
+
+    Periodically we chain every scored signal (ordered by signal_date, id) and
+    store the chain head here. Re-chaining later and comparing to the latest
+    anchor makes any silent edit / reorder / deletion of a historical scored
+    signal detectable — the recomputed head won't match. Append-only: we never
+    update an anchor, only add new ones.
+    """
+    __tablename__ = "track_record_anchors"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    anchored_at = Column(DateTime(timezone=True), server_default=func.now())
+    n_records = Column(Integer, default=0)
+    head_hash = Column(String(64), nullable=False)
+    prev_anchor_hash = Column(String(64), nullable=True)  # chains the anchors themselves
+
+
+class ClaimEvidenceRecord(Base):
+    """Join table — a claim in a memo cites one or more evidence rows.
+
+    `claim_ref` identifies the cited claim within the memo: a structured
+    field (e.g. "trade_idea:AAPL:entry_price", "risk_factor:2"), an inline
+    prose anchor (e.g. "analysis:offset:1420"), or a key-finding index.
+    A single claim may cite multiple evidence rows (M:N).
+    """
+    __tablename__ = "claim_evidence"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    memo_id = Column(String, nullable=True, index=True)
+    claim_ref = Column(String(200), nullable=False)
+    evidence_id = Column(String, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_claim_evidence_memo", "memo_id", "claim_ref"),
+    )
+
+
+# ============================================================
 # EXISTING MODELS (unchanged)
 # ============================================================
 

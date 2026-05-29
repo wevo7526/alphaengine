@@ -115,16 +115,22 @@ async def score_pending_signals(async_session_factory, user_id: str | None = Non
                     if not history:
                         continue
 
-                    # Find entry price: closest date on/after memo_date
+                    # Find entry price: closest date on/after memo_date.
+                    # POINT-IN-TIME GUARD (Build Plan §3.3): only bars dated
+                    # on/after the signal date are eligible — an idea is never
+                    # scored against data that predates its generated_at. This
+                    # both removes a subtle look-ahead bias (entry priced before
+                    # the signal) and enforces the honest-track-record contract.
                     def _find_price_at_offset(days: int) -> float | None:
                         target = memo_date + timedelta(days=days)
-                        # Find bar closest to target date
                         best = None
                         best_diff = None
                         for bar in history:
                             try:
                                 bar_date_str = bar.get("date", "")
                                 bar_date = datetime.fromisoformat(bar_date_str.split("T")[0]).replace(tzinfo=timezone.utc)
+                                if bar_date < memo_date:
+                                    continue  # never use pre-signal data
                                 diff = abs((bar_date - target).total_seconds())
                                 if best_diff is None or diff < best_diff:
                                     best_diff = diff

@@ -1,0 +1,13 @@
+Table of Contents
+Item 1A. Risk Factors .......... 14
+
+Item 1A. Risk Factors
+
+Our business faces intense competition across all of our product lines, and competitive pressures could reduce our pricing power and erode operating margins over time. We depend on a concentrated base of suppliers for key components, and disruptions in that supply chain have in the past affected, and could in the future affect, our ability to manufacture and deliver products on schedule.
+
+Global economic conditions, including inflation and fluctuations in foreign currency exchange rates, may adversely affect demand for our products and the cost of our inputs. We are subject to extensive and evolving regulation in the jurisdictions where we operate, and changes in laws or enforcement priorities could increase our compliance costs.
+
+Our future results depend on our ability to attract and retain key personnel and to continue investing in research and development to keep pace with rapid technological change. Cybersecurity incidents could disrupt our operations and harm our reputation.
+
+Item 1B. Unresolved Staff Comments
+None.

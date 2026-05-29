@@ -282,4 +282,14 @@ def run_rules_based_backtest(
     report["benchmark_sharpe"] = benchmark_sharpe
     report["n_bars"] = n_bars
 
+    # Anti-overfitting (Build Plan §3.1/§3.7): never headline a naive Sharpe.
+    # n_trials uses the number of names searched as the multiple-testing
+    # denominator (a conservative proxy in the absence of a fuller ledger).
+    try:
+        from quant.overfitting import augment_backtest_overfitting
+        n_trials = max(1, len(report.get("tickers") or []))
+        augment_backtest_overfitting(report, returns, n_trials=n_trials)
+    except Exception as e:
+        logger.debug(f"overfitting augmentation skipped: {e}")
+
     return report

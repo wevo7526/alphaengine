@@ -25,43 +25,26 @@ from typing import Any
 
 from langchain.agents import AgentExecutor, create_tool_calling_agent
 from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import BaseTool
 
 from agents.schemas import AgentOutput
-from config import settings
+from llm.client import get_llm as _tiered_get_llm, cache_system_block
 
 logger = logging.getLogger(__name__)
 
-_llm: ChatAnthropic | None = None
 
+def get_llm(tier: str = "synthesis") -> ChatAnthropic:
+    """Shared ChatAnthropic client, delegated to the tiered factory.
 
-def get_llm() -> ChatAnthropic:
+    Default tier="synthesis" resolves to the historically-pinned model, so
+    existing call sites (query_interpreter, cio_synthesizer, every tool-calling
+    agent) are unchanged. Bulk-extraction agents can opt into tier="extraction"
+    (Haiku) for cost. Parameters (temperature=0, max_retries=4, timeout=90)
+    live in llm/client.py.
     """
-    Lazily build the shared ChatAnthropic client.
-
-      - temperature=0 for deterministic financial reasoning
-      - max_retries=4 handles 529 overloaded + transient 5xx; Anthropic SDK
-        implements exponential backoff automatically
-      - timeout=90 so a hung request unwinds well within the pipeline's
-        per-agent deadline (120–240s)
-    """
-    global _llm
-    if _llm is None:
-        if not settings.ANTHROPIC_API_KEY:
-            logger.error(
-                "ANTHROPIC_API_KEY is not set — any agent call will fail. "
-                "Set this via Railway environment variables."
-            )
-        _llm = ChatAnthropic(
-            model="claude-sonnet-4-20250514",
-            api_key=settings.ANTHROPIC_API_KEY,
-            max_tokens=4096,
-            temperature=0,
-            max_retries=4,
-            timeout=90,
-        )
-    return _llm
+    return _tiered_get_llm(tier)
 
 
 class BaseAgent:
@@ -71,9 +54,12 @@ class BaseAgent:
     system_prompt: str = "You are a financial analyst."
     output_instructions: str = "Respond with valid JSON."
     max_iterations: int = 6
+    # Which model tier serves this agent. Tool-calling research agents stay on
+    # "synthesis" (Sonnet); bulk extraction agents (Phase 2) set "extraction".
+    llm_tier: str = "synthesis"
 
     def __init__(self):
-        self.llm = get_llm()
+        self.llm = get_llm(self.llm_tier)
         # Cache tools once — they're stateless. We DO NOT cache the executor
         # because it carries callback wiring and per-call scratchpad state.
         self._tools: list[BaseTool] | None = None
@@ -95,8 +81,13 @@ class BaseAgent:
         requests causes interleaved scratchpad state on the AgentExecutor.
         """
         tools = self._get_cached_tools()
+        # The system prompt is large and identical across every call to this
+        # agent, so it is the ideal prompt-cache target: wrap it in an
+        # ephemeral cache block (~90% off input on cache reads). Falls back to
+        # a plain string when caching is disabled.
+        system_text = self.system_prompt + "\n\n" + self.output_instructions
         prompt = ChatPromptTemplate.from_messages([
-            ("system", self.system_prompt + "\n\n" + self.output_instructions),
+            SystemMessage(content=cache_system_block(system_text)),
             ("human", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])

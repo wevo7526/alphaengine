@@ -13,6 +13,44 @@ class Settings(BaseSettings):
     # LLM
     ANTHROPIC_API_KEY: str = ""
 
+    # Model tiering (Cost Discipline — Build Plan). Bulk extraction /
+    # classification routes to the cheap tier; final memo synthesis to the
+    # reasoning tier. Env-overridable so model IDs can be corrected without
+    # a code change. Defaults keep the historically-pinned synthesis model
+    # so existing behavior is unchanged.
+    LLM_MODEL_SYNTHESIS: str = "claude-sonnet-4-20250514"
+    LLM_MODEL_EXTRACTION: str = "claude-haiku-4-5-20251001"
+    LLM_MODEL_HEAVY: str = "claude-opus-4-8"
+    # Toggle Anthropic prompt caching on large static system blocks. ~90% off
+    # cache reads; harmless if the SDK ignores the cache_control marker.
+    LLM_PROMPT_CACHE: bool = True
+
+    # Phase 1 provenance pipeline (Build Plan): build a Fact Sheet, feed it to
+    # the narration LLM with [[ev:n]] citation guidance, validate the memo
+    # against it, and persist evidence receipts + claim links. Reversible
+    # kill-switch — set false to fall back to the legacy citation-only path.
+    PROVENANCE_PIPELINE: bool = True
+    # When the validator finds orphan numbers post-narration, re-prompt the
+    # narrator once to cite or remove them (hard-fail + auto-repair).
+    PROVENANCE_AUTO_REPAIR: bool = True
+
+    # Phase 2 filing NLP (Build Plan §2.1). OFF by default so development never
+    # spends the scarce sec-api free-tier calls; flip on for a real run.
+    # Strategy: Firecrawl scrapes the public filing HTML (heavy fetch), sec-api
+    # is used only to resolve the latest/prior filing pair (1 call/ticker) and
+    # as an extraction fallback. SEC_CALL_BUDGET is a hard per-process ceiling
+    # so a runaway loop can't drain the quota; the evidence store caches each
+    # filing section permanently (filings are immutable).
+    FILING_NLP_ENABLED: bool = False
+    FILING_NLP_LLM: bool = False          # run Haiku change-categorization pass
+    FILING_NLP_FORM: str = "10-K"
+    FILING_NLP_MAX_NAMES: int = 3         # cap names per memo run
+    SEC_CALL_BUDGET: int = 25             # hard ceiling on live sec-api calls/process
+
+    # Earnings-call transcript NLP (Build Plan §2.2) — Firecrawl-only, no
+    # sec-api. OFF by default so dev doesn't spend Firecrawl credits.
+    TRANSCRIPT_NLP_ENABLED: bool = False
+
     # Data Sources
     SEC_API_KEY: str = ""
     FRED_API_KEY: str = ""

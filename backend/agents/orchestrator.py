@@ -47,6 +47,12 @@ class ResearchDeskState(TypedDict):
     portfolio_data: dict | None
     memo_data: dict | None
     macro_context: dict | None
+    # Phase 1 — live prices prefetched in run_strategy, consumed by the
+    # compute stage (Fact Sheet) in run_synthesizer.
+    live_prices: dict | None
+    # Phase 2 — NLP signal bundle (filing change, call tone, 8-K novelty):
+    # receipts to thread into the Fact Sheet + coverage/tilt to surface.
+    nlp_bundle: dict | None
     data_quality: str | None
     error: str | None
     current_phase: str
@@ -362,6 +368,8 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
     # the Strategist may not even draw from.
     all_pricing = list(dict.fromkeys(list(plan_tickers) + list(secondary[:8])))
     live_prices = await _fetch_live_prices_for(all_pricing)
+    # Stash for the Phase 1 compute stage (Fact Sheet) in the synthesizer.
+    state["live_prices"] = live_prices
 
     output = await _with_timeout(
         _portfolio_strategist.analyze({
@@ -426,6 +434,34 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
                 )
         except Exception as e:
             logger.warning(f"[orchestrator] mandate gate failed (non-fatal): {e}")
+
+        # Phase 2 — NLP signals (filing-change, call-tone, 8-K novelty) tilt
+        # conviction DETERMINISTICALLY. No-op unless a filing/transcript flag
+        # is enabled (all default off). Receipts are stashed for the Fact Sheet
+        # and persistence; the tilt nudges each idea's conviction with a logged
+        # adjustment block (the conviction sub-score receipt for Phase 3.4).
+        try:
+            from config import settings as _nlp_settings
+            if _nlp_settings.FILING_NLP_ENABLED or _nlp_settings.TRANSCRIPT_NLP_ENABLED:
+                from agents.nlp.runner import gather_nlp_signals, apply_nlp_tilt_to_ideas
+                nlp_tickers = (state.get("plan_data") or {}).get("tickers", []) or []
+                bundle = await gather_nlp_signals(nlp_tickers)
+                ideas2 = output.output.get("trade_ideas") or []
+                if ideas2 and bundle["signals"]:
+                    ideas2, adj = apply_nlp_tilt_to_ideas(ideas2, bundle["by_ticker_tilt"])
+                    output.output["trade_ideas"] = ideas2
+                    output.output["nlp_adjustments"] = adj
+                state["nlp_bundle"] = {
+                    "receipts": bundle.get("receipts", []),
+                    "cache_receipts": bundle.get("cache_receipts", []),
+                    "coverage": bundle.get("coverage", {}),
+                    "by_ticker_tilt": bundle.get("by_ticker_tilt", {}),
+                    "signals": [s.model_dump() for s in bundle.get("signals", [])],
+                }
+                logger.info("[orchestrator] NLP tilt applied: %d signals, coverage=%s",
+                            len(bundle.get("signals", [])), bundle.get("coverage", {}).get("covered_pct"))
+        except Exception as e:
+            logger.warning(f"[orchestrator] NLP signal pass failed (non-fatal): {e}")
     if output is None or (output and output.error):
         err = output.error if output else "timed out"
         logger.warning(f"[orchestrator] Portfolio Strategist error: {err}")
@@ -647,17 +683,46 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
         plan.get("themes") or [],
     )
 
+    # Phase 1 compute stage — build the Fact Sheet the narrator must cite.
+    from config import settings as _settings
+    fact_sheet = None
+    fact_sheet_block = ""
+    if _settings.PROVENANCE_PIPELINE:
+        try:
+            from infra.lineage import extract_tool_lineage
+            from pipeline import build_fact_sheet, fact_sheet_prompt_block
+            _lineage_for_fs = extract_tool_lineage(state.get("tool_steps_by_agent") or {})
+            _nlp_bundle = state.get("nlp_bundle") or {}
+            # Only the SMALL changed-passage / hedged-sentence receipts go to the
+            # narrator. The full-section cache receipts (20k chars each) are
+            # persistence-only — appended to evidence_receipts below, never shown.
+            _nlp_receipts = list(_nlp_bundle.get("receipts") or [])
+            fact_sheet = build_fact_sheet(
+                macro_context=state.get("macro_context"),
+                strategy_data=state.get("strategy_data"),
+                risk_data=state.get("risk_data"),
+                live_prices=state.get("live_prices"),
+                lineage=_lineage_for_fs,
+                extra_receipts=_nlp_receipts,
+            )
+            fact_sheet_block = fact_sheet_prompt_block(fact_sheet)
+        except Exception as e:
+            logger.warning(f"[orchestrator] fact sheet build failed (non-fatal): {e}")
+
+    # Capture the CIO context so the auto-repair re-prompt can reuse it.
+    cio_context = {
+        "plan": state["plan_data"],
+        "research": state["research_data"],
+        "risk": state["risk_data"],
+        "strategy": state["strategy_data"],
+        "scorecard": scorecard,
+        "prior_memos": prior_memos,
+        "macro_context": state.get("macro_context"),
+        "user_context": state.get("user_context"),
+        "fact_sheet_block": fact_sheet_block,
+    }
     output = await _with_timeout(
-        _cio_synthesizer.synthesize({
-            "plan": state["plan_data"],
-            "research": state["research_data"],
-            "risk": state["risk_data"],
-            "strategy": state["strategy_data"],
-            "scorecard": scorecard,
-            "prior_memos": prior_memos,
-            "macro_context": state.get("macro_context"),
-            "user_context": state.get("user_context"),
-        }),
+        _cio_synthesizer.synthesize(cio_context),
         seconds=120, label="CIO Synthesizer"
     )
     if output is None or (output and output.error):
@@ -729,6 +794,76 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
             )
         except Exception as e:
             logger.exception(f"[orchestrator] citation resolution failed: {e}")
+
+        # Phase 1 validate stage — lint the narrative against the Fact Sheet,
+        # auto-repair orphan numbers once, then attach evidence-backed
+        # footnotes + claim links. Hard-fail surfaces as verification_status
+        # downgrade (the gap is shown, never silently passed).
+        if _settings.PROVENANCE_PIPELINE and fact_sheet is not None and len(fact_sheet):
+            try:
+                from pipeline import (
+                    validate_against_fact_sheet,
+                    finalize_with_evidence,
+                    repair_prompt_block,
+                )
+                vres = validate_against_fact_sheet(memo, fact_sheet)
+                if (not vres.ok) and _settings.PROVENANCE_AUTO_REPAIR and (vres.orphans or vres.dangling):
+                    logger.info(
+                        "[orchestrator] provenance gate failed (%s); auto-repair re-prompt",
+                        vres.summary(),
+                    )
+                    repair_ctx = dict(cio_context)
+                    repair_ctx["repair_note"] = repair_prompt_block(vres.orphans, vres.dangling)
+                    repair = await _with_timeout(
+                        _cio_synthesizer.synthesize(repair_ctx),
+                        seconds=120, label="CIO Synthesizer (repair)",
+                    )
+                    if repair and not repair.error and isinstance(repair.output, dict):
+                        for f in ("title", "executive_summary", "analysis", "key_findings"):
+                            if repair.output.get(f):
+                                memo[f] = repair.output[f]
+                        vres = validate_against_fact_sheet(memo, fact_sheet)
+
+                base_index = len(memo.get("citation_index") or [])
+                fin = finalize_with_evidence(memo, fact_sheet, base_index=base_index)
+                memo = fin["memo"]
+                memo["citation_index"] = (memo.get("citation_index") or []) + fin["citation_additions"]
+                memo["evidence_receipts"] = fact_sheet.entries
+                memo["evidence_links"] = fin["links"]
+                cov = memo.get("coverage") or {}
+                cov["evidence"] = {
+                    "numeric_claims": vres.numeric_claims,
+                    "orphans": len(vres.orphans),
+                    "dangling": len(vres.dangling),
+                    "cited_evidence": len(fin["cited_ids"]),
+                    "fact_sheet_entries": len(fact_sheet),
+                    "ok": vres.ok,
+                }
+                memo["coverage"] = cov
+                # Hard-fail surfaced: unresolved orphans/dangling => unverified.
+                if not vres.ok:
+                    memo["verification_status"] = "unverified"
+                logger.info(
+                    "[orchestrator] provenance: %s | evidence footnotes +%d | status=%s",
+                    vres.summary(), len(fin["citation_additions"]), memo.get("verification_status"),
+                )
+            except Exception as e:
+                logger.exception(f"[orchestrator] provenance finalize failed: {e}")
+
+        # Phase 2 — surface NLP coverage % on the memo (Build Plan §2.4) and
+        # persist the full-section cache receipts (never shown to the narrator)
+        # so future runs skip the filing fetch entirely.
+        try:
+            nb = state.get("nlp_bundle") or {}
+            if nb.get("coverage"):
+                cov = memo.get("coverage") or {}
+                cov["nlp"] = nb["coverage"]
+                memo["coverage"] = cov
+            caches = nb.get("cache_receipts") or []
+            if caches:
+                memo["evidence_receipts"] = (memo.get("evidence_receipts") or []) + caches
+        except Exception:
+            pass
         state["memo_data"] = memo
     return state
 
@@ -799,6 +934,8 @@ async def run_research_desk(
         "portfolio_data": None,
         "memo_data": None,
         "macro_context": None,
+        "live_prices": None,
+        "nlp_bundle": None,
         "data_quality": None,
         "error": None,
         "current_phase": "idle",

@@ -29,3 +29,7 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# Local SQLite dev/test DB
+*.db
+backend/*.db

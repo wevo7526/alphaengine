@@ -28,6 +28,12 @@ _SEARCH_TIMEOUT = 20.0
 
 _SCRAPE_CACHE: TTLCache[dict] = TTLCache(max_entries=256, ttl_seconds=_CACHE_TTL)
 _SEARCH_CACHE: TTLCache[list[dict]] = TTLCache(max_entries=256, ttl_seconds=_CACHE_TTL)
+# Full-document scrapes (filings, transcripts) are large; cache fewer, longer.
+# Filings are immutable, so a 6h TTL is conservative — the evidence store
+# provides the durable cross-restart cache.
+_FULL_CACHE_TTL = 21600  # 6h
+_FULL_TIMEOUT = 45.0
+_FULL_CACHE: TTLCache[dict] = TTLCache(max_entries=64, ttl_seconds=_FULL_CACHE_TTL)
 
 
 def _api_key() -> str:
@@ -109,7 +115,49 @@ def search_web(query: str, limit: int = 3) -> list[dict]:
         return []
 
 
+def scrape_full(url: str, max_chars: int = 120_000) -> dict:
+    """Scrape a full document (filing / transcript) as markdown.
+
+    Unlike `scrape_url` (3000-char cap for validation snippets), this keeps a
+    large slice so downstream section parsing has the whole document to work
+    with. Cached 6h. Used to pull public SEC filing HTML and IR/transcript
+    pages via Firecrawl, offloading the heavy fetch from metered APIs.
+    """
+    cache_key = f"full:{url}:{max_chars}"
+    cached = _FULL_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    key = _api_key()
+    if not key:
+        return {"error": "FIRECRAWL_API_KEY not set", "content": "", "url": url}
+
+    try:
+        from firecrawl import FirecrawlApp
+        app = FirecrawlApp(api_key=key)
+        result = app.scrape(url, formats=["markdown"])
+        title = ""
+        if hasattr(result, "metadata") and isinstance(result.metadata, dict):
+            title = result.metadata.get("title", "") or ""
+        content = (getattr(result, "markdown", "") or "")[:max_chars]
+        data = {"url": url, "title": title, "content": content, "source": url}
+        _FULL_CACHE.set(cache_key, data)
+        logger.info(f"Scraped full doc {url}: {len(content)} chars")
+        return data
+    except Exception as e:
+        logger.warning(f"Firecrawl full scrape failed for {url}: {e}")
+        return {"error": str(e), "content": "", "url": url}
+
+
 # ── Async wrappers ────────────────────────────────────────────
+
+async def ascrape_full(url: str, max_chars: int = 120_000) -> dict:
+    try:
+        return await run_sync_with_timeout(scrape_full, _FULL_TIMEOUT, url, max_chars)
+    except TimeoutError:
+        logger.warning(f"Firecrawl full scrape timed out: {url}")
+        return {"error": "timeout", "content": "", "url": url}
+
 
 async def ascrape_url(url: str) -> dict:
     try:

@@ -464,6 +464,29 @@ async def analyze(request: AnalyzeRequest, req: Request):
                     f"Memo persisted: {record.id} thread={record.thread_id} "
                     f"seq={record.sequence_in_thread} class={record.query_class} user={user_id}"
                 )
+
+                # Phase 1 — persist evidence receipts (content-hash deduped, so
+                # this doubles as the cross-query cache) and link each cited
+                # claim to its evidence row. Own try: provenance must never
+                # break the memo response.
+                try:
+                    receipts = getattr(memo, "evidence_receipts", None) or []
+                    ev_links = getattr(memo, "evidence_links", None) or []
+                    if receipts:
+                        from provenance import EvidenceRepository
+                        hash_to_id = await EvidenceRepository.upsert_many(receipts, user_id=user_id)
+                        links = [
+                            (l.get("claim_ref"), hash_to_id.get(l.get("content_hash")))
+                            for l in ev_links if hash_to_id.get(l.get("content_hash"))
+                        ]
+                        if links:
+                            await EvidenceRepository.link_claims(record.id, links)
+                        logger.info(
+                            f"[provenance] memo {record.id}: {len(hash_to_id)} evidence rows, "
+                            f"{len(links)} claim links"
+                        )
+                except Exception as ev_err:
+                    logger.warning(f"[provenance] evidence persist failed (non-fatal): {ev_err}")
         except Exception as db_err:
             logger.error(f"DB persist failed (non-fatal): {db_err}")
 
@@ -2515,6 +2538,27 @@ async def portfolio_equity_curve(req: Request, days: int = 90):
         "count": len(series),
         "latest": series[-1] if series else None,
     }
+
+
+@app.get("/api/track-record/verify")
+async def track_record_verify(req: Request):
+    """Tamper-evidence check on the forward track record (Build Plan §3.3).
+
+    Recomputes the hash chain over the user's scored signals and compares it
+    to the latest stored anchor. ok=False means a historical scored signal
+    was altered, reordered, or deleted.
+    """
+    user_id = require_user_id(req)
+    from infra.track_record_store import verify_track_record
+    return await verify_track_record(user_id)
+
+
+@app.post("/api/track-record/anchor")
+async def track_record_anchor(req: Request):
+    """Commit the current track-record chain head as a new append-only anchor."""
+    user_id = require_user_id(req)
+    from infra.track_record_store import anchor_track_record
+    return await anchor_track_record(user_id)
 
 
 @app.get("/api/portfolio/positions")

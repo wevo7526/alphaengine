@@ -807,17 +807,31 @@ def _citation_index_block(memo: dict) -> list:
             continue
         n = c.get("n") or 0
         label = c.get("label") or c.get("source_id") or "—"
+        source_id = c.get("source_id") or ""
+        excerpt = c.get("excerpt") or ""
         url = c.get("url")
         line = (
             f"<font color='{ACCENT.hexval()}' face='Courier-Bold' size='9'>[{n}]</font> "
             f"&nbsp; <font color='{INK_SOFT.hexval()}' size='9'>{_escape(label)}</font>"
         )
+        # Receipt provenance: the named formula / accession behind the figure.
+        if source_id and source_id != label:
+            line += (
+                f" &nbsp; <font color='{INK_SOFT.hexval()}' face='Courier' size='7.5'>"
+                f"{_escape(source_id)}</font>"
+            )
         if url:
             line += (
                 f" &nbsp; <font color='{ACCENT.hexval()}' size='7.5'>"
                 f"<link href='{_escape(url)}'>OPEN &#8594;</link></font>"
             )
         flows.append(Paragraph(line, S["SourceItem"]))
+        # Verbatim passage / computed-at note as a muted sub-line.
+        if excerpt:
+            flows.append(Paragraph(
+                f"<font color='{INK_SOFT.hexval()}' size='7.5'>{_escape(excerpt[:240])}</font>",
+                S["SourceItem"],
+            ))
     return flows
 
 

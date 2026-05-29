@@ -446,6 +446,12 @@ class IntelligenceMemo(BaseModel):
     # Drives the VERIFIED / PARTIAL / UNVERIFIED pill in the UI.
     coverage: dict = Field(default_factory=dict)
     verification_status: str = "unverified"  # verified | partial | unverified
+    # Phase 1 (Build Plan) — transient evidence payload carried to the persist
+    # layer. `exclude=True` keeps these out of the API JSON and the memo row;
+    # they live in the `evidence` / `claim_evidence` tables. main.py upserts
+    # the receipts and links claim_refs to evidence ids once the memo id exists.
+    evidence_receipts: list[dict] = Field(default_factory=list, exclude=True)
+    evidence_links: list[dict] = Field(default_factory=list, exclude=True)
 
     @field_validator("intent", mode="before")
     @classmethod

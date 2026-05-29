@@ -58,9 +58,39 @@ export function EquityCurve({
   }
 
   const latest = series[series.length - 1];
-  const positive = latest.total_value >= baseline;
+  // Fall back to the first marked equity if no valid baseline was passed, so
+  // the chart never collapses to a degenerate domain.
+  const base = baseline && baseline > 0 ? baseline : series[0].total_value;
+  const positive = latest.total_value >= base;
   const lineColor = positive ? "#10b981" : "#ef4444"; // signal-green / signal-red
   const gradientId = positive ? "equity-fill-up" : "equity-fill-down";
+
+  // Build an explicit Y domain that ALWAYS includes the baseline, so the
+  // BASELINE reference line is visible and the axis spans a sensible range
+  // even when a single snapshot sits microscopically off the baseline
+  // (recharts' "auto" domain is computed from the area data alone and would
+  // push the baseline off-chart). A floor on the span keeps the axis from
+  // zooming so far in that every tick rounds to the same label.
+  const values = series.map((p) => p.total_value);
+  const lo = Math.min(...values, base);
+  const hi = Math.max(...values, base);
+  const rawSpan = hi - lo;
+  // Minimum span: 1% of magnitude, so a ~0% day still shows a readable band.
+  const span = Math.max(rawSpan, Math.abs(hi) * 0.01, 1);
+  const pad = span * 0.2;
+  const domain: [number, number] = [lo - pad, hi + pad];
+  const axisSpan = domain[1] - domain[0];
+
+  // Adaptive precision: pick enough decimals that adjacent ticks differ.
+  const fmtMoney = (v: number): string => {
+    const abs = Math.abs(v);
+    if (abs >= 1_000_000) {
+      const dec = axisSpan < 100_000 ? 3 : axisSpan < 1_000_000 ? 2 : 1;
+      return `$${(v / 1_000_000).toFixed(dec)}M`;
+    }
+    if (abs >= 1_000) return `$${(v / 1_000).toFixed(axisSpan < 10_000 ? 1 : 0)}K`;
+    return `$${v.toFixed(0)}`;
+  };
 
   return (
     <ResponsiveContainer width="100%" height={height}>
@@ -93,13 +123,10 @@ export function EquityCurve({
         <YAxis
           stroke="#52525b"
           tick={{ fill: "#71717a", fontSize: 10 }}
-          tickFormatter={(v) => {
-            if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
-            if (v >= 1_000) return `$${(v / 1_000).toFixed(0)}K`;
-            return `$${v.toFixed(0)}`;
-          }}
-          domain={["auto", "auto"]}
-          width={56}
+          tickFormatter={fmtMoney}
+          domain={domain}
+          allowDecimals
+          width={64}
         />
         <Tooltip
           contentStyle={{
@@ -131,7 +158,7 @@ export function EquityCurve({
           }}
         />
         <ReferenceLine
-          y={baseline}
+          y={base}
           stroke="#3f3f46"
           strokeDasharray="3 3"
           label={{
@@ -148,7 +175,7 @@ export function EquityCurve({
           stroke={lineColor}
           strokeWidth={1.6}
           fill={`url(#${gradientId})`}
-          dot={false}
+          dot={series.length === 1 ? { r: 3, fill: lineColor, strokeWidth: 0 } : false}
           activeDot={{ r: 3, fill: lineColor, strokeWidth: 0 }}
           isAnimationActive={false}
         />
