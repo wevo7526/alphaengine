@@ -1099,6 +1099,7 @@ async def regime_detection():
     # Try to fit model from FRED history — concurrent fetches with a hard
     # wall budget. If any series fails, we just skip model fitting and fall
     # back to the rule-based classifier.
+    macro_hist: list[dict] = []
     try:
         results = await asyncio.wait_for(
             asyncio.gather(
@@ -1126,7 +1127,28 @@ async def regime_detection():
     except Exception as e:
         logger.warning(f"Regime model fitting failed (using rule-based): {e}")
 
-    return classify_regime(vix, credit, yc)
+    # Pass the macro history as a window so classify_regime runs the
+    # proper Bayesian forward filter over recent observations instead of
+    # a single-point prediction. The transition matrix anchors today's
+    # posterior to yesterday's belief — fixes the "single observation
+    # produces extreme posterior" failure mode.
+    return classify_regime(
+        vix, credit, yc,
+        macro_window=macro_hist if macro_hist else None,
+    )
+
+
+@app.get("/api/quant/regime/diagnostics")
+async def regime_diagnostics():
+    """HMM fit diagnostics for the operations UI.
+
+    Surfaces converged flag, EM iterations, log-likelihood, cached
+    label mapping, time since fit / TTL, hysteresis state. Useful for
+    debugging regime calls in production — if the model didn't converge
+    or the cache is stale, this endpoint says so.
+    """
+    from quant.regime import get_fit_diagnostics
+    return get_fit_diagnostics()
 
 
 # === BACKTESTING ===

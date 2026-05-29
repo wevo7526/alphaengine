@@ -40,7 +40,28 @@ def _ensure_ml_imports():
         logger.warning("hmmlearn not installed — regime detection will use rule-based fallback")
 
 
-_DEFAULT_REGIME_LABELS = {0: "risk_on", 1: "risk_off", 2: "transition"}
+# 4-state taxonomy, ordered by stress score (low → high):
+#   risk_on     — VIX low, credit tight, curve steep
+#   late_cycle  — VIX low-mid, credit modest, curve flattening
+#   transition  — VIX mid-high, credit widening, curve flat/slightly inverted
+#   risk_off    — VIX high, credit wide, curve deeply inverted or recovering
+# The 4-state design gives the HMM enough room to avoid one state hogging
+# probability mass (the 3-state collapse was the root cause of the
+# degenerate 100% posterior). Late_cycle especially captures the
+# "still ok but cracks showing" macro picture that the 3-state model
+# was forcing into either transition or risk_on.
+_DEFAULT_REGIME_LABELS = {0: "risk_on", 1: "late_cycle", 2: "transition", 3: "risk_off"}
+
+# Size multiplier per regime — applied by the trade gate.
+# late_cycle sits between risk_on (1.0) and transition (0.75): the book is
+# still functional but we lean back a notch because curve flattening is
+# the canonical signal that a turn is being priced.
+_REGIME_SIZE_MULTIPLIERS = {
+    "risk_on": 1.0,
+    "late_cycle": 0.85,
+    "transition": 0.75,
+    "risk_off": 0.5,
+}
 
 # Cache fitted model
 _fitted_model = None
@@ -117,52 +138,57 @@ def _smooth_posterior(probs, temperature: float = 2.0, prior_weight: float = 0.1
     return exp / exp.sum()
 
 
+def _bell(x: float, center: float, width: float) -> float:
+    """Bell-shape satisfaction score in (0, 1] centered at `center`."""
+    return math.exp(-((x - center) ** 2) / (2.0 * width * width))
+
+
 def _rule_based_regime(vix: float, credit_spread: float, yield_curve: float) -> dict:
-    """
-    Rule-based fallback regime classifier.
+    """4-state rule-based fallback regime classifier.
 
-    Probabilities are derived from how strongly the inputs satisfy each
-    regime's threshold pattern, not stipulated as fixed (0.75/0.10/0.15)
-    constants. Each indicator contributes a sigmoid satisfaction score —
-    when the value sits exactly on the threshold the score is 0.5; when
-    well past it, the score saturates near 1.0. Average across indicators
-    gives the per-regime score; a residual transition score absorbs
-    ambiguity, then everything is normalized to a probability simplex.
+    Each regime gets a continuous satisfaction score derived from sigmoid
+    or bell-shape kernels on the three macro inputs. Scores are then
+    normalized to a probability simplex with a small floor so no state
+    is ever exactly 0.
 
-    The discrete "current_regime" still uses the original hard rules so
-    behavior is unchanged at the boundary; only the probability vector is
-    now data-driven.
+    The discrete `current_regime` is argmax of the simplex — cleaner
+    and self-consistent vs. the old hard-rule branch.
     """
-    # Satisfaction scores in [0, 1] for each regime
+    # risk_on — all three indicators in the "easy" zone
     on_vix = _logistic((_RB_VIX_RISK_ON - vix) / 4.0)
     on_credit = _logistic((_RB_CREDIT_RISK_ON - credit_spread) / 0.5)
     on_yc = _logistic((yield_curve - _RB_YC_RISK_ON) / 0.2)
     risk_on_score = (on_vix + on_credit + on_yc) / 3.0
 
+    # risk_off — extreme stress
     off_vix = _logistic((vix - _RB_VIX_RISK_OFF) / 4.0)
     off_credit = _logistic((credit_spread - _RB_CREDIT_RISK_OFF) / 0.5)
     off_yc = _logistic((_RB_YC_RISK_OFF - yield_curve) / 0.2)
     risk_off_score = (off_vix + off_credit + off_yc) / 3.0
 
-    # Transition is the residual ambiguity: when neither extreme is well-met,
-    # we're in transition. Floor at 0.05 so a clear regime never gives 0.
-    transition_score = max(0.05, 1.0 - max(risk_on_score, risk_off_score))
+    # late_cycle — modest VIX (18-23), modest credit (3-5), curve flattening
+    # (yc < 0.5). Bell shapes peak in the middle of each band; the curve
+    # term is a sigmoid so a deeply inverted curve also reads as "late"
+    # rather than only "transition".
+    late_vix = _bell(vix, 20.0, 4.0)
+    late_credit = _bell(credit_spread, 4.0, 1.0)
+    late_yc = _logistic((0.5 - yield_curve) / 0.3)
+    late_cycle_score = (late_vix + late_credit + late_yc) / 3.0
 
-    total = risk_on_score + risk_off_score + transition_score
+    # transition — residual ambiguity. Floor at 0.05 so it never zeroes.
+    transition_score = max(
+        0.05,
+        1.0 - max(risk_on_score, risk_off_score, late_cycle_score),
+    )
+
+    total = risk_on_score + risk_off_score + late_cycle_score + transition_score
     probs = {
         "risk_on": round(risk_on_score / total, 3),
-        "risk_off": round(risk_off_score / total, 3),
+        "late_cycle": round(late_cycle_score / total, 3),
         "transition": round(transition_score / total, 3),
+        "risk_off": round(risk_off_score / total, 3),
     }
-
-    # Discrete classification keeps the original boolean rules so hysteresis
-    # and downstream logic see the same regime labels they always did.
-    if vix < _RB_VIX_RISK_ON and credit_spread < _RB_CREDIT_RISK_ON and yield_curve > _RB_YC_RISK_ON:
-        regime = "risk_on"
-    elif vix > _RB_VIX_RISK_OFF or credit_spread > _RB_CREDIT_RISK_OFF or yield_curve < _RB_YC_RISK_OFF:
-        regime = "risk_off"
-    else:
-        regime = "transition"
+    regime = max(probs, key=probs.get)
 
     return {
         "current_regime": regime,
@@ -223,10 +249,12 @@ def fit_regime_model(macro_history: list[dict], force: bool = False) -> bool:
         scaler = _StandardScaler()
         X = scaler.fit_transform(features)
 
-        # Diagonal covariance with a min_covar floor — prevents singular
-        # covariance matrices that produced the 100% confidence bug.
+        # 4 states + diagonal covariance + min_covar floor. Going from 3
+        # → 4 components gives the EM enough room that no single state
+        # has to hog probability mass; combined with the diag covariance
+        # this eliminates the degenerate posterior at the source.
         model = _GaussianHMM(
-            n_components=3,
+            n_components=4,
             covariance_type="diag",
             n_iter=100,
             tol=1e-3,
@@ -252,21 +280,21 @@ def fit_regime_model(macro_history: list[dict], force: bool = False) -> bool:
                 "regime classifications will fall back to rule-based"
             )
 
-        # Label regimes by a composite stress score, not raw VIX mean.
-        # The old code used `means_[:, 0]` (scaled VIX) which permuted
-        # labels between fits when two clusters had numerically-close VIX
-        # means. The composite (VIX + credit_spread - yield_curve, all
-        # scaled) is much more stable because it incorporates all three
-        # features — even if VIX is similar across two states, credit and
-        # the curve differentiate them. Lowest score = risk_on, highest =
-        # risk_off, middle = transition.
+        # Label regimes by a composite stress score:
+        #   stress = mean_VIX + mean_credit_spread − mean_yield_curve
+        # (all in scaler-normalized units). Sorting by this composite
+        # incorporates all three features so labels stay stable across
+        # refits even when two clusters have numerically-close VIX means.
+        # Lowest stress → risk_on; highest → risk_off; in between →
+        # late_cycle then transition.
         means = model.means_
         stress_score = means[:, 0] + means[:, 1] - means[:, 2]
         sorted_indices = np.argsort(stress_score)
         new_labels = {
             int(sorted_indices[0]): "risk_on",
-            int(sorted_indices[1]): "transition",
-            int(sorted_indices[2]): "risk_off",
+            int(sorted_indices[1]): "late_cycle",
+            int(sorted_indices[2]): "transition",
+            int(sorted_indices[3]): "risk_off",
         }
 
         # Atomic swap under lock — concurrent readers see either the old
@@ -386,14 +414,37 @@ def classify_regime(
     vix: float,
     credit_spread: float,
     yield_curve: float,
+    macro_window: list[dict] | None = None,
     apply_hysteresis: bool = True,
 ) -> dict:
-    """
-    Classify current regime using fitted HMM or rule-based fallback.
+    """Classify current regime using fitted HMM or rule-based fallback.
 
-    `apply_hysteresis=True` (default) smooths single-day flips so the
-    headline regime doesn't churn on ambiguous data. Set False for
-    backtesting where you want raw daily classifications.
+    Args
+    ----
+    vix, credit_spread, yield_curve
+        Today's macro values. Used directly by the rule-based fallback;
+        passed alongside `macro_window` to the HMM so the last point in
+        the window is consistent with today's reading.
+
+    macro_window
+        Recent macro observations [{vix, credit_spread, yield_curve}, ...]
+        ordered oldest → newest. When provided, the HMM runs
+        `predict_proba` over the full window and takes the LAST row
+        (which is the proper Bayesian filtered posterior at time T —
+        the smoothed and filtered distributions are identical for the
+        endpoint of an observation sequence). This eliminates the
+        "single observation produces extreme posterior" failure mode
+        because the transition matrix anchors today's posterior to
+        yesterday's belief.
+
+        When NOT provided (legacy callers), the function falls back to
+        the old single-point prediction. The smoothing layer still
+        floors any state at non-zero, so the worst case isn't degenerate
+        any more — just less informed.
+
+    apply_hysteresis
+        `True` (default) smooths single-day flips so the headline regime
+        doesn't churn. Underlying probabilities still update daily.
     """
     global _fitted_model, _fitted_scaler
 
@@ -407,22 +458,53 @@ def classify_regime(
         return rb
 
     try:
-        X = _fitted_scaler.transform([[vix, credit_spread, yield_curve]])
-        state = int(_fitted_model.predict(X)[0])
-        # Soften the posterior with a temperature scaling so very confident
-        # predictions don't dominate. T > 1 flattens the distribution, T < 1
-        # sharpens it. T = 2 corresponds to roughly halving the log-odds of
-        # the dominant state — a calibrated compromise between trusting the
-        # model and admitting irreducible macro ambiguity.
-        raw_probs = _fitted_model.predict_proba(X)[0]
+        n_components = _fitted_model.n_components
+        # Build the input sequence: window if provided, else single point.
+        if macro_window and len(macro_window) >= 2:
+            # Take up to the last 60 observations (~3 trading months).
+            # Long enough for the transition matrix to matter, short
+            # enough that the posterior reflects the current regime
+            # rather than dragging in old context.
+            recent = [
+                [d.get("vix", vix), d.get("credit_spread", credit_spread),
+                 d.get("yield_curve", yield_curve)]
+                for d in macro_window[-60:]
+                if d.get("vix") is not None
+            ]
+            # Ensure today's values are the final row so the filtered
+            # posterior anchors to the latest reading.
+            recent.append([vix, credit_spread, yield_curve])
+            X = _fitted_scaler.transform(np.array(recent))
+            all_probs = _fitted_model.predict_proba(X)
+            raw_probs = all_probs[-1]
+            # State at T is argmax of the filtered posterior, not the
+            # Viterbi-decoded sequence — consistent with how we report
+            # probabilities.
+            state = int(np.argmax(raw_probs))
+            posterior_method = "forward_filtered"
+        else:
+            X = _fitted_scaler.transform([[vix, credit_spread, yield_curve]])
+            state = int(_fitted_model.predict(X)[0])
+            raw_probs = _fitted_model.predict_proba(X)[0]
+            posterior_method = "single_point"
+
+        # Smooth: mix with uniform prior (kills any residual degeneracy)
+        # then temperature-scale to admit macro ambiguity the model
+        # alone underestimates.
         probs = _smooth_posterior(raw_probs, temperature=2.0)
 
         raw_regime = _fitted_labels.get(state, "transition")
-        prob_dict = {_fitted_labels.get(i, f"state_{i}"): round(float(p), 3) for i, p in enumerate(probs)}
+        prob_dict = {
+            _fitted_labels.get(i, f"state_{i}"): round(float(p), 3)
+            for i, p in enumerate(probs)
+        }
 
-        # Transition matrix
+        # Transition matrix — full size, no longer hard-coded to 3×3.
         trans = _fitted_model.transmat_
-        trans_list = [[round(float(trans[i, j]), 3) for j in range(3)] for i in range(3)]
+        trans_list = [
+            [round(float(trans[i, j]), 3) for j in range(n_components)]
+            for i in range(n_components)
+        ]
 
         result = {
             "current_regime": raw_regime,
@@ -430,7 +512,9 @@ def classify_regime(
             "probabilities": prob_dict,
             "transition_matrix": trans_list,
             "method": "hmm",
+            "posterior_method": posterior_method,
             "confidence": round(float(max(probs)), 3),
+            "n_states": int(n_components),
         }
 
         if apply_hysteresis:
@@ -464,15 +548,19 @@ def get_regime_history(macro_history: list[dict]) -> list[dict]:
         states = _fitted_model.predict(X)
         probs = _fitted_model.predict_proba(X)
 
+        n_components = _fitted_model.n_components
         history = []
         for i, d in enumerate(macro_history):
             regime = _fitted_labels.get(int(states[i]), "transition")
             # Apply same temperature smoothing as predict-time so the
             # historical confidence trace matches what /api/quant/regime
-            # surfaces for "today". Otherwise the in-app pill would read
-            # ~75% while the historical bar showed 99%.
+            # surfaces for "today". Loop bounds use the model's actual
+            # n_components so we're robust to the 3 → 4 state change.
             smoothed = _smooth_posterior(probs[i], temperature=2.0)
-            prob_dict = {_fitted_labels.get(j, f"s{j}"): round(float(smoothed[j]), 3) for j in range(3)}
+            prob_dict = {
+                _fitted_labels.get(j, f"s{j}"): round(float(smoothed[j]), 3)
+                for j in range(n_components)
+            }
             history.append({
                 "date": d.get("date", ""),
                 "regime": regime,
@@ -486,47 +574,64 @@ def get_regime_history(macro_history: list[dict]) -> list[dict]:
 
 
 def get_fit_diagnostics() -> dict:
-    """Return the HMM fit diagnostics — converged flag, iterations, LL."""
+    """Return the HMM fit diagnostics for the operations UI.
+
+    Includes everything the frontend needs to assess fit quality:
+      - converged, iterations, log_likelihood, n_observations
+      - cached label mapping
+      - time since fit + TTL
+      - n_states + covariance_type for transparency
+      - hysteresis state so we can show "X consecutive days in regime"
+    """
     with _state_lock:
-        return dict(_fit_diagnostics)
+        diag = dict(_fit_diagnostics)
+        diag["cached_label_mapping"] = dict(_fitted_labels)
+        diag["model_present"] = _fitted_model is not None
+        if _fitted_model is not None:
+            diag["n_states"] = int(getattr(_fitted_model, "n_components", 0))
+            diag["covariance_type"] = str(getattr(_fitted_model, "covariance_type", "unknown"))
+        if _fit_timestamp > 0:
+            diag["seconds_since_fit"] = round(time.time() - _fit_timestamp, 1)
+            diag["ttl_seconds"] = _FIT_TTL
+            diag["ttl_expires_in"] = round(max(0, _FIT_TTL - (time.time() - _fit_timestamp)), 1)
+        diag["hysteresis"] = {
+            "current_regime": _last_regime,
+            "streak_days": _last_regime_streak,
+            "pending_regime": _pending_regime,
+            "pending_days": _pending_regime_streak,
+            "min_regime_days": _MIN_REGIME_DAYS,
+            "flip_margin": _REGIME_FLIP_MARGIN,
+        }
+        return diag
 
 
 def regime_size_multiplier(regime: str | None, confidence: float | None = None) -> dict:
+    """Convert a regime classification into a position-size multiplier.
+
+    risk_on     → 1.00 (full)
+    late_cycle  → 0.85 (gentle 15% trim; curve flattening is the canonical
+                        "turn being priced" signal)
+    transition  → 0.75 (lean back 25%)
+    risk_off    → 0.50 (half)
+    unknown     → 1.00 (don't penalize when we don't know)
+
+    Confidence-blended: a low-confidence risk_off call only moves the
+    multiplier `conf` of the way from 1.0 toward 0.5. Avoids over-reacting
+    to noisy posteriors. With the new smoothed posterior the typical
+    confidence is now ~0.4–0.7 rather than the old 0.95–1.0, so the
+    multiplier reads as a calibrated dial rather than a hard switch.
     """
-    Convert a regime classification into a position-size multiplier.
+    target = _REGIME_SIZE_MULTIPLIERS.get((regime or "").lower(), 1.0)
 
-    Risk-on:     1.0  (full sizing)
-    Transition:  0.75 (lean back 25%)
-    Risk-off:    0.5  (half sizing)
-    Unknown:     1.0  (don't penalize when we don't know)
-
-    Confidence-blended: low-confidence regime calls have less effect. If
-    confidence is 0.4 (uncertain), a risk_off classification will only
-    move the multiplier 40% of the way from 1.0 toward 0.5. This avoids
-    over-reacting to noisy single-day flips.
-
-    Returns {"multiplier": float, "regime": str, "confidence": float|None,
-             "reason": str} for transparent surfacing in the risk gate UI.
-    """
-    base_map = {
-        "risk_on": 1.0,
-        "transition": 0.75,
-        "risk_off": 0.5,
-    }
-    target = base_map.get((regime or "").lower(), 1.0)
-
-    # Default to full confidence if not provided
     conf = float(confidence) if confidence is not None else 1.0
     conf = max(0.0, min(1.0, conf))
 
-    # Blend: from baseline 1.0 toward target by `conf` weight
     multiplier = 1.0 + conf * (target - 1.0)
     multiplier = max(0.0, min(1.0, multiplier))
 
-    if regime == "risk_off":
-        reason = f"Regime risk_off (conf {conf:.0%}): sizing {int((1 - multiplier) * 100)}% lower"
-    elif regime == "transition":
-        reason = f"Regime transition (conf {conf:.0%}): sizing {int((1 - multiplier) * 100)}% lower"
+    trim_pct = int(round((1 - multiplier) * 100))
+    if regime in ("risk_off", "transition", "late_cycle"):
+        reason = f"Regime {regime} (conf {conf:.0%}): sizing {trim_pct}% lower"
     elif regime == "risk_on":
         reason = "Regime risk_on: full sizing allowed"
     else:

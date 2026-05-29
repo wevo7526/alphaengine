@@ -150,9 +150,38 @@ export default function RiskPage() {
     return () => { cancelled = true; };
   }, []);
 
+  // 4-state HMM taxonomy: risk_on / late_cycle / transition / risk_off.
+  // late_cycle and transition both render yellow; the probability bars
+  // below differentiate them with explicit per-bar colors.
   const regimeTone: "green" | "red" | "yellow" =
     regime?.current_regime === "risk_on" ? "green" :
-    regime?.current_regime === "risk_off" ? "red" : "yellow";
+    regime?.current_regime === "risk_off" ? "red" :
+    "yellow";
+
+  // Color assignment for the per-state probability bars below.
+  // risk_on green, late_cycle yellow, transition amber, risk_off red.
+  const stateBarColor = (state: string): string => {
+    if (state === "risk_on") return "bg-signal-green";
+    if (state === "risk_off") return "bg-signal-red";
+    if (state === "late_cycle") return "bg-signal-yellow";
+    if (state === "transition") return "bg-signal-yellow/60";
+    return "bg-text-quaternary";
+  };
+
+  // Stable ordering for the probability bars: risk_on, late_cycle,
+  // transition, risk_off — left-to-right == better-to-worse so users
+  // can read the macro picture at a glance.
+  const orderRegimes = (entries: [string, number][]): [string, number][] => {
+    const order: Record<string, number> = {
+      risk_on: 0,
+      late_cycle: 1,
+      transition: 2,
+      risk_off: 3,
+    };
+    return [...entries].sort(
+      ([a], [b]) => (order[a] ?? 99) - (order[b] ?? 99),
+    );
+  };
 
   return (
     <div className="p-8 max-w-[1280px] mx-auto">
@@ -214,20 +243,25 @@ export default function RiskPage() {
                   {(regime.confidence * 100).toFixed(0)}<span className="text-[16px] font-mono text-text-tertiary ml-1">%</span>
                 </p>
               </div>
-              {/* Probability bars */}
+              {/* Probability bars — ordered risk_on → risk_off so the
+                  bar layout reads as a macro stress gradient. Colors
+                  differentiate late_cycle and transition. */}
               <div className="mt-5 space-y-2">
-                {Object.entries(regime.probabilities || {}).map(([state, prob]) => (
+                {orderRegimes(
+                  Object.entries(regime.probabilities || {}) as [string, number][],
+                ).map(([state, prob]) => (
                   <div key={state}>
                     <div className="flex items-center justify-between mb-1 text-[10px] font-mono">
-                      <span className="text-text-quaternary uppercase tracking-wider">{state.replace(/_/g, " ")}</span>
-                      <span className="text-text-tertiary tabular-nums">{(prob * 100).toFixed(0)}%</span>
+                      <span className="text-text-quaternary uppercase tracking-wider">
+                        {state.replace(/_/g, " ")}
+                      </span>
+                      <span className="text-text-tertiary tabular-nums">
+                        {(prob * 100).toFixed(0)}%
+                      </span>
                     </div>
                     <div className="h-1.5 rounded-full bg-bg-elevated overflow-hidden">
                       <div
-                        className={`h-full rounded-full ${
-                          state === "risk_on" ? "bg-signal-green" :
-                          state === "risk_off" ? "bg-signal-red" : "bg-signal-yellow"
-                        }`}
+                        className={`h-full rounded-full ${stateBarColor(state)}`}
                         style={{ width: `${prob * 100}%` }}
                       />
                     </div>

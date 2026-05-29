@@ -119,9 +119,14 @@ export default function HomePage() {
   const regimeConfidence = regime?.confidence
     ? `${(Number(regime.confidence) * 100).toFixed(0)}%`
     : "—";
+  // 4-state HMM taxonomy: risk_on / late_cycle / transition / risk_off.
+  // Tone progression: green → yellow → yellow → red. late_cycle reads as
+  // yellow because "still ok but cracks showing" deserves the same
+  // caution-color as transition; the chart numbers differentiate them.
   const regimeTone: "green" | "red" | "yellow" =
     regime?.current_regime === "risk_on" ? "green" :
-    regime?.current_regime === "risk_off" ? "red" : "yellow";
+    regime?.current_regime === "risk_off" ? "red" :
+    "yellow";
 
   const pnlPct = portfolio?.unrealized_pnl_pct;
   const pnlDisplay = pnlPct != null
