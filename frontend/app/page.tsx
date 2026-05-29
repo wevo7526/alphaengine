@@ -580,99 +580,156 @@ function IntelligenceLayer() {
 }
 
 function IntelligenceVisual() {
+  // Geometry constants — kept up here so the visual stays mathematically
+  // symmetric. The earlier version placed orbital dots at hand-tuned
+  // coords that approximated a circle (distances 58–63 from center),
+  // which is what made the glyph read as "lumpy".
+  const CX_L = 130;   // left glyph core x
+  const CX_R = 370;   // right glyph core x
+  const CY   = 120;   // shared core y — composition vertical center
+  const HALO = 72;    // soft halo radius (both sides)
+  const ORBIT_R = 50; // perfect radius for probabilistic dots
+  const N_DOTS = 8;   // even number → reads as a clean ring
+
+  // Right-hand grid: 3×3 of small squares, equal spacing, dead-centered.
+  const GRID_STEP = 22;
+  const SQ = 5;
+
+  // VERIFIED pill — sits at the bottom of the canvas. The merge tick from
+  // the center junction drops INTO this pill so the metaphor reads as
+  // "two engines feed one verified result".
+  const PILL_X = 110;
+  const PILL_Y = 215;
+  const PILL_W = 280;
+  const PILL_H = 42;
+
   return (
     <div className="relative aspect-[5/3] rounded-md border border-border-primary bg-bg-surface overflow-hidden">
       <div className="absolute inset-0 grid-bg opacity-30" />
       <svg viewBox="0 0 500 300" className="w-full h-full relative">
         <defs>
           <radialGradient id="glyph-blue" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.85" />
-            <stop offset="55%" stopColor="#3b82f6" stopOpacity="0.12" />
+            <stop offset="0%" stopColor="#3b82f6" stopOpacity="0.78" />
+            <stop offset="55%" stopColor="#3b82f6" stopOpacity="0.10" />
             <stop offset="100%" stopColor="#3b82f6" stopOpacity="0" />
           </radialGradient>
           <radialGradient id="glyph-green" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#10b981" stopOpacity="0.85" />
-            <stop offset="55%" stopColor="#10b981" stopOpacity="0.12" />
+            <stop offset="0%" stopColor="#10b981" stopOpacity="0.78" />
+            <stop offset="55%" stopColor="#10b981" stopOpacity="0.10" />
             <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
           </radialGradient>
-          {/* Horizontal flow gradient: blue on the left, green on the right,
-              fully opaque only at the inner edges so the conduit reads as
-              "data passing from one engine to the other". */}
+          {/* Horizontal flow gradient: blue → neutral → green, edges fade. */}
           <linearGradient id="flow-stroke" x1="0%" y1="50%" x2="100%" y2="50%">
             <stop offset="0%"   stopColor="#3b82f6" stopOpacity="0" />
-            <stop offset="20%"  stopColor="#3b82f6" stopOpacity="0.55" />
-            <stop offset="50%"  stopColor="#a1a1aa" stopOpacity="0.4" />
-            <stop offset="80%"  stopColor="#10b981" stopOpacity="0.55" />
+            <stop offset="22%"  stopColor="#3b82f6" stopOpacity="0.55" />
+            <stop offset="50%"  stopColor="#a1a1aa" stopOpacity="0.38" />
+            <stop offset="78%"  stopColor="#10b981" stopOpacity="0.55" />
             <stop offset="100%" stopColor="#10b981" stopOpacity="0" />
+          </linearGradient>
+          {/* Vertical merge gradient — neutral at top fades into accent green
+              as it enters the VERIFIED pill. */}
+          <linearGradient id="merge-stroke" x1="50%" y1="0%" x2="50%" y2="100%">
+            <stop offset="0%"   stopColor="#a1a1aa" stopOpacity="0.45" />
+            <stop offset="100%" stopColor="#10b981" stopOpacity="0.85" />
           </linearGradient>
         </defs>
 
-        {/* Left glyph — probabilistic (orbital cloud) */}
+        {/* LEFT GLYPH — probabilistic. Halo + 8 dots on a true circle.
+            Three of the dots are slightly dimmer to suggest distribution
+            density without breaking the ring's symmetry. */}
         <g>
-          <circle cx="120" cy="135" r="78" fill="url(#glyph-blue)" />
-          <g className="constellation-orbit-1" style={{ transformOrigin: "120px 135px" }}>
-            {[
-              [120,  75], [175, 105], [170, 165], [125, 195],
-              [ 65, 165], [ 65, 105],
-            ].map(([cx, cy], i) => (
-              <circle key={i} cx={cx} cy={cy} r="3.2" fill="#3b82f6" opacity="0.95" />
-            ))}
+          <circle cx={CX_L} cy={CY} r={HALO} fill="url(#glyph-blue)" />
+          <g
+            className="constellation-orbit-1"
+            style={{ transformOrigin: `${CX_L}px ${CY}px` }}
+          >
+            {Array.from({ length: N_DOTS }).map((_, i) => {
+              const a = (i / N_DOTS) * Math.PI * 2 - Math.PI / 2;
+              const x = CX_L + Math.cos(a) * ORBIT_R;
+              const y = CY + Math.sin(a) * ORBIT_R;
+              // Alternating opacity gives a faint probability-cloud feel.
+              const op = i % 3 === 0 ? 0.55 : 0.95;
+              return <circle key={i} cx={x} cy={y} r="3" fill="#3b82f6" opacity={op} />;
+            })}
           </g>
-          <circle cx="120" cy="135" r="7" fill="#3b82f6" className="constellation-core" style={{ transformOrigin: "120px 135px" }} />
+          <circle
+            cx={CX_L} cy={CY} r="6.5" fill="#3b82f6"
+            className="constellation-core"
+            style={{ transformOrigin: `${CX_L}px ${CY}px` }}
+          />
         </g>
 
-        {/* Right glyph — deterministic (precise grid) */}
+        {/* RIGHT GLYPH — deterministic. Halo + a precise 3×3 grid of
+            equal squares, perfectly centered on the core. */}
         <g>
-          <circle cx="380" cy="135" r="78" fill="url(#glyph-green)" />
-          {[-1, 0, 1].flatMap((dx) =>
-            [-1, 0, 1].map((dy) => (
+          <circle cx={CX_R} cy={CY} r={HALO} fill="url(#glyph-green)" />
+          {[-1, 0, 1].flatMap((dy) =>
+            [-1, 0, 1].map((dx) => (
               <rect
                 key={`${dx},${dy}`}
-                x={377 + dx * 26}
-                y={132 + dy * 26}
-                width="4.5"
-                height="4.5"
+                x={CX_R + dx * GRID_STEP - SQ / 2}
+                y={CY   + dy * GRID_STEP - SQ / 2}
+                width={SQ}
+                height={SQ}
                 fill="#10b981"
-                opacity="0.95"
+                opacity={dx === 0 && dy === 0 ? 1 : 0.85}
                 className="constellation-node"
                 style={{ animationDelay: `${(dx + dy + 2) * 0.25}s` }}
               />
             ))
           )}
-          <circle cx="380" cy="135" r="6" fill="#10b981" className="constellation-core" style={{ transformOrigin: "380px 135px" }} />
+          <circle
+            cx={CX_R} cy={CY} r="5.5" fill="#10b981"
+            className="constellation-core"
+            style={{ transformOrigin: `${CX_R}px ${CY}px` }}
+          />
         </g>
 
-        {/* Flow conduit between the glyphs. Three parallel lines,
-            stroked with a single horizontal gradient so each one fades
-            from blue → neutral → green. Reads as "signal moving through",
-            not as a closed eye-shape. */}
+        {/* HORIZONTAL FLOW — three parallel lines on the same axis as the
+            glyph cores. Centered on the junction at (250, CY). */}
         <g>
-          {[120, 135, 150].map((y, i) => (
+          {[-12, 0, 12].map((dy, i) => (
             <line
-              key={y}
-              x1="195" y1={y}
-              x2="305" y2={y}
+              key={dy}
+              x1={CX_L + HALO - 8} y1={CY + dy}
+              x2={CX_R - HALO + 8} y2={CY + dy}
               stroke="url(#flow-stroke)"
-              strokeWidth={i === 1 ? 1.6 : 1}
+              strokeWidth={dy === 0 ? 1.6 : 1}
               className="constellation-line"
               style={{ animationDelay: `${i * 0.45}s` }}
             />
           ))}
-          {/* Center merge: a small vertical "gate" + the central junction dot.
-              The dot pulses; the gate stays still to feel deliberate. */}
-          <line x1="250" y1="120" x2="250" y2="150" stroke="rgba(250,250,250,0.18)" strokeWidth="1" />
-          <circle cx="250" cy="135" r="3.5" fill="#fafafa" className="counter-tick" />
+          {/* Center junction — the "merge" — pulses on the same axis. */}
+          <circle cx="250" cy={CY} r="3.5" fill="#fafafa" className="counter-tick" />
         </g>
 
-        {/* VERIFIED strip — wider letter-spacing, tighter alignment. */}
-        <rect x="70" y="232" width="360" height="40" rx="6" fill="rgba(16,185,129,0.06)" stroke="rgba(16,185,129,0.28)" />
-        <g transform="translate(94, 257)">
-          <text x="0" y="0" fill="#10b981" fontSize="11" fontFamily="ui-monospace, monospace" letterSpacing="0.18em" fontWeight="600">
-            ✓  VERIFIED
-          </text>
-          <text x="115" y="0" fill="#52525b" fontSize="11" fontFamily="ui-monospace, monospace">·</text>
-          <text x="130" y="0" fill="#a1a1aa" fontSize="11" fontFamily="ui-monospace, monospace" letterSpacing="0.05em">
-            claim  ·  source  ·  math
+        {/* MERGE TICK — drops from the junction into the VERIFIED pill so
+            the visual story is: probabilistic + deterministic → verified.
+            Without this connector the pill below felt disconnected. */}
+        <line
+          x1="250" y1={CY + 6}
+          x2="250" y2={PILL_Y}
+          stroke="url(#merge-stroke)"
+          strokeWidth="1.4"
+        />
+
+        {/* VERIFIED PILL — centered horizontally, dropped to the bottom.
+            Pill width sized so its center sits exactly on x=250. */}
+        <rect
+          x={PILL_X} y={PILL_Y} width={PILL_W} height={PILL_H} rx="7"
+          fill="rgba(16,185,129,0.07)"
+          stroke="rgba(16,185,129,0.32)"
+        />
+        <g transform={`translate(250, ${PILL_Y + PILL_H / 2 + 4})`} textAnchor="middle">
+          <text
+            x="0" y="0"
+            fill="#10b981"
+            fontSize="11"
+            fontFamily="ui-monospace, monospace"
+            letterSpacing="0.16em"
+            fontWeight="600"
+          >
+            ✓  VERIFIED  ·  claim  ·  source  ·  math
           </text>
         </g>
       </svg>
