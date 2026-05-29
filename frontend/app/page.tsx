@@ -106,7 +106,7 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
             <span className="text-signal-green">LIVE</span>
           </div>
 
-          <h1 className="text-[44px] sm:text-[56px] lg:text-[64px] font-semibold tracking-[-0.02em] leading-[1.02] mb-8">
+          <h1 className="font-display text-[38px] sm:text-[48px] lg:text-[54px] font-semibold tracking-[-0.01em] leading-[1.06] mb-8">
             AI Agents for
             <br />
             Investment Managers.
@@ -163,11 +163,11 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
 function TaglineStrip() {
   return (
     <section className="relative border-y border-border-primary/60 bg-bg-surface/20">
-      <div className="max-w-[920px] mx-auto px-6 py-32 text-center">
+      <div className="max-w-[920px] mx-auto px-6 py-20 text-center">
         <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-6">
           <span className="text-accent">///</span> THE DESK
         </p>
-        <p className="text-[28px] sm:text-[34px] font-semibold tracking-[-0.02em] leading-[1.15] text-text-primary">
+        <p className="font-display text-[26px] sm:text-[32px] font-semibold tracking-[-0.01em] leading-[1.2] text-text-primary">
           A team of agents, one workflow.
           <br className="hidden sm:block" />
           <span className="text-text-tertiary">
@@ -186,12 +186,12 @@ function TaglineStrip() {
 function StatusStrip() {
   return (
     <section className="border-b border-border-primary/60">
-      <div className="max-w-[1280px] mx-auto px-6 py-32">
+      <div className="max-w-[1280px] mx-auto px-6 py-20">
         <div className="text-center mb-14 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-4">
             <span className="text-accent">///</span> A TYPICAL RUN
           </p>
-          <h2 className="text-[28px] sm:text-[34px] font-semibold tracking-[-0.02em] leading-[1.15]">
+          <h2 className="font-display text-[26px] sm:text-[32px] font-semibold tracking-[-0.01em] leading-[1.2]">
             What a single question feels like, at a glance.
           </h2>
         </div>
@@ -322,12 +322,12 @@ function MiniDots() {
 function ProductShowcase() {
   return (
     <section id="product" className="border-b border-border-primary/60">
-      <div className="max-w-[1280px] mx-auto px-6 py-40">
+      <div className="max-w-[1280px] mx-auto px-6 py-24">
         <div className="text-center mb-20 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
             <span className="text-accent">///</span> PRODUCT
           </p>
-          <h2 className="text-[36px] sm:text-[44px] font-semibold tracking-[-0.02em] leading-[1.05] mb-5">
+          <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
             Four things you&apos;ll reach for, day in and day out.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
@@ -435,6 +435,7 @@ function TrackRecordViz() {
         <span>SIGNAL IC · TRAILING 90D</span>
         <span className="text-signal-green">+0.08</span>
       </div>
+      {/* rigor readout below the curve — see TrackRecordViz footer */}
       <div className="p-3">
         <svg viewBox="0 0 280 80" className="w-full h-20 overflow-visible">
           <defs>
@@ -456,9 +457,9 @@ function TrackRecordViz() {
           <line x1="0" y1="48" x2="280" y2="48" stroke="rgba(250,250,250,0.06)" strokeDasharray="2 3" />
         </svg>
         <div className="mt-2 grid grid-cols-3 gap-2 text-[10px] font-mono text-text-tertiary">
-          <span>1D <span className="text-text-secondary ml-1">+0.04</span></span>
-          <span>5D <span className="text-text-secondary ml-1">+0.08</span></span>
-          <span>20D <span className="text-text-secondary ml-1">+0.11</span></span>
+          <span>DEF. SHARPE <span className="text-text-secondary ml-1">0.62</span></span>
+          <span>PBO <span className="text-text-secondary ml-1">18%</span></span>
+          <span>BRIER <span className="text-text-secondary ml-1">0.21</span></span>
         </div>
       </div>
     </div>
@@ -530,12 +531,12 @@ function IntelligenceLayer() {
         <div className="absolute bottom-0 right-1/4 w-[32rem] h-[32rem] rounded-full bg-signal-green/[0.04] blur-[120px]" />
       </div>
 
-      <div className="max-w-[1280px] mx-auto px-6 py-40 relative">
+      <div className="max-w-[1280px] mx-auto px-6 py-24 relative">
         <div className="text-center mb-20 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
             <span className="text-accent">///</span> INTELLIGENCE LAYER
           </p>
-          <h2 className="text-[36px] sm:text-[44px] font-semibold tracking-[-0.02em] leading-[1.05] mb-5">
+          <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
             Reasoning meets math.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
@@ -750,12 +751,12 @@ function SourceLedger() {
   ];
   return (
     <section id="trust" className="relative border-b border-border-primary/60 bg-bg-surface/30">
-      <div className="max-w-[1280px] mx-auto px-6 py-40">
+      <div className="max-w-[1280px] mx-auto px-6 py-24">
         <div className="text-center mb-20 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
             <span className="text-accent">///</span> SOURCE LEDGER
           </p>
-          <h2 className="text-[36px] sm:text-[44px] font-semibold tracking-[-0.02em] leading-[1.05] mb-5">
+          <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
             Every claim comes with a receipt.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
@@ -805,11 +806,11 @@ function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
       <div className="pointer-events-none absolute inset-0" aria-hidden="true">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[48rem] h-[24rem] bg-accent/[0.08] blur-[120px] rounded-full" />
       </div>
-      <div className="max-w-[920px] mx-auto px-6 py-40 text-center relative">
+      <div className="max-w-[920px] mx-auto px-6 py-24 text-center relative">
         <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-6">
           <span className="text-accent">///</span> READY WHEN YOU ARE
         </p>
-        <h2 className="text-[40px] sm:text-[56px] font-semibold tracking-[-0.02em] leading-[1.04] mb-7">
+        <h2 className="font-display text-[34px] sm:text-[46px] font-semibold tracking-[-0.01em] leading-[1.08] mb-7">
           Your next memo is ten
           <br />
           minutes away.

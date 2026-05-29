@@ -34,6 +34,8 @@
   --color-signal-yellow: var(--signal-yellow);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  /* Editorial serif for marketing display headlines → `font-display` utility. */
+  --font-display: var(--font-serif), Georgia, "Times New Roman", serif;
 }
 
 body {

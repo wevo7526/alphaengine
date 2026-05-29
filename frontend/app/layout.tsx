@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Source_Serif_4 } from "next/font/google";
 import { ClerkProvider } from "@clerk/nextjs";
 import "./globals.css";
 import { Sidebar } from "@/components/Sidebar";
@@ -15,6 +15,17 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+// Editorial serif for display headlines (marketing surfaces). Gives the
+// landing a grounded, research-note feel without disturbing the in-app
+// terminal UI, which stays on Geist sans/mono. Exposed as --font-serif and
+// surfaced through the `font-display` Tailwind utility (see globals.css).
+const sourceSerif = Source_Serif_4({
+  variable: "--font-serif",
+  subsets: ["latin"],
+  weight: ["400", "600"],
+  style: ["normal", "italic"],
 });
 
 export const metadata: Metadata = {
@@ -196,7 +207,7 @@ export default function RootLayout({
     >
       <html
         lang="en"
-        className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${sourceSerif.variable} h-full antialiased`}
       >
         <body className="h-full flex">
           <Providers>
