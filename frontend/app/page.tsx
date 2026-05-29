@@ -85,62 +85,126 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
       {/* Faint structural grid only — no glow, no orbs, no animation. */}
       <div className="absolute inset-0 grid-bg opacity-[0.10]" aria-hidden="true" />
 
-      <div className="relative z-10 max-w-[1280px] mx-auto px-6 w-full py-28">
-        <div className="max-w-xl">
-          <div className="inline-flex items-center gap-2 mb-9 text-[10px] font-mono tracking-[0.22em] text-text-quaternary">
-            <span className="text-text-tertiary">///</span>
-            <span>ALPHA ENGINE · v1.0</span>
-            <span className="w-1 h-1 rounded-full bg-text-quaternary" />
-            <span className="text-text-tertiary">LIVE</span>
-          </div>
-
-          <h1 className="font-display text-[38px] sm:text-[48px] lg:text-[54px] font-semibold tracking-[-0.01em] leading-[1.06] mb-8">
-            AI Agents for
-            <br />
-            Investment Managers.
-          </h1>
-
-          <p className="text-[16px] text-text-secondary leading-relaxed mb-11 max-w-md">
-            A team of agents handles research, risk, and portfolio construction,
-            and a CIO agent signs off. They take your question from plain English
-            to a sourced, risk-checked memo with trade ideas. In minutes.
-          </p>
-
-          <div className="flex items-center gap-5 flex-wrap">
-            {isSignedIn ? (
-              <Link
-                href="/dashboard"
-                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
-              >
-                Go to dashboard
-              </Link>
-            ) : (
-              <Link
-                href="/sign-up"
-                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
-              >
-                Get started
-              </Link>
-            )}
-          </div>
-
-          {/* Terminal command preview — evocative, not literal */}
-          <div className="mt-16 max-w-md rounded-sm border border-border-primary bg-bg-surface/60 backdrop-blur-sm overflow-hidden">
-            <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-              <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary" />
-              <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary" />
-              <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary" />
-              <span className="ml-2">ANALYSIS · NEW</span>
-              <span className="ml-auto text-[9px]">~10 min</span>
+      <div className="relative z-10 max-w-[1280px] mx-auto px-6 w-full py-24">
+        <div className="grid lg:grid-cols-[1.05fr_1fr] gap-14 items-center">
+          {/* Left — positioning + the ask */}
+          <div className="max-w-xl">
+            <div className="inline-flex items-center gap-2 mb-9 text-[10px] font-mono tracking-[0.22em] text-text-quaternary">
+              <span className="text-text-tertiary">///</span>
+              <span>ALPHA ENGINE · v1.0</span>
+              <span className="w-1 h-1 rounded-full bg-text-quaternary" />
+              <span className="text-text-tertiary">LIVE</span>
             </div>
-            <div className="px-4 py-3 font-mono text-[12px] text-text-secondary leading-relaxed">
-              <span className="text-text-tertiary">{">"}</span> under-covered mid-cap
-              industrials that can beat the S&amp;P<span className="terminal-cursor text-text-tertiary" />
+
+            <h1 className="font-display text-[38px] sm:text-[48px] lg:text-[54px] font-semibold tracking-[-0.01em] leading-[1.06] mb-8">
+              AI Agents for
+              <br />
+              Investment Managers.
+            </h1>
+
+            <p className="text-[16px] text-text-secondary leading-relaxed mb-10 max-w-md">
+              A team of agents handles research, risk, and portfolio construction,
+              and a CIO agent signs off. They take your question from plain English
+              to a sourced, risk-checked memo with trade ideas. In minutes.
+            </p>
+
+            <div className="flex items-center gap-5 flex-wrap mb-10">
+              {isSignedIn ? (
+                <Link
+                  href="/dashboard"
+                  className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
+                >
+                  Go to dashboard
+                </Link>
+              ) : (
+                <Link
+                  href="/sign-up"
+                  className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
+                >
+                  Get started
+                </Link>
+              )}
+            </div>
+
+            {/* The ask — a plain-English query */}
+            <div className="rounded-sm border border-border-primary bg-bg-surface/40 overflow-hidden">
+              <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center gap-2 text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
+                <span>QUERY</span>
+                <span className="ml-auto">PLAIN ENGLISH</span>
+              </div>
+              <div className="px-4 py-3 font-mono text-[12px] text-text-secondary leading-relaxed">
+                <span className="text-text-tertiary">{">"}</span> under-covered mid-cap
+                industrials that can beat the S&amp;P<span className="terminal-cursor text-text-tertiary" />
+              </div>
             </div>
           </div>
+
+          {/* Right — the result: a real memo tearsheet */}
+          <HeroTearsheet />
         </div>
       </div>
     </section>
+  );
+}
+
+// Dense, flat memo tearsheet — the hero's proof artifact. Reads like a real
+// desk output: decision header, KPI strip, trade table, verified footer.
+function HeroTearsheet() {
+  const rows = [
+    { t: "ASLE", d: "LONG",  c: 84, e: "12.40", s: "10.90", p: "17.20" },
+    { t: "WNC",  d: "LONG",  c: 78, e: "26.10", s: "23.40", p: "33.50" },
+    { t: "TGLS", d: "LONG",  c: 71, e: "58.30", s: "52.00", p: "72.00" },
+  ];
+  return (
+    <div className="rounded-sm border border-border-primary bg-bg-surface overflow-hidden text-text-secondary">
+      {/* Header */}
+      <div className="px-4 py-2.5 border-b border-border-primary flex items-center justify-between">
+        <span className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">INTELLIGENCE MEMO</span>
+        <span className="text-[10px] font-mono tracking-[0.18em] px-2 py-0.5 border border-border-primary rounded-sm text-text-primary">GO</span>
+      </div>
+      {/* Title */}
+      <div className="px-4 pt-3.5 pb-3 border-b border-border-primary/60">
+        <p className="font-display text-[15px] text-text-primary leading-snug">
+          Under-covered industrials into the reopening
+        </p>
+      </div>
+      {/* KPI strip */}
+      <div className="grid grid-cols-4 divide-x divide-border-primary/60 border-b border-border-primary/60">
+        {[
+          ["CONVICTION", "82"],
+          ["REGIME", "EXPANSION"],
+          ["RISK", "ELEVATED"],
+          ["NAMES", "3"],
+        ].map(([k, v]) => (
+          <div key={k} className="px-3 py-2.5">
+            <p className="text-[8px] font-mono tracking-[0.18em] text-text-quaternary mb-1">{k}</p>
+            <p className="text-[11px] font-mono text-text-primary truncate">{v}</p>
+          </div>
+        ))}
+      </div>
+      {/* Trade table */}
+      <div className="px-4 py-2 border-b border-border-primary/60">
+        <div className="grid grid-cols-[1.2fr_0.8fr_0.6fr_1fr_1fr_1fr] gap-2 text-[8px] font-mono tracking-[0.14em] text-text-quaternary pb-1.5 mb-1 border-b border-border-primary/40">
+          <span>TICKER</span><span>DIR</span><span>CONV</span><span>ENTRY</span><span>STOP</span><span>TARGET</span>
+        </div>
+        {rows.map((r) => (
+          <div key={r.t} className="grid grid-cols-[1.2fr_0.8fr_0.6fr_1fr_1fr_1fr] gap-2 text-[11px] font-mono py-1 tabular-nums">
+            <span className="text-text-primary">{r.t}</span>
+            <span className="text-text-tertiary">{r.d}</span>
+            <span className="text-text-secondary">{r.c}</span>
+            <span className="text-text-tertiary">{r.e}</span>
+            <span className="text-text-tertiary">{r.s}</span>
+            <span className="text-text-tertiary">{r.p}</span>
+          </div>
+        ))}
+      </div>
+      {/* Verified footer */}
+      <div className="px-4 py-2.5 flex items-center gap-3 bg-bg-elevated/40">
+        <span className="text-[10px] font-mono tracking-[0.16em] text-text-primary">✓ VERIFIED</span>
+        <span className="text-[10px] font-mono tracking-[0.16em] text-text-quaternary">22 sources</span>
+        <span className="ml-auto text-[10px] font-mono tracking-[0.16em] text-text-quaternary">deflated&nbsp;SR&nbsp;0.91</span>
+      </div>
+    </div>
   );
 }
 
@@ -536,7 +600,7 @@ function IntelligenceLayer() {
             <div className="space-y-3">
               <div className="rounded-sm border border-border-primary bg-bg-surface px-5 py-4">
                 <div className="flex items-center gap-2.5 mb-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-accent" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-text-tertiary" />
                   <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary">PROBABILISTIC</p>
                 </div>
                 <p className="text-[13px] text-text-secondary leading-relaxed">
@@ -564,159 +628,34 @@ function IntelligenceLayer() {
 }
 
 function IntelligenceVisual() {
-  // Geometry constants — kept up here so the visual stays mathematically
-  // symmetric. The earlier version placed orbital dots at hand-tuned
-  // coords that approximated a circle (distances 58–63 from center),
-  // which is what made the glyph read as "lumpy".
-  const CX_L = 130;   // left glyph core x
-  const CX_R = 370;   // right glyph core x
-  const CY   = 120;   // shared core y — composition vertical center
-  const HALO = 72;    // soft halo radius (both sides)
-  const ORBIT_R = 50; // perfect radius for probabilistic dots
-  const N_DOTS = 8;   // even number → reads as a clean ring
-
-  // Right-hand grid: 3×3 of small squares, equal spacing, dead-centered.
-  const GRID_STEP = 22;
-  const SQ = 5;
-
-  // VERIFIED pill — sits at the bottom of the canvas. The merge tick from
-  // the center junction drops INTO this pill so the metaphor reads as
-  // "two engines feed one verified result".
-  const PILL_X = 110;
-  const PILL_Y = 215;
-  const PILL_W = 280;
-  const PILL_H = 42;
-
+  // Flat, institutional process artifact — the three-stage pipeline that
+  // makes every number traceable. No glow, no glyphs; reads like a spec.
+  const steps = [
+    { n: "01", k: "COMPUTE", d: "The engine runs the math and binds every figure to a source." },
+    { n: "02", k: "NARRATE", d: "The language model only arranges pre-sourced facts. It never originates a number." },
+    { n: "03", k: "VALIDATE", d: "A linter rejects any claim it cannot trace back to a receipt." },
+  ];
   return (
-    <div className="relative aspect-[5/3] rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
-      <div className="absolute inset-0 grid-bg opacity-[0.10]" />
-      <svg viewBox="0 0 500 300" className="w-full h-full relative">
-        <defs>
-          <radialGradient id="glyph-blue" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#a1a1aa" stopOpacity="0.78" />
-            <stop offset="55%" stopColor="#a1a1aa" stopOpacity="0.10" />
-            <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" />
-          </radialGradient>
-          <radialGradient id="glyph-green" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" stopColor="#a1a1aa" stopOpacity="0.78" />
-            <stop offset="55%" stopColor="#a1a1aa" stopOpacity="0.10" />
-            <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" />
-          </radialGradient>
-          {/* Horizontal flow gradient: blue → neutral → green, edges fade. */}
-          <linearGradient id="flow-stroke" x1="0%" y1="50%" x2="100%" y2="50%">
-            <stop offset="0%"   stopColor="#a1a1aa" stopOpacity="0" />
-            <stop offset="22%"  stopColor="#a1a1aa" stopOpacity="0.55" />
-            <stop offset="50%"  stopColor="#a1a1aa" stopOpacity="0.38" />
-            <stop offset="78%"  stopColor="#a1a1aa" stopOpacity="0.55" />
-            <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" />
-          </linearGradient>
-          {/* Vertical merge gradient — neutral at top fades into accent green
-              as it enters the VERIFIED pill. */}
-          <linearGradient id="merge-stroke" x1="50%" y1="0%" x2="50%" y2="100%">
-            <stop offset="0%"   stopColor="#a1a1aa" stopOpacity="0.45" />
-            <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0.85" />
-          </linearGradient>
-        </defs>
-
-        {/* LEFT GLYPH — probabilistic. Halo + 8 dots on a true circle.
-            Three of the dots are slightly dimmer to suggest distribution
-            density without breaking the ring's symmetry. */}
-        <g>
-          <circle cx={CX_L} cy={CY} r={HALO} fill="url(#glyph-blue)" />
-          <g
-            className="constellation-orbit-1"
-            style={{ transformOrigin: `${CX_L}px ${CY}px` }}
-          >
-            {Array.from({ length: N_DOTS }).map((_, i) => {
-              const a = (i / N_DOTS) * Math.PI * 2 - Math.PI / 2;
-              const x = CX_L + Math.cos(a) * ORBIT_R;
-              const y = CY + Math.sin(a) * ORBIT_R;
-              // Alternating opacity gives a faint probability-cloud feel.
-              const op = i % 3 === 0 ? 0.55 : 0.95;
-              return <circle key={i} cx={x} cy={y} r="3" fill="#a1a1aa" opacity={op} />;
-            })}
-          </g>
-          <circle
-            cx={CX_L} cy={CY} r="6.5" fill="#a1a1aa"
-            className="constellation-core"
-            style={{ transformOrigin: `${CX_L}px ${CY}px` }}
-          />
-        </g>
-
-        {/* RIGHT GLYPH — deterministic. Halo + a precise 3×3 grid of
-            equal squares, perfectly centered on the core. */}
-        <g>
-          <circle cx={CX_R} cy={CY} r={HALO} fill="url(#glyph-green)" />
-          {[-1, 0, 1].flatMap((dy) =>
-            [-1, 0, 1].map((dx) => (
-              <rect
-                key={`${dx},${dy}`}
-                x={CX_R + dx * GRID_STEP - SQ / 2}
-                y={CY   + dy * GRID_STEP - SQ / 2}
-                width={SQ}
-                height={SQ}
-                fill="#a1a1aa"
-                opacity={dx === 0 && dy === 0 ? 1 : 0.85}
-                className="constellation-node"
-                style={{ animationDelay: `${(dx + dy + 2) * 0.25}s` }}
-              />
-            ))
-          )}
-          <circle
-            cx={CX_R} cy={CY} r="5.5" fill="#a1a1aa"
-            className="constellation-core"
-            style={{ transformOrigin: `${CX_R}px ${CY}px` }}
-          />
-        </g>
-
-        {/* HORIZONTAL FLOW — three parallel lines on the same axis as the
-            glyph cores. Centered on the junction at (250, CY). */}
-        <g>
-          {[-12, 0, 12].map((dy, i) => (
-            <line
-              key={dy}
-              x1={CX_L + HALO - 8} y1={CY + dy}
-              x2={CX_R - HALO + 8} y2={CY + dy}
-              stroke="url(#flow-stroke)"
-              strokeWidth={dy === 0 ? 1.6 : 1}
-              className="constellation-line"
-              style={{ animationDelay: `${i * 0.45}s` }}
-            />
-          ))}
-          {/* Center junction — the "merge" — pulses on the same axis. */}
-          <circle cx="250" cy={CY} r="3.5" fill="#fafafa" className="counter-tick" />
-        </g>
-
-        {/* MERGE TICK — drops from the junction into the VERIFIED pill so
-            the visual story is: probabilistic + deterministic → verified.
-            Without this connector the pill below felt disconnected. */}
-        <line
-          x1="250" y1={CY + 6}
-          x2="250" y2={PILL_Y}
-          stroke="url(#merge-stroke)"
-          strokeWidth="1.4"
-        />
-
-        {/* VERIFIED PILL — centered horizontally, dropped to the bottom.
-            Pill width sized so its center sits exactly on x=250. */}
-        <rect
-          x={PILL_X} y={PILL_Y} width={PILL_W} height={PILL_H} rx="7"
-          fill="rgba(16,185,129,0.07)"
-          stroke="rgba(16,185,129,0.32)"
-        />
-        <g transform={`translate(250, ${PILL_Y + PILL_H / 2 + 4})`} textAnchor="middle">
-          <text
-            x="0" y="0"
-            fill="#a1a1aa"
-            fontSize="11"
-            fontFamily="ui-monospace, monospace"
-            letterSpacing="0.16em"
-            fontWeight="600"
-          >
-            ✓  VERIFIED  ·  claim  ·  source  ·  math
-          </text>
-        </g>
-      </svg>
+    <div className="rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
+      <div className="px-3 py-2 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
+        <span>PIPELINE</span>
+        <span>COMPUTE → NARRATE → VALIDATE</span>
+      </div>
+      <div className="divide-y divide-border-primary/40">
+        {steps.map((s) => (
+          <div key={s.n} className="flex items-start gap-4 px-5 py-5">
+            <span className="font-mono text-[11px] text-text-quaternary mt-0.5 tabular-nums">{s.n}</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] font-mono tracking-[0.22em] text-text-secondary mb-1.5">{s.k}</p>
+              <p className="text-[12px] text-text-tertiary leading-relaxed">{s.d}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="px-5 py-3.5 border-t border-border-primary flex items-center gap-3 bg-bg-elevated/40">
+        <span className="font-mono text-[11px] tracking-[0.18em] text-text-primary">✓ VERIFIED</span>
+        <span className="font-mono text-[10px] tracking-[0.18em] text-text-quaternary">claim · source · math</span>
+      </div>
     </div>
   );
 }
