@@ -2,17 +2,14 @@
 
 import Link from "next/link";
 import { GoogleButton } from "@/components/GoogleButton";
-import { BrandConstellation } from "@/components/BrandConstellation";
 
 /**
  * Two-sided auth panel used by both /sign-in and /sign-up.
  *
- * Left (lg+): brand panel with the BrandConstellation as the visual
- *             centerpiece, hero copy overlaid on top, gradient ambient
- *             orbs in the background. Footer line at the bottom.
- * Right     : auth controls — tab switcher, heading, Google button,
- *             switch link, fine print. Entrance animations stagger the
- *             elements so the page feels alive on mount.
+ * Institutional treatment (matches the landing reskin): flat, near-
+ * monochrome, hard 1px rules, faint structural grid — no glow orbs,
+ * gradient, or animated constellation. Blue appears only on the logo
+ * wordmark. Display headings inherit the editorial serif (globals.css).
  *
  * `mode` drives the active tab and the Clerk flow (signIn vs signUp).
  */
@@ -20,17 +17,11 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
   return (
     <div className="min-h-screen w-full grid lg:grid-cols-[1.05fr_1fr] bg-bg-primary text-text-primary">
       {/* ─── LEFT: BRAND PANEL ─────────────────────────────────────────── */}
-      <aside className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden border-r border-border-primary bg-gradient-to-br from-bg-primary via-bg-primary to-[#0a0e1a]">
-        {/* Ambient gradient orbs (additional depth on top of base gradient) */}
-        <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-          <div className="absolute -top-40 -left-40 w-[42rem] h-[42rem] rounded-full bg-accent/[0.10] blur-[120px]" />
-          <div className="absolute bottom-0 -right-40 w-[36rem] h-[36rem] rounded-full bg-signal-green/[0.06] blur-[120px]" />
-        </div>
+      <aside className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden border-r border-border-primary bg-bg-surface/30">
+        {/* Faint structural grid only — no glow, no orbs, no animation. */}
+        <div className="absolute inset-0 grid-bg opacity-[0.10]" aria-hidden="true" />
 
-        {/* The animated constellation — sits behind copy */}
-        <BrandConstellation />
-
-        {/* Top: brand mark */}
+        {/* Top: brand mark (the one place blue is allowed). */}
         <Link
           href="/"
           className="relative z-10 inline-block self-start text-[17px] font-semibold tracking-tight hover:opacity-90 transition-opacity"
@@ -38,28 +29,24 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
           alpha<span className="text-accent">engine</span>
         </Link>
 
-        {/* Center-ish: hero copy. Sits above the constellation. */}
+        {/* Center: hero copy. */}
         <div className="relative z-10 max-w-md fade-up-1">
-          <p className="text-[11px] uppercase tracking-[0.2em] text-text-quaternary mb-5">
-            For L/S equity &amp; macro PMs
+          <p className="text-[10px] font-mono uppercase tracking-[0.22em] text-text-quaternary mb-5">
+            <span className="text-text-tertiary">///</span> For L/S equity &amp; macro PMs
           </p>
-          <h2 className="text-[40px] xl:text-[44px] font-semibold tracking-tight leading-[1.05] mb-5">
-            The AI research desk for hedge funds.
+          <h2 className="font-display text-[38px] xl:text-[42px] font-semibold tracking-[-0.01em] leading-[1.08] mb-5">
+            AI agents for investment managers.
           </h2>
           <p className="text-[14px] text-text-tertiary leading-relaxed max-w-sm">
-            Bring research, risk, and discovery together in one workflow.
-            Generate a defensible 10-name trade slate with cointegrated
-            pairs, factor decomposition, and full source lineage in under
-            10 minutes.
+            A team of agents handles research, risk, and portfolio
+            construction, and a CIO agent signs off. You get a sourced,
+            risk-checked memo with trade ideas, in minutes.
           </p>
 
-          {/* Live indicator */}
-          <div className="mt-6 flex items-center gap-2 text-[11px] text-text-tertiary">
-            <span className="relative inline-flex">
-              <span className="absolute inline-flex h-2 w-2 rounded-full bg-signal-green opacity-75 animate-ping" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-signal-green" />
-            </span>
-            Live agents in production
+          {/* Status line — neutral, no colored ping. */}
+          <div className="mt-7 flex items-center gap-2 text-[11px] font-mono text-text-tertiary">
+            <span className="inline-flex h-1.5 w-1.5 rounded-full bg-text-tertiary" />
+            LIVE AGENTS IN PRODUCTION
           </div>
         </div>
 
@@ -83,15 +70,15 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
         </Link>
 
         <div className="w-full max-w-[400px]">
-          {/* Tab switcher */}
-          <div className="grid grid-cols-2 mb-8 rounded-xl border border-border-primary bg-bg-surface p-1 fade-up-1">
+          {/* Tab switcher — flat, bordered, no shadow. */}
+          <div className="grid grid-cols-2 mb-8 rounded-sm border border-border-primary bg-bg-surface p-1 fade-up-1">
             <Link
               href="/sign-in"
               prefetch
-              className={`text-center py-2 rounded-lg text-[13px] font-medium transition-all ${
+              className={`text-center py-2 rounded-sm text-[12px] font-mono uppercase tracking-wider transition-colors ${
                 mode === "signin"
-                  ? "bg-bg-primary text-text-primary shadow-sm"
-                  : "text-text-tertiary hover:text-text-primary"
+                  ? "bg-bg-elevated text-text-primary"
+                  : "text-text-quaternary hover:text-text-secondary"
               }`}
             >
               Sign in
@@ -99,25 +86,25 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
             <Link
               href="/sign-up"
               prefetch
-              className={`text-center py-2 rounded-lg text-[13px] font-medium transition-all ${
+              className={`text-center py-2 rounded-sm text-[12px] font-mono uppercase tracking-wider transition-colors ${
                 mode === "signup"
-                  ? "bg-bg-primary text-text-primary shadow-sm"
-                  : "text-text-tertiary hover:text-text-primary"
+                  ? "bg-bg-elevated text-text-primary"
+                  : "text-text-quaternary hover:text-text-secondary"
               }`}
             >
               Sign up
             </Link>
           </div>
 
-          {/* Heading */}
+          {/* Heading — serif via the global h1 rule. */}
           <div className="mb-7 fade-up-2">
-            <h1 className="text-[26px] font-semibold tracking-tight text-text-primary mb-2 leading-tight">
+            <h1 className="text-[28px] font-semibold tracking-[-0.01em] text-text-primary mb-2 leading-tight">
               {mode === "signin" ? "Welcome back." : "Create your account."}
             </h1>
             <p className="text-[13px] text-text-tertiary leading-relaxed">
               {mode === "signin"
                 ? "Sign in to continue your research."
-                : "Sign up in seconds. Your first memo runs in under ten minutes."}
+                : "Your first memo runs in under ten minutes."}
             </p>
           </div>
 
@@ -126,7 +113,7 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
             <GoogleButton mode={mode} />
           </div>
 
-          {/* Switch link */}
+          {/* Switch link — neutral, underlined (no accent). */}
           <p className="mt-7 text-center text-[12px] text-text-tertiary fade-up-4">
             {mode === "signin" ? (
               <>
@@ -134,7 +121,7 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
                 <Link
                   href="/sign-up"
                   prefetch
-                  className="text-accent font-medium hover:text-accent/80 transition-colors"
+                  className="text-text-primary font-medium underline underline-offset-4 decoration-border-primary hover:decoration-text-tertiary transition-colors"
                 >
                   Create an account →
                 </Link>
@@ -145,7 +132,7 @@ export function AuthPanel({ mode }: { mode: "signin" | "signup" }) {
                 <Link
                   href="/sign-in"
                   prefetch
-                  className="text-accent font-medium hover:text-accent/80 transition-colors"
+                  className="text-text-primary font-medium underline underline-offset-4 decoration-border-primary hover:decoration-text-tertiary transition-colors"
                 >
                   Sign in →
                 </Link>
