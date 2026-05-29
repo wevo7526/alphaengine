@@ -107,15 +107,15 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
           </div>
 
           <h1 className="text-[44px] sm:text-[56px] lg:text-[64px] font-semibold tracking-[-0.02em] leading-[1.02] mb-8">
-            An AI research desk
+            AI Agents for
             <br />
-            for investment managers.
+            Investment Managers.
           </h1>
 
           <p className="text-[16px] text-text-secondary leading-relaxed mb-11 max-w-md">
-            A team of agents &mdash; research, risk, and portfolio construction,
-            with a CIO that signs off &mdash; takes your question from plain
-            English to a sourced, risk-checked memo with trade ideas. In minutes.
+            A team of agents handles research, risk, and portfolio construction,
+            and a CIO agent signs off. They take your question from plain English
+            to a sourced, risk-checked memo with trade ideas. In minutes.
           </p>
 
           <div className="flex items-center gap-5 flex-wrap">
@@ -171,7 +171,7 @@ function TaglineStrip() {
           A team of agents, one workflow.
           <br className="hidden sm:block" />
           <span className="text-text-tertiary">
-            {" "}They read the question, pull the filings and prices, weigh the risk, build the trades, and a CIO agent signs off &mdash; the path a research desk takes, run end to end.
+            {" "}They read the question, pull the filings and prices, weigh the risk, build the trades, and a CIO agent signs off. It is the path a research desk takes, run end to end.
           </span>
         </p>
       </div>
@@ -341,13 +341,13 @@ function ProductShowcase() {
           <ShowcaseCard
             tag="01 / DISCOVERY"
             title="Scan the whole market, not a watchlist."
-            sub="Every query runs a live scan across sectors, size, and style — surfacing dozens of under-covered names ranked on merit, never a hardcoded list. Insider clusters, fund initiations, post-earnings drift, and 52-week-low setups layer on top."
+            sub="Every query runs a live scan across sectors, size, and style, surfacing dozens of under-covered names ranked on merit, never a hardcoded list. Insider clusters, fund initiations, post-earnings drift, and 52-week-low setups layer on top."
             visual={<DiscoveryViz />}
           />
           <ShowcaseCard
             tag="02 / RIGOR"
             title="Know when it&apos;s edge, and when it&apos;s noise."
-            sub="Conviction is a decomposable, calibrated score — not a vibe. Signals are graded at 1/5/20 days against realized outcomes (Brier + reliability), and every backtest shows a deflated Sharpe, corrected for how many ideas were tried — never the flattering raw number."
+            sub="Conviction is a decomposable, calibrated score, not a vibe. Signals are graded at 1/5/20 days against realized outcomes (Brier + reliability), and every backtest shows a deflated Sharpe, corrected for how many ideas were tried, never the flattering raw number."
             visual={<TrackRecordViz />}
           />
           <ShowcaseCard
@@ -541,9 +541,8 @@ function IntelligenceLayer() {
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
             The deterministic engine computes every figure and binds it to a
             source. The language engine only arranges those pre-sourced facts
-            into prose &mdash; it never originates a number &mdash; and a
-            validator rejects any claim it can&apos;t trace. Agents propose,
-            math disposes, you decide.
+            into prose; it never originates a number. A validator rejects any
+            claim it can&apos;t trace. Agents propose, math disposes, you decide.
           </p>
         </div>
 
@@ -761,9 +760,9 @@ function SourceLedger() {
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
             Each memo carries a complete ledger of the filings, quotes, and
-            computed figures that shaped it &mdash; and a validator refuses to
-            ship a number it can&apos;t trace. Open any source, check any
-            figure. Years from now, it still works.
+            computed figures that shaped it, and a validator refuses to ship a
+            number it can&apos;t trace. Open any source, check any figure. Years
+            from now, it still works.
           </p>
         </div>
 
