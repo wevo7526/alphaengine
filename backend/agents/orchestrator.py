@@ -685,26 +685,29 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
 
     # Build the provenance / lineage block from every agent's accumulated
     # intermediate_steps. PMs use this to audit any claim back to a tool call.
-    try:
-        from infra.lineage import extract_tool_lineage
-        memo = state.get("memo_data") or {}
-        if isinstance(memo, dict):
+    # Split into two try blocks so a citation failure doesn't lose lineage
+    # — and so we get a clear error log if either step crashes (the catches
+    # used to swallow everything to `warning` with no stack).
+    memo = state.get("memo_data") or {}
+    if isinstance(memo, dict):
+        try:
+            from infra.lineage import extract_tool_lineage
             memo["lineage"] = extract_tool_lineage(
                 state.get("tool_steps_by_agent") or {}
             )
-            # Merge structured outputs from prior desks into the memo dict
-            # BEFORE we run the citation resolver — the resolver walks
-            # memo["trade_ideas"] and memo["risk_factors"], which the
-            # CIO typically doesn't echo verbatim. We backfill from
-            # strategy_data / risk_data here so the resolver has the
-            # complete picture.
+            # Pull structured outputs from prior desks into the memo dict
+            # so the citation resolver sees the full picture (CIO doesn't
+            # always echo trade_ideas / risk_factors).
             strategy = state.get("strategy_data") or {}
             risk = state.get("risk_data") or {}
             if isinstance(strategy, dict) and not memo.get("trade_ideas"):
                 memo["trade_ideas"] = strategy.get("trade_ideas") or []
             if isinstance(risk, dict) and not memo.get("risk_factors"):
                 memo["risk_factors"] = risk.get("risk_factors") or []
+        except Exception as e:
+            logger.exception(f"[orchestrator] lineage extraction failed: {e}")
 
+        try:
             # Resolve every agent-emitted citation against the lineage,
             # build the deduplicated citation_index, and replace inline
             # [[src:...]] markers in prose with [N] numeric anchors.
@@ -713,10 +716,20 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
             memo = resolve_memo_citations(memo)
             memo["coverage"] = compute_coverage(memo)
             memo["verification_status"] = grade_verification(memo["coverage"])
-
-            state["memo_data"] = memo
-    except Exception as e:  # noqa: BLE001 — never let lineage break the memo
-        logger.warning(f"[orchestrator] lineage/citations failed: {e}")
+            stats = memo.get("_inline_marker_stats") or {}
+            logger.info(
+                "[orchestrator] citations: %d trade ideas, %d risk factors, "
+                "%d in citation_index, markers %d/%d resolved, status=%s",
+                len(memo.get("trade_ideas") or []),
+                len(memo.get("risk_factors") or []),
+                len(memo.get("citation_index") or []),
+                stats.get("resolved", 0),
+                stats.get("total", 0),
+                memo.get("verification_status"),
+            )
+        except Exception as e:
+            logger.exception(f"[orchestrator] citation resolution failed: {e}")
+        state["memo_data"] = memo
     return state
 
 

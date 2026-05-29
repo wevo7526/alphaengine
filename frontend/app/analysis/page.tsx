@@ -64,28 +64,14 @@ function AnalysisView() {
             <TerminalHeader
               eyebrow="ANALYSIS · LIVE THREAD"
               title={`${runs.length} ${runs.length === 1 ? "run" : "runs"} in this thread`}
-              sub="Each run streams desk-by-desk. Follow-ups continue the thread without restarting. Every claim resolves to a source — open the citations rail under any trade idea."
-              meta={
-                <div className="flex items-center gap-2 justify-end flex-wrap">
-                  {activeRun ? (
-                    <StatusPill label="RUNNING" tone="blue" pulse />
-                  ) : (
-                    <StatusPill label="IDLE" tone="neutral" />
-                  )}
-                </div>
-              }
+              sub="Each run streams desk-by-desk. Follow-ups continue the thread without restarting."
+              meta={activeRun ? <StatusPill label="RUNNING" tone="blue" pulse /> : <StatusPill label="IDLE" tone="neutral" />}
             />
-            {runs.map((run, idx) => (
+            {runs.map((run) => (
               <div key={run.id}>
-                {/* Per-run breadcrumb pill — design-system consistent. */}
-                <div className="mb-3 flex items-center justify-between gap-3">
-                  <span className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary">
-                    <span className="text-accent">///</span> RUN {String(idx + 1).padStart(2, "0")}
-                  </span>
-                  <div className="bg-accent/[0.06] border border-accent/15 rounded-md px-4 py-2.5 max-w-md">
-                    <p className="text-[13px] text-text-primary truncate" title={run.query}>
-                      {run.query}
-                    </p>
+                <div className="mb-4 flex justify-end">
+                  <div className="bg-accent/[0.06] border border-accent/15 rounded-md px-4 py-2.5 max-w-sm">
+                    <p className="text-[13px] text-text-primary">{run.query}</p>
                   </div>
                 </div>
                 <AnalysisTrace run={run} onDeleteMemo={() => removeRun(run.id)} />
