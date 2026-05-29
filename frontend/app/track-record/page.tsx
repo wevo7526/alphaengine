@@ -61,6 +61,27 @@ interface ScorecardSummary {
   error?: string;
 }
 
+interface RigorResp {
+  horizon: string;
+  n: number;
+  calibration?: {
+    brier_score?: number | null;
+    base_rate?: number | null;
+    mean_conviction?: number | null;
+    reliability_curve?: Array<{ bin_lo: number; bin_hi: number; n: number; mean_predicted: number | null; observed_freq: number | null }>;
+  };
+  deflated_sharpe?: {
+    deflated_sharpe?: number;
+    sharpe_annualized?: number;
+    psr_vs_zero?: number;
+    verdict?: string;
+    note?: string;
+    n_trials?: number;
+  };
+  bootstrap_sharpe_ci?: { ci_low?: number; ci_high?: number; excludes_zero?: boolean };
+  tamper_evidence?: { ok?: boolean; n?: number; has_anchor?: boolean; broken_at?: number | null };
+}
+
 interface SignalScore {
   id: string;
   ticker: string;
@@ -189,6 +210,7 @@ export default function TrackRecordPage() {
   const [factorModel, setFactorModel] = useState<"single" | "ff5_mom">("single");
   const [factorLoading, setFactorLoading] = useState(false);
   const [openTickers, setOpenTickers] = useState<string[]>([]);
+  const [rigor, setRigor] = useState<RigorResp | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -197,15 +219,17 @@ export default function TrackRecordPage() {
     setLoading(true);
     setError(null);
     try {
-      const [s, sigResp, attr, pos] = await Promise.all([
+      const [s, sigResp, attr, pos, rig] = await Promise.all([
         api.scorecardSummary() as Promise<ScorecardSummary>,
         api.scorecardSignals(200) as Promise<SignalsResp>,
         api.attribution().catch(() => null) as Promise<AttributionData | null>,
         api.positions().catch(() => null) as Promise<PositionsResp | null>,
+        api.scorecardRigor("5d").catch(() => null) as Promise<RigorResp | null>,
       ]);
       setSummary(s);
       setSignals(sigResp?.signals ?? []);
       setAttribution(attr);
+      setRigor(rig);
       const tickers = Array.from(
         new Set((pos?.positions ?? []).map((p) => p.ticker).filter(Boolean))
       ).slice(0, 8);
@@ -366,6 +390,101 @@ export default function TrackRecordPage() {
               Insufficient history — {nSignals} signal{nSignals === 1 ? "" : "s"} scored,
               need {STABLE_IC_MIN_SIGNALS}+ for stable IC. Numbers shown but interpret with care.
             </div>
+          )}
+
+          {/* ─── QUANT RIGOR: Deflated Sharpe · Calibration · Tamper-evidence ─── */}
+          {rigor && rigor.n > 0 && (
+            <TerminalPanel label="QUANT RIGOR" status="DEFLATED SHARPE · CALIBRATION · INTEGRITY">
+              <div className="grid lg:grid-cols-3 gap-6">
+                {/* Deflated Sharpe — never the naive Sharpe */}
+                <div>
+                  <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                    DEFLATED SHARPE
+                  </p>
+                  {rigor.deflated_sharpe?.deflated_sharpe !== undefined ? (
+                    <>
+                      <div className="flex items-baseline gap-2">
+                        <span className={`text-[28px] font-mono tabular-nums ${
+                          (rigor.deflated_sharpe.deflated_sharpe ?? 0) >= 0.9 ? "text-signal-green"
+                          : (rigor.deflated_sharpe.deflated_sharpe ?? 0) >= 0.5 ? "text-signal-yellow"
+                          : "text-signal-red"}`}>
+                          {(rigor.deflated_sharpe.deflated_sharpe ?? 0).toFixed(2)}
+                        </span>
+                        <StatusPill
+                          label={(rigor.deflated_sharpe.verdict ?? "—").toUpperCase()}
+                          tone={
+                            rigor.deflated_sharpe.verdict === "robust" ? "green"
+                            : rigor.deflated_sharpe.verdict === "marginal" ? "yellow" : "red"
+                          }
+                        />
+                      </div>
+                      <p className="text-[11px] text-text-tertiary mt-2 leading-relaxed">
+                        Probability the edge is real after adjusting for{" "}
+                        {rigor.deflated_sharpe.n_trials ?? 0} trials + non-normal returns.
+                        Naive annualized Sharpe {(rigor.deflated_sharpe.sharpe_annualized ?? 0).toFixed(2)} is
+                        NOT shown as the headline.
+                      </p>
+                      {rigor.bootstrap_sharpe_ci && (
+                        <p className="text-[10px] font-mono text-text-quaternary mt-1">
+                          bootstrap CI [{(rigor.bootstrap_sharpe_ci.ci_low ?? 0).toFixed(2)},{" "}
+                          {(rigor.bootstrap_sharpe_ci.ci_high ?? 0).toFixed(2)}]
+                          {rigor.bootstrap_sharpe_ci.excludes_zero ? " · excludes 0" : " · includes 0"}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <p className="text-[11px] text-text-tertiary">{rigor.deflated_sharpe?.note ?? "—"}</p>
+                  )}
+                </div>
+
+                {/* Calibration — reliability + Brier */}
+                <div>
+                  <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                    CALIBRATION (BRIER {rigor.calibration?.brier_score ?? "—"})
+                  </p>
+                  <p className="text-[11px] text-text-tertiary mb-2 leading-relaxed">
+                    Predicted (conviction) vs. observed hit rate. Lower Brier = better calibrated.
+                  </p>
+                  <div className="space-y-1">
+                    {(rigor.calibration?.reliability_curve ?? [])
+                      .filter((b) => (b.n ?? 0) > 0)
+                      .map((b, i) => (
+                        <div key={i} className="flex items-center gap-2 text-[10px] font-mono">
+                          <span className="text-text-quaternary w-16">
+                            {Math.round(b.bin_lo * 100)}–{Math.round(b.bin_hi * 100)}%
+                          </span>
+                          <div className="flex-1 h-2 bg-bg-elevated rounded-sm overflow-hidden">
+                            <div className="h-full bg-accent"
+                              style={{ width: `${(b.observed_freq ?? 0) * 100}%` }} />
+                          </div>
+                          <span className="text-text-tertiary w-10 text-right">
+                            {Math.round((b.observed_freq ?? 0) * 100)}%
+                          </span>
+                          <span className="text-text-quaternary w-6">n{b.n}</span>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+
+                {/* Tamper-evidence */}
+                <div>
+                  <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
+                    TRACK-RECORD INTEGRITY
+                  </p>
+                  <StatusPill
+                    label={rigor.tamper_evidence?.ok ? "VERIFIED" : rigor.tamper_evidence?.has_anchor ? "TAMPERED" : "UNANCHORED"}
+                    tone={rigor.tamper_evidence?.ok ? "green" : rigor.tamper_evidence?.has_anchor ? "red" : "neutral"}
+                  />
+                  <p className="text-[11px] text-text-tertiary mt-2 leading-relaxed">
+                    {rigor.tamper_evidence?.has_anchor
+                      ? `Hash-chain over ${rigor.tamper_evidence?.n ?? 0} scored signals${
+                          rigor.tamper_evidence?.ok ? " matches the stored anchor — no edits/reorder/deletion."
+                          : ` broke at #${rigor.tamper_evidence?.broken_at}.`}`
+                      : `${rigor.n} scored signals, not yet anchored. The chain is append-only and tamper-evident once anchored.`}
+                  </p>
+                </div>
+              </div>
+            </TerminalPanel>
           )}
 
           {/* ─── SIGNAL QUALITY: Alpha Decay + Conviction Buckets ─── */}

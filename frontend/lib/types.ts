@@ -73,6 +73,22 @@ export interface TradeIdea {
   screen_source?: string | null;
   // Phase G — claim-anchored citations resolved against memo.lineage.
   citations?: Citation[];
+  // Phase 2 — deterministic NLP conviction tilt (filing change / call tone /
+  // 8-K novelty). Shows how much, and why, conviction moved off the raw score.
+  nlp_adjustment?: {
+    original_conviction: number;
+    adjusted_conviction: number;
+    tilt: number;
+    delta: number;
+    contributions: Array<{
+      signal_name: string;
+      direction: string;
+      value: number;
+      confidence: number;
+      weight: number;
+      contribution: number;
+    }>;
+  } | null;
 }
 
 export interface IntelligenceMemo {

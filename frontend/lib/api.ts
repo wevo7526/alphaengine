@@ -170,6 +170,9 @@ export const api = {
   scorecardSummary: () => request("/api/scorecard/summary"),
   scorecardSignals: (limit = 50) => request(`/api/scorecard/signals?limit=${limit}`),
   scorecardRun: () => request("/api/scorecard/run", { method: "POST" }),
+  // Phase 3 quant rigor over the live track record (deflated Sharpe,
+  // calibration/Brier, tamper-evidence).
+  scorecardRigor: (horizon = "5d") => request(`/api/scorecard/rigor?horizon=${horizon}`),
 
   // Custom cross-asset scenario (POST). Body: {shock: {rates_shock_bps, ...}, positions?: [...]}
   customScenario: (

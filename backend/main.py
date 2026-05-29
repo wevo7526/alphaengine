@@ -2870,6 +2870,61 @@ async def scorecard_run(req: Request):
     return result
 
 
+@app.get("/api/scorecard/rigor")
+async def scorecard_rigor(req: Request, horizon: str = "5d"):
+    """Phase 3 quant rigor over the live track record (Build Plan §3.1/§3.4).
+
+    - Calibration: reliability curve + Brier score (conviction vs realized hit)
+    - Deflated Sharpe over the realized per-signal returns (trial-count adjusted)
+    - Tamper-evidence verdict from the hash chain
+    Computed deterministically from signal_scores; never raises.
+    """
+    user_id = require_user_id(req)
+    horizon = horizon if horizon in ("1d", "5d", "20d") else "5d"
+    ret_key = f"return_{horizon}"
+    hit_key = f"hit_{horizon}"
+    rows: list[dict] = []
+    try:
+        async with async_session() as session:
+            result = await session.execute(
+                select(SignalScoreRecord)
+                .where(SignalScoreRecord.user_id == user_id)
+                .order_by(desc(SignalScoreRecord.signal_date))
+                .limit(500)
+            )
+            for s in result.scalars().all():
+                rows.append({
+                    "conviction": s.conviction,
+                    "hit_5d": s.hit_5d, "hit_1d": s.hit_1d, "hit_20d": s.hit_20d,
+                    "return_5d": s.return_5d, "return_1d": s.return_1d, "return_20d": s.return_20d,
+                })
+    except Exception as e:
+        logger.warning(f"scorecard_rigor fetch failed: {e}")
+
+    out: dict = {"horizon": horizon, "n": len(rows)}
+    try:
+        from quant.conviction import calibration_report
+        out["calibration"] = calibration_report(rows, horizon)
+    except Exception as e:
+        out["calibration"] = {"error": str(e)}
+    try:
+        from quant.overfitting import deflated_sharpe_ratio, bootstrap_sharpe_ci
+        rets = [float(r[ret_key]) / 100.0 for r in rows if r.get(ret_key) is not None]
+        if len(rets) >= 8:
+            out["deflated_sharpe"] = deflated_sharpe_ratio(rets, n_trials=max(2, len(rets)))
+            out["bootstrap_sharpe_ci"] = bootstrap_sharpe_ci(rets)
+        else:
+            out["deflated_sharpe"] = {"note": f"need >=8 scored signals, have {len(rets)}"}
+    except Exception as e:
+        out["deflated_sharpe"] = {"error": str(e)}
+    try:
+        from infra.track_record_store import verify_track_record
+        out["tamper_evidence"] = await verify_track_record(user_id)
+    except Exception as e:
+        out["tamper_evidence"] = {"error": str(e)}
+    return out
+
+
 # === WATCHLIST ===
 
 class AddWatchlistRequest(BaseModel):

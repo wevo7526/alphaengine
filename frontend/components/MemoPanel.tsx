@@ -304,6 +304,39 @@ function TradeIdeaCard({ idea, rank, memoId, lineage }: { idea: TradeIdea; rank:
         </div>
       )}
 
+      {/* NLP conviction tilt — Phase 2. Shows how the deterministic NLP
+          signals (filing change / call tone / 8-K novelty) moved conviction
+          off the raw score, and which signal drove it. */}
+      {idea.nlp_adjustment && idea.nlp_adjustment.delta !== 0 && (
+        <div className="mt-3 pt-2.5 border-t border-border-primary/40">
+          <div className="flex items-center gap-2 flex-wrap text-[10px] font-mono">
+            <span className="tracking-[0.18em] text-text-quaternary">NLP CONVICTION</span>
+            <span className="text-text-tertiary">
+              {idea.nlp_adjustment.original_conviction} →{" "}
+              <span className={idea.nlp_adjustment.delta >= 0 ? "text-signal-green" : "text-signal-red"}>
+                {idea.nlp_adjustment.adjusted_conviction}
+              </span>
+              <span className={`ml-1 ${idea.nlp_adjustment.delta >= 0 ? "text-signal-green" : "text-signal-red"}`}>
+                ({idea.nlp_adjustment.delta >= 0 ? "+" : ""}{idea.nlp_adjustment.delta})
+              </span>
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1.5 mt-1.5">
+            {idea.nlp_adjustment.contributions
+              .filter((c) => Math.abs(c.contribution) > 0)
+              .map((c, i) => (
+                <span key={i}
+                  className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm bg-bg-elevated text-text-tertiary"
+                  title={`value ${c.value} · confidence ${c.confidence} · weight ${c.weight}`}>
+                  {c.signal_name} <span className={c.contribution >= 0 ? "text-signal-green" : "text-signal-red"}>
+                    {c.contribution >= 0 ? "+" : ""}{c.contribution.toFixed(3)}
+                  </span>
+                </span>
+              ))}
+          </div>
+        </div>
+      )}
+
       {/* Source rail — uses the resolver-attached citations when present;
           falls back to ticker-matched lineage sources so the rail is
           almost never empty when the memo touched the ticker at all. */}
