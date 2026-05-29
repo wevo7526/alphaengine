@@ -70,6 +70,22 @@ async def lifespan(app: FastAPI):
     else:
         logger.error(f"Database probe FAILED: {probe.get('error')}")
 
+    # Pre-warm the FRED cache in the background so the first user dashboard
+    # load never sits on a cold cache. Fire-and-forget — failures are logged
+    # by the underlying client and the in-band request path still works.
+    async def _prewarm_macro():
+        try:
+            from quant.computations import get_macro_time_series
+            await asyncio.gather(
+                fred_client.aget_macro_snapshot(),
+                asyncio.get_running_loop().run_in_executor(None, get_macro_time_series),
+            )
+            logger.info("Macro cache pre-warmed")
+        except Exception as e:
+            logger.warning(f"Macro pre-warm failed (non-fatal): {e}")
+
+    asyncio.create_task(_prewarm_macro())
+
     app.state.startup_errors = startup_errors
     yield
 
@@ -542,23 +558,40 @@ async def flush_signals(req: Request, scope: str = "all"):
 
 @app.get("/api/data/macro")
 async def macro_dashboard():
-    """Consolidated macro endpoint — snapshot + time series in one call."""
+    """Consolidated macro endpoint — snapshot + time series in one call.
+
+    Never raises on FRED outage: returns whatever we have (possibly empty)
+    along with `fred_status: "ok" | "degraded" | "down"` so the frontend
+    can show a banner instead of an error toast.
+    """
     from quant.computations import get_macro_time_series
+    snapshot: dict = {}
+    series: dict = {}
     try:
-        # Run both blocking calls concurrently on the thread pool so neither
-        # blocks the event loop and they finish in ~max(one) instead of sum.
         snapshot, series = await asyncio.gather(
             fred_client.aget_macro_snapshot(),
             asyncio.get_running_loop().run_in_executor(None, get_macro_time_series),
         )
-        return {
-            "indicators": snapshot,
-            "count": len(snapshot),
-            "series": series,
-        }
     except Exception as e:
-        logger.error(f"Macro dashboard failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # Last-resort safety net — individual paths already swallow their
+        # own exceptions, but if something else raises we still return a
+        # valid (empty) payload rather than 500ing the dashboard.
+        logger.error(f"Macro dashboard partial failure: {e}")
+
+    expected = 13  # MACRO_SERIES length
+    if len(snapshot) >= expected * 0.7:
+        status = "ok"
+    elif snapshot:
+        status = "degraded"
+    else:
+        status = "down"
+
+    return {
+        "indicators": snapshot,
+        "count": len(snapshot),
+        "series": series,
+        "fred_status": status,
+    }
 
 
 @app.get("/api/data/macro/snapshot")
@@ -999,10 +1032,16 @@ def _current_regime_for_gate() -> tuple[str | None, float | None]:
     Best-effort fetch of current macro regime so the trade gate can apply
     a regime-based size multiplier. Never raises — falls back to (None, None)
     so the gate just skips the multiplier instead of crashing.
+
+    Only uses the cached snapshot — never triggers a live refresh, because
+    this is hot-path on every trade-write. A stale (or missing) snapshot
+    just falls back to no regime multiplier; trades never wait on FRED.
     """
     try:
         from quant.regime import classify_regime
-        snapshot = fred_client.get_macro_snapshot()
+        snapshot = fred_client._snapshot_cache or {}
+        if not snapshot:
+            return None, None
         vix = snapshot.get("vix", {}).get("value", 20)
         credit = snapshot.get("credit_spreads", {}).get("value", 3)
         yc = snapshot.get("yield_curve_spread", {}).get("value", 0.5)
@@ -1017,19 +1056,35 @@ def _current_regime_for_gate() -> tuple[str | None, float | None]:
 
 @app.get("/api/quant/regime")
 async def regime_detection():
-    """Current macro regime from HMM + rule-based fallback."""
+    """Current macro regime from HMM + rule-based fallback.
+
+    All FRED calls go through the async wrappers (run_sync) so we never
+    block the event loop. The three series history fetches run concurrently
+    rather than sequentially.
+    """
     from quant.regime import classify_regime, fit_regime_model
-    snapshot = fred_client.get_macro_snapshot()
+    snapshot = await fred_client.aget_macro_snapshot()
 
     vix = snapshot.get("vix", {}).get("value", 20)
     credit = snapshot.get("credit_spreads", {}).get("value", 3)
     yc = snapshot.get("yield_curve_spread", {}).get("value", 0.5)
 
-    # Try to fit model from FRED history
+    # Try to fit model from FRED history — concurrent fetches with a hard
+    # wall budget. If any series fails, we just skip model fitting and fall
+    # back to the rule-based classifier.
     try:
-        vix_hist = fred_client.get_series_history("VIXCLS", 500)
-        credit_hist = fred_client.get_series_history("BAMLH0A0HYM2", 500)
-        yc_hist = fred_client.get_series_history("T10Y2Y", 500)
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                fred_client.aget_series_history("VIXCLS", 500),
+                fred_client.aget_series_history("BAMLH0A0HYM2", 500),
+                fred_client.aget_series_history("T10Y2Y", 500),
+                return_exceptions=True,
+            ),
+            timeout=10.0,
+        )
+        vix_hist, credit_hist, yc_hist = [
+            r if isinstance(r, list) else [] for r in results
+        ]
 
         if vix_hist and credit_hist and yc_hist:
             min_len = min(len(vix_hist), len(credit_hist), len(yc_hist))
@@ -1038,7 +1093,9 @@ async def regime_detection():
                  "credit_spread": credit_hist[i]["value"], "yield_curve": yc_hist[i]["value"]}
                 for i in range(min_len)
             ]
-            fit_regime_model(macro_hist)
+            await asyncio.get_running_loop().run_in_executor(None, fit_regime_model, macro_hist)
+    except asyncio.TimeoutError:
+        logger.warning("Regime: FRED history fetch exceeded 10s — using rule-based only")
     except Exception as e:
         logger.warning(f"Regime model fitting failed (using rule-based): {e}")
 
@@ -1344,11 +1401,22 @@ async def regime_conditional(ticker: str = "SPY"):
     """Historical average returns of an asset in each regime."""
     from quant.regime import classify_regime, fit_regime_model, get_regime_history, regime_conditional_returns
 
-    # Get macro history for regime classification
+    # Get macro history for regime classification — concurrent + bounded.
     try:
-        vix_hist = fred_client.get_series_history("VIXCLS", 500)
-        credit_hist = fred_client.get_series_history("BAMLH0A0HYM2", 500)
-        yc_hist = fred_client.get_series_history("T10Y2Y", 500)
+        results = await asyncio.wait_for(
+            asyncio.gather(
+                fred_client.aget_series_history("VIXCLS", 500),
+                fred_client.aget_series_history("BAMLH0A0HYM2", 500),
+                fred_client.aget_series_history("T10Y2Y", 500),
+                return_exceptions=True,
+            ),
+            timeout=10.0,
+        )
+        vix_hist, credit_hist, yc_hist = [
+            r if isinstance(r, list) else [] for r in results
+        ]
+        if not (vix_hist and credit_hist and yc_hist):
+            return {"error": "Could not compute regime history"}
 
         min_len = min(len(vix_hist), len(credit_hist), len(yc_hist))
         macro_hist = [
@@ -1356,8 +1424,12 @@ async def regime_conditional(ticker: str = "SPY"):
              "credit_spread": credit_hist[i]["value"], "yield_curve": yc_hist[i]["value"]}
             for i in range(min_len)
         ]
-        fit_regime_model(macro_hist)
-        regime_hist = get_regime_history(macro_hist)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, fit_regime_model, macro_hist)
+        regime_hist = await loop.run_in_executor(None, get_regime_history, macro_hist)
+    except asyncio.TimeoutError:
+        logger.warning("Regime conditional: FRED history fetch exceeded 10s")
+        return {"error": "Could not compute regime history"}
     except Exception as e:
         logger.warning(f"Regime conditional: failed to compute regime history: {e}")
         return {"error": "Could not compute regime history"}

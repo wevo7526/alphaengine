@@ -267,10 +267,19 @@ def compute_cross_asset_correlation(
 def get_macro_time_series() -> dict:
     """
     Get time series data for macro charts: yield curve, VIX, credit spreads,
-    fed funds. Fetched concurrently — sequential fetching was making the
-    dashboard wait 4x longer than necessary (per-series FRED latency adds up).
+    fed funds.
+
+    Fetched sequentially on purpose. Parallelizing this (combined with the
+    snapshot fetcher's worker pool running concurrently via asyncio.gather)
+    put ~10 concurrent FRED calls on the wire per macro request, and
+    fredapi returns None under burst load. Sequential keeps us within
+    FRED's comfort zone.
+
+    Bounded by a 10s wall-clock cap. If FRED is slow on series 1 we still
+    have a chance to serve cached data on the rest via stale-while-error;
+    we never sit on the wire indefinitely.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    import time as _time
 
     targets = [
         ("T10Y2Y", "yield_curve"),
@@ -278,30 +287,17 @@ def get_macro_time_series() -> dict:
         ("BAMLH0A0HYM2", "credit_spreads"),
         ("DFF", "fed_funds"),
     ]
-
     series: dict = {label: [] for _, label in targets}
 
-    def _fetch_one(series_id: str, label: str) -> tuple[str, list[dict]]:
+    deadline = _time.time() + 10.0
+    for series_id, label in targets:
+        if _time.time() >= deadline:
+            logger.warning(f"Macro series wall-clock cap hit; skipping {series_id}")
+            continue
         try:
             data = _fred.get_series_history(series_id, lookback_days=180)
-            return label, data
+            series[label] = data
         except Exception as e:
             logger.warning(f"Failed to fetch {series_id}: {e}")
-            return label, []
-
-    # 8s per series with a hard 10s wall-clock cap. FRED has been hanging
-    # in production; the dashboard must not wait minutes for the chart panel.
-    import time as _time
-    deadline = _time.time() + 10.0
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(_fetch_one, sid, label) for sid, label in targets]
-        for future in as_completed(futures):
-            remaining = max(0.5, deadline - _time.time())
-            try:
-                label, data = future.result(timeout=min(8.0, remaining))
-            except Exception as e:
-                logger.warning(f"Macro series worker timeout/failure: {e}")
-                continue
-            series[label] = data
 
     return series

@@ -206,14 +206,14 @@ export default function HomePage() {
 
       <div className="p-8 max-w-[1280px] mx-auto min-w-0">
         {apiError && (
-          <div className="mb-6 flex items-start justify-between rounded-md border border-signal-red/25 bg-signal-red/[0.06] p-3">
-            <div>
-              <p className="text-xs font-medium text-signal-red">Data load issue</p>
-              <p className="text-[11px] text-text-tertiary mt-0.5">{apiError}</p>
+          <div className="mb-4 flex items-start justify-between gap-3 rounded-md border border-border-primary bg-bg-surface px-3 py-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-signal-yellow shrink-0" />
+              <p className="text-[11px] font-mono text-text-tertiary truncate">{apiError}</p>
             </div>
             <button
               onClick={() => setApiError(null)}
-              className="text-text-quaternary hover:text-text-primary text-xs px-2"
+              className="text-text-quaternary hover:text-text-primary text-xs px-1 shrink-0"
               aria-label="Dismiss"
             >
               ×
@@ -221,12 +221,30 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* Terminal header — timestamped, session-aware. */}
+        {/* Terminal header — timestamped, session-aware. Brand-new users
+            also get a small FIRST RUN pill so the page feels welcoming
+            without an entire hero card hogging the screen. */}
         <TerminalHeader
           eyebrow={`DASHBOARD · ${todayLabel.toUpperCase()}`}
           title={greeting}
-          sub={subline}
-          meta={<StatusPill label={sessionLabel} tone={sessionTone} pulse={isMarketHours} />}
+          sub={
+            isBrandNew ? (
+              <>
+                Welcome in. Run your first analysis to start populating these stats.{" "}
+                <Link href="/analysis" className="text-accent hover:underline">
+                  Start now →
+                </Link>
+              </>
+            ) : (
+              subline
+            )
+          }
+          meta={
+            <div className="flex items-center gap-2">
+              {isBrandNew && <StatusPill label="FIRST RUN" tone="blue" />}
+              <StatusPill label={sessionLabel} tone={sessionTone} pulse={isMarketHours} />
+            </div>
+          }
           className="mb-10"
         />
 
@@ -269,12 +287,10 @@ export default function HomePage() {
           />
         </div>
 
-        {/* Brand-new user gets the welcome hero in place of the asymmetric
-            content row. Returning users get briefing + what's new. */}
-        {isBrandNew ? (
-          <WelcomeHero firstName={firstName ?? undefined} />
-        ) : (
-          <div className="grid lg:grid-cols-12 gap-6 mb-10">
+        {/* Asymmetric content row — same shape for new and returning users.
+            Empty states inside each panel are intentionally light; the
+            FIRST RUN pill in the header carries the "you're new" message. */}
+        <div className="grid lg:grid-cols-12 gap-6 mb-10">
             {/* Morning Briefing — col-span-7 */}
             <div className="lg:col-span-7">
               <TerminalPanel
@@ -386,7 +402,6 @@ export default function HomePage() {
               </TerminalPanel>
             </div>
           </div>
-        )}
 
         {/* Expanded memo viewer (clicked from Latest Work list) */}
         {expandedMemo != null && (() => {
@@ -416,136 +431,55 @@ export default function HomePage() {
           );
         })()}
 
-        {/* Macro panel */}
-        {macroError && (
-          <div className="rounded-md border border-signal-red/20 bg-signal-red/[0.04] p-4 mb-6">
-            <p className="text-xs text-signal-red">Macro data error: {macroError}</p>
-            <p className="text-[11px] text-text-quaternary mt-1">Make sure the backend is running on the correct port.</p>
-          </div>
-        )}
-        {!macroError && (
-          <TerminalPanel
-            label="MACRO"
-            status={
+        {/* Macro panel — errors surface in the panel header instead of a
+            screen-wide banner so a FRED stutter doesn't make the whole
+            dashboard look broken. */}
+        <TerminalPanel
+          label="MACRO"
+          status={
+            <div className="flex items-center gap-3">
+              {macroError && <StatusPill label="UNAVAILABLE" tone="red" />}
               <Link
                 href="/risk"
                 className="text-text-quaternary hover:text-text-secondary transition-colors"
               >
                 FULL INDICATORS →
               </Link>
-            }
-            bodyClassName="p-5"
-          >
-            {macroLoading ? (
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="rounded-md border border-border-primary/60 bg-bg-primary/40 h-32 flex items-center justify-center">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full border-[1.5px] border-accent border-t-transparent" style={{ animation: "spin-slow 0.8s linear infinite" }} />
-                      <span className="text-[11px] text-text-quaternary">Loading…</span>
-                    </div>
+            </div>
+          }
+          bodyClassName="p-5"
+        >
+          {macroLoading ? (
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="rounded-md border border-border-primary/60 bg-bg-primary/40 h-32 flex items-center justify-center">
+                  <div className="flex items-center gap-2">
+                    <div className="w-3 h-3 rounded-full border-[1.5px] border-accent border-t-transparent" style={{ animation: "spin-slow 0.8s linear infinite" }} />
+                    <span className="text-[11px] text-text-quaternary">Loading…</span>
                   </div>
-                ))}
-              </div>
-            ) : series ? (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <MacroChart title="Yield Curve (10Y-2Y)" data={series.yield_curve} color="#3b82f6" unit="%" />
-                <MacroChart title="VIX" data={series.vix} color="#ef4444" invertColor />
-                <MacroChart title="HY Credit Spreads" data={series.credit_spreads} color="#f59e0b" unit="%" invertColor />
-                <MacroChart title="Fed Funds Rate" data={series.fed_funds} color="#8b5cf6" unit="%" />
-              </div>
-            ) : null}
-          </TerminalPanel>
-        )}
+                </div>
+              ))}
+            </div>
+          ) : macroError ? (
+            <p className="text-[12px] text-text-tertiary py-4 text-center">
+              Macro feed temporarily unavailable. It&apos;ll come back on its own — the dashboard&apos;s
+              other panels are unaffected.
+            </p>
+          ) : series ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <MacroChart title="Yield Curve (10Y-2Y)" data={series.yield_curve} color="#3b82f6" unit="%" />
+              <MacroChart title="VIX" data={series.vix} color="#ef4444" invertColor />
+              <MacroChart title="HY Credit Spreads" data={series.credit_spreads} color="#f59e0b" unit="%" invertColor />
+              <MacroChart title="Fed Funds Rate" data={series.fed_funds} color="#8b5cf6" unit="%" />
+            </div>
+          ) : null}
+        </TerminalPanel>
       </div>
     </div>
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────
-// WelcomeHero — first-run state shown above the dashboard for users who
-// have completed onboarding but have not yet generated a memo or taken a
-// position. Restyled inside the new dashboard frame (rounded-md, terminal
-// vocabulary, asymmetric 12-col with the brand visual on the right).
-// ────────────────────────────────────────────────────────────────────────
-function WelcomeHero({ firstName }: { firstName?: string }) {
-  const steps = [
-    { tag: "01", title: "Ask a question", body: "Run your first analysis from a single prompt." },
-    { tag: "02", title: "Review the slate", body: "See the trade ideas, the risk gates, and the receipts." },
-    { tag: "03", title: "Take a trade", body: "Track positions, P&L, and signal scoring from then on." },
-  ];
-  return (
-    <section className="relative mb-10 overflow-hidden rounded-md border border-border-primary bg-gradient-to-br from-bg-surface to-bg-primary">
-      <div className="pointer-events-none absolute inset-0" aria-hidden="true">
-        <div className="absolute -top-32 -left-32 w-[28rem] h-[28rem] rounded-full bg-accent/[0.10] blur-[120px]" />
-        <div className="absolute bottom-0 -right-32 w-[24rem] h-[24rem] rounded-full bg-signal-green/[0.05] blur-[120px]" />
-      </div>
-      <div className="relative grid lg:grid-cols-12 gap-8 p-8 md:p-10">
-        <div className="lg:col-span-7">
-          <StatusPill label="PROFILE READY" tone="green" pulse className="mb-5" />
-          <h2 className="text-[28px] sm:text-[34px] font-semibold tracking-[-0.02em] leading-[1.05] mb-3">
-            Welcome to Alpha Engine{firstName ? `, ${firstName}` : ""}.
-          </h2>
-          <p className="text-[14px] text-text-tertiary max-w-xl leading-relaxed mb-7">
-            Your research desk is live. Run your first analysis and you&apos;ll
-            get a 10-name slate with cointegrated pairs, factor decomposition,
-            and full source lineage in under ten minutes.
-          </p>
-
-          <div className="grid sm:grid-cols-3 gap-3 mb-7">
-            {steps.map((s) => (
-              <div
-                key={s.tag}
-                className="rounded-md border border-border-primary bg-bg-surface/70 backdrop-blur px-4 py-4"
-              >
-                <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-2">
-                  STEP {s.tag}
-                </p>
-                <p className="text-[13px] font-semibold text-text-primary mb-1">{s.title}</p>
-                <p className="text-[11px] text-text-tertiary leading-snug">{s.body}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-4 flex-wrap">
-            <Link
-              href="/analysis"
-              className="px-5 py-2.5 rounded-md bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 transition-colors"
-            >
-              Run your first analysis →
-            </Link>
-            <Link
-              href="/settings"
-              className="text-[12px] text-text-tertiary hover:text-text-primary transition-colors"
-            >
-              Adjust profile in Settings
-            </Link>
-          </div>
-        </div>
-
-        {/* Right rail — terminal command preview to echo the marketing
-            page's hero motif. Compact, evocative, no actual data. */}
-        <div className="lg:col-span-5 lg:flex items-center hidden">
-          <div className="w-full rounded-md border border-border-primary bg-bg-surface/60 backdrop-blur-sm overflow-hidden">
-            <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-              <span className="w-1.5 h-1.5 rounded-full bg-signal-red/60" />
-              <span className="w-1.5 h-1.5 rounded-full bg-signal-yellow/60" />
-              <span className="w-1.5 h-1.5 rounded-full bg-signal-green/60" />
-              <span className="ml-2">ANALYSIS · TRY ONE</span>
-              <span className="ml-auto text-[9px]">~10 min</span>
-            </div>
-            <div className="px-4 py-3 font-mono text-[12px] text-text-secondary leading-relaxed">
-              <span className="text-accent">{">"}</span> long/short setup in
-              regional banks ahead of FOMC<span className="terminal-cursor text-accent" />
-            </div>
-            <div className="px-4 py-2 border-t border-border-primary/40 grid grid-cols-3 gap-2 text-[10px] font-mono text-text-quaternary">
-              <span>22 SOURCES</span>
-              <span className="text-center">6 GATES</span>
-              <span className="text-right text-signal-green">● READY</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
+// WelcomeHero removed — was hijacking the whole dashboard for new users
+// and duplicating content the existing header + stat strip already convey.
+// First-run users now get a compact FIRST RUN pill in the header and a
+// "Run your first analysis →" link in the sub line. That's enough.
