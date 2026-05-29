@@ -359,3 +359,208 @@ Replaced all placeholder route stubs in `backend/main.py` with real data client 
 ### Future phases:
 - Phase 3: FinBERT NLP, adaptive desk weights, nightly cron screening, event triggers
 - Phase 4: Alpaca paper trading, fill tracking, full P&L attribution, signal decay monitoring
+
+---
+
+## Phase 2 Delivered — User Context, Citations, EOD Snapshots, Regime Rebuild
+
+This section catalogues the substantial body of work shipped after the
+Phase-2 design freeze. New sessions should treat each subsystem below as
+"in production and behaviorally stable" — touch them surgically.
+
+### A. Per-user runtime context (Phases 1–5 of the user-context plan)
+
+**Single source of truth: `backend/infra/user_context.py`**
+
+- `resolve_portfolio_base(user_id) -> float` — replaces every hardcoded
+  `100_000.0` in main.py, quant/risk.py, quant/stress.py, quant/optimizer.py,
+  agents/desk3_position_risk.py. Returns the user's `portfolio_size_usd`
+  from `user_profiles`, falls back to 100k only when missing.
+- `resolve_user_context(user_id) -> UserContext` — full structured block
+  (role, mandate, benchmark, portfolio_base_usd, full_name) loaded once at
+  the start of `run_research_desk()` and threaded into every agent's payload.
+- Prompt-block formatters (`build_user_context_block`, etc.) build the
+  same `=== USER CONTEXT ===` block across every agent so the LLMs see a
+  consistent contract.
+
+**Mandate enforcement: `backend/agents/mandate_gate.py`**
+
+- `long_only` drops bearish ideas / put structures
+- `market_neutral` requires `|net_beta| < 0.15`
+- `macro` requires ≥40% cross-asset / ETF / futures structures
+- Violations surface as `memo.mandate_warnings: list[str]` (yellow pill in UI,
+  amber section in PDF) — never crash the pipeline
+
+**Settings UX**: `/settings` mounts `RiskGatesEditor` inline (save-on-blur
+per field) and the standalone `/risk-config` is now a thin wrapper around
+the same component. Profile fields (role, portfolio size, mandate,
+benchmark) are all editable post-onboarding and drive every downstream view.
+
+### B. Claim-level citations (Phase G)
+
+**Backend (`backend/agents/citations.py`, `backend/infra/citations_resolver.py`, `backend/infra/coverage.py`):**
+
+- `Citation` model: `{source_type, source_id, url?, label?, excerpt?, n}`
+- Added `citations: list[Citation]` to `TradeIdea` and `RiskFactor` schemas
+- Added `citation_index`, `coverage`, `verification_status` to `IntelligenceMemo`
+- Resolver matches every agent-emitted citation against the memo's
+  `lineage.sources`, auto-backfills by ticker when uncited, drops
+  hallucinations (citations with no matching lineage entry)
+- Inline `[[src:type:id]]` markers in memo prose → `[N]` numeric anchors
+- Coverage gate produces `verified | partial | unverified` status
+
+**LESSON FROM A REGRESSION** — when the prompt asked agents to emit
+citations as REQUIRED with literal `{"source_type": ..., "source_id": ...}`
+JSON examples, the Strategist returned ZERO trade ideas. Prompts now ask
+for citations as OPTIONAL with single-sentence guidance. The resolver
+auto-backfills, so explicit citations are a quality boost, not a requirement.
+
+**Frontend (`frontend/components/Citations.tsx`, `ProseWithCitations.tsx`):**
+
+- `<CitationsRail citations={...}>` — bottom strip of every trade-idea card
+  and risk-factor item. Empty arrays render nothing.
+- `<CitationIndexPanel index={...}>` — numbered footnote target list after
+  the LineagePanel
+- `<ProseWithCitations text={...} index={...}>` — wraps the Full Analysis
+  prose, renders `[N]` superscripts as accent-colored clickable anchors
+
+**Orchestrator hardening**: lineage extraction and citation resolution
+split into two separate try blocks so a failure in one doesn't lose the
+other's work. Uses `logger.exception` (stack trace to Railway logs) with
+a final info-level summary: `"citations: N trade ideas, M risk factors,
+K in index, markers X/Y resolved, status=..."`.
+
+### C. PDF export overhaul (`backend/exports/`)
+
+- **Cover page**: branded `ALPHA ENGINE` band, decision badge + 4-card KPI
+  strip (macro regime, risk level, conviction, date), big title, decision
+  rationale, accent-led `///` sections for Executive Summary and Key
+  Findings with numbered accent counters
+- **Content pages**: compact wordmark header, `///` section motif from the
+  in-app design system
+- **Trade ideas**: bordered cards with `#N` + ticker, LONG/SHORT pill,
+  conviction bar (red/yellow/green by value), thesis, 6-column metric
+  strip, catalysts row. `KeepTogether` so a card never splits.
+- **CORE vs SECONDARIES split**: classifier reads `tier >= 2` OR
+  `market_cap_bucket in {mid_cap, small_cap, micro_cap}` OR `screen_source`
+  set. Global #1..#N ranking preserved across both sections.
+- **New sections**: Plan Shape (KV table), Open Questions (sub-question
+  coverage with ✓/?), What Would Change Our View (falsification with
+  [LOW]/[MEDIUM]/[HIGH] tags), Regime Sensitivity (per-regime table with
+  current regime starred), Citation Index, Sources & Provenance
+- **Conviction distribution chart**: horizontal bar chart of every idea's
+  conviction, sorted, colored by direction, with 50/75 reference lines
+- **Overflow root cause fix**: `_CARD_PADDING = 14` + `INNER_W = CONTENT_W - 2*pad`.
+  Inner tables on trade cards used to sum to `CONTENT_W` while the parent
+  card had 14pt padding — content was 28pt wider than the card border.
+  All inner tables now use `INNER_W`; cover `_kpi_strip` accepts an explicit
+  `total_width` param.
+
+### D. EOD snapshot tracking (Phase H)
+
+**Tables (`backend/db/models.py`):**
+
+- `portfolio_snapshots` (existed; added `updated_at` for upsert + unique
+  index on `(user_id, snapshot_date)`)
+- `position_snapshots` (new) — per-trade daily state for sparklines and
+  contribution analysis. Unique index on `(trade_id, snapshot_date)`
+
+**Helper (`backend/infra/eod_snapshot.py`):**
+
+- `compute_eod_snapshot(user_id)` — reads open + closed trades, batch-fetches
+  close prices via `MarketDataClient.get_fundamentals` (cached), computes
+  per-position unrealized P&L + portfolio rollup, upserts both row types
+- Idempotent on `(user_id, today_NY)` — reruns overwrite
+- Honors per-user `portfolio_size_usd` as the equity base
+- Anchors snapshot_date to America/New_York timezone
+
+**Repository (`backend/db/repositories.py`):**
+
+- `SnapshotRepository.upsert_portfolio(row)` + `upsert_positions(rows)`
+- `get_equity_curve(user_id, ...)` — multi-tenant bug fixed; user_id required
+- `get_latest_before(user_id, on_or_before)` — used to compute daily delta
+- `get_position_history_bulk(user_id, trade_ids, days)` — N+1-free read for
+  attaching `pnl_history` to every open position
+
+**Endpoints (in `backend/main.py`):**
+
+- `POST /api/portfolio/snapshot/run` — user-scoped, manual + cron-callable
+- `GET /api/portfolio/equity-curve?days=90` — user-scoped time series
+- `/api/portfolio/positions` now attaches a 30-day `pnl_history` per position
+
+**Frontend**: Equity curve chart on `/portfolio`, "Snapshot now" button,
+per-position sparkline in the open-positions table.
+
+**Out of scope (separate sprints):** historical backfill from `opened_at`
+using yfinance daily bars, Railway cron config (set up the scheduled hit
+to `POST /api/portfolio/snapshot/run` in the Railway dashboard).
+
+### E. Regime detector rebuild (4-state Bayesian forward filter)
+
+The 3-state HMM in `backend/quant/regime.py` was structurally producing
+1.0/0.0/0.0 posteriors that the smoothing layer was rendering as the
+characteristic 73%/14%/13% pattern. Full rebuild on four axes:
+
+1. **`n_components` 3 → 4** — added `late_cycle` (VIX low-mid, credit
+   modest, curve flattening). Label remap sorts by composite stress
+   (`mean_VIX + mean_credit − mean_yc`) so labels stay stable across refits.
+2. **Bayesian forward filter** in `classify_regime` — accepts optional
+   `macro_window: list[dict]`, runs `predict_proba` over up to last 60
+   observations, takes the last row (which IS the proper filtered posterior
+   at time T). Single-point fallback for legacy callers (trade gate) still
+   works via the smoothing layer.
+3. **4-state rule-based fallback** — bell-shape kernels for `late_cycle`
+   (VIX bell at 20 width 4, credit bell at 4 width 1, yield_curve sigmoid
+   centered at 0.5). Smoke-tested across realistic macro readings; produces
+   genuinely informative posteriors with no degeneracies.
+4. **`GET /api/quant/regime/diagnostics`** — surfaces converged flag,
+   iterations, log_likelihood, n_observations, cached label mapping,
+   n_states, covariance_type, seconds_since_fit, ttl_expires_in,
+   hysteresis state. Hit this to triage regime calls in production.
+
+**Size multipliers**: `risk_on=1.00, late_cycle=0.85, transition=0.75, risk_off=0.50`.
+
+**Frontend**: Dashboard + Risk pages handle 4 states (risk_on green,
+late_cycle/transition yellow, risk_off red). Risk page probability bars
+ordered `risk_on → late_cycle → transition → risk_off` (left-to-right
+stress gradient) with `late_cycle` solid yellow vs `transition` 60% yellow
+so they're visually distinguishable.
+
+### F. Design system pass on analysis output
+
+- `MemoPanel.tsx` — `///` section motif via `TerminalPanel` everywhere,
+  `rounded-md` everywhere, status chips converted to `StatusPill` instances,
+  severity left-bar on risk factors (matches PDF), new `VERIFIED/PARTIAL/
+  UNVERIFIED` pill driven by `verification_status` (legacy `Grounded` pill
+  is the fallback for memos persisted before this field existed)
+- `Sidebar.tsx` — grouped `WORKSPACE / BOOK / TOOLS` sections with `///`
+  group headers, active accent left-bar, footer user-card showing role +
+  mandate + portfolio size pulled from `/api/me/profile`
+- Marketing landing — `IntelligenceVisual` SVG: 8 orbital dots placed via
+  cos/sin on a true circle, vertically re-centered composition,
+  merge tick drops into the VERIFIED pill so the metaphor reads as
+  "two engines → one verified result"
+
+### G. Operational notes for new sessions
+
+- **Don't bloat agent prompts with mandatory structured output requirements**
+  — the Strategist's empty-trade-ideas regression came from this. New
+  fields should be OPTIONAL with brief one-sentence guidance; the
+  post-processor backfills.
+- **`logger.exception` over `logger.warning`** for any error path the user
+  might see in production. The orchestrator now uses this pattern; new
+  resolvers should too.
+- **Per-user scoping is the default** — never write a query that reads
+  cross-user data without an explicit `user_id` filter. `get_equity_curve`
+  used to be a multi-tenant bug; the new repository methods all require
+  `user_id` as the first argument.
+- **Idempotency on time-keyed writes** — EOD snapshots upsert on
+  `(user_id, date)`. Any new daily/scheduled persistence should follow this
+  pattern.
+- **Citations rail empty by design** — `<CitationsRail citations={...}>`
+  renders nothing when the array is empty rather than showing a placeholder.
+  The resolver auto-backfills, so empty rails usually mean no lineage
+  sources matched (which is the right behavior — don't fake provenance).
+- **Per-user portfolio base everywhere** — `resolve_portfolio_base(user_id)`
+  is the single source of truth. Any new endpoint that converts
+  percentages to dollars MUST go through it.
