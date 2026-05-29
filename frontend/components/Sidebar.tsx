@@ -180,18 +180,6 @@ export function Sidebar() {
     <aside className="fixed inset-y-0 left-0 w-52 bg-bg-primary border-r border-border-primary flex flex-col z-50">
       {/* ──────────────────────────── HEADER ─────────────────────────── */}
       <div className="px-4 pt-5 pb-4 border-b border-border-primary/60">
-        <div className="flex items-center justify-between mb-1">
-          <p className="text-[9px] font-mono tracking-[0.22em] text-text-quaternary">
-            <span className="text-accent">///</span> WORKSPACE
-          </p>
-          <span className="flex items-center gap-1.5">
-            <span
-              className="w-1.5 h-1.5 rounded-full bg-signal-green"
-              style={{ animation: "core-breathe 2.4s ease-in-out infinite" }}
-            />
-            <span className="text-[9px] font-mono tracking-[0.18em] text-text-quaternary">LIVE</span>
-          </span>
-        </div>
         <Link href="/dashboard" className="block">
           <span className="text-[15px] font-semibold tracking-tight text-text-primary">
             alpha<span className="text-accent">engine</span>

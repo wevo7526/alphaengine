@@ -24,6 +24,7 @@ from .styles import (
     build_styles, table_bordered_header, table_statcards,
     decision_color, severity_color, direction_color, pnl_color,
     INK, INK_MUTED, INK_GHOST, DIVIDER, ACCENT, GREEN, RED, YELLOW,
+    PAPER_SOFT,
 )
 from .charts import correlation_heatmap, drawdown_chart, attribution_decomposition, conviction_hit_rate
 
@@ -39,13 +40,25 @@ CONTENT_W = PAGE_W - 2 * MARGIN_X
 # ── Page decorations ─────────────────────────────────────────────
 
 class _HeaderFooterCanvas(canvas.Canvas):
-    """Canvas subclass that draws header/footer on every page."""
+    """Canvas subclass that draws header/footer on every page.
 
-    def __init__(self, *args, report_title: str = "Alpha Engine", report_subtitle: str = "", **kwargs):
+    Skips the header on page 1 (cover page) so the cover treatment can
+    own the top of the page without competing with a section bar.
+    """
+
+    def __init__(
+        self,
+        *args,
+        report_title: str = "Alpha Engine",
+        report_subtitle: str = "",
+        suppress_first_page_header: bool = False,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self._saved_pages = []
         self._report_title = report_title
         self._report_subtitle = report_subtitle
+        self._suppress_first_header = suppress_first_page_header
 
     def showPage(self):
         self._saved_pages.append(dict(self.__dict__))
@@ -60,26 +73,44 @@ class _HeaderFooterCanvas(canvas.Canvas):
         super().save()
 
     def _draw_header_footer(self, page_num: int, page_total: int):
-        # Header
         self.saveState()
-        self.setFillColor(INK)
-        self.setFont("Helvetica-Bold", 8.5)
-        self.drawString(MARGIN_X, PAGE_H - 0.4 * inch, f"ALPHA ENGINE  ·  {self._report_title.upper()}")
-        if self._report_subtitle:
-            self.setFillColor(INK_MUTED)
-            self.setFont("Helvetica", 8)
-            self.drawRightString(PAGE_W - MARGIN_X, PAGE_H - 0.4 * inch, self._report_subtitle)
-        self.setStrokeColor(DIVIDER)
-        self.setLineWidth(0.4)
-        self.line(MARGIN_X, PAGE_H - 0.5 * inch, PAGE_W - MARGIN_X, PAGE_H - 0.5 * inch)
 
-        # Footer
+        # Header — skip on the cover page so the cover hero can breathe.
+        if not (self._suppress_first_header and page_num == 1):
+            # Two-tone wordmark: "ALPHA " (ink) + "ENGINE" (accent)
+            self.setFillColor(INK)
+            self.setFont("Helvetica-Bold", 8.5)
+            self.drawString(MARGIN_X, PAGE_H - 0.4 * inch, "ALPHA ")
+            wm_left = MARGIN_X + self.stringWidth("ALPHA ", "Helvetica-Bold", 8.5)
+            self.setFillColor(ACCENT)
+            self.drawString(wm_left, PAGE_H - 0.4 * inch, "ENGINE")
+            wm_left += self.stringWidth("ENGINE", "Helvetica-Bold", 8.5)
+            self.setFillColor(INK_MUTED)
+            self.setFont("Helvetica", 8.5)
+            self.drawString(wm_left, PAGE_H - 0.4 * inch, f"  ·  {self._report_title}")
+
+            if self._report_subtitle:
+                self.setFillColor(INK_MUTED)
+                self.setFont("Helvetica", 8)
+                # Truncate subtitle that would collide with the wordmark
+                max_w = PAGE_W - MARGIN_X - wm_left - 1.5 * inch
+                sub = self._report_subtitle
+                while sub and self.stringWidth(sub, "Helvetica", 8) > max_w and len(sub) > 10:
+                    sub = sub[:-1]
+                if sub != self._report_subtitle:
+                    sub = sub.rstrip() + "…"
+                self.drawRightString(PAGE_W - MARGIN_X, PAGE_H - 0.4 * inch, sub)
+            self.setStrokeColor(DIVIDER)
+            self.setLineWidth(0.4)
+            self.line(MARGIN_X, PAGE_H - 0.5 * inch, PAGE_W - MARGIN_X, PAGE_H - 0.5 * inch)
+
+        # Footer — every page, including cover.
         self.setFillColor(INK_GHOST)
         self.setFont("Helvetica", 7.5)
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         self.drawString(MARGIN_X, 0.4 * inch, f"Generated {now}")
         self.drawRightString(PAGE_W - MARGIN_X, 0.4 * inch, f"Page {page_num} of {page_total}")
-        self.drawCentredString(PAGE_W / 2, 0.4 * inch, "alpha-engine · confidential")
+        self.drawCentredString(PAGE_W / 2, 0.4 * inch, "alpha-engine  ·  confidential")
         self.restoreState()
 
 
@@ -97,12 +128,28 @@ def _make_doc(buf: io.BytesIO, title: str, subtitle: str = "") -> SimpleDocTempl
     return doc
 
 
-def _build(buf: io.BytesIO, title: str, subtitle: str, story: list):
-    """Build the PDF with consistent canvas class."""
+def _build(
+    buf: io.BytesIO,
+    title: str,
+    subtitle: str,
+    story: list,
+    suppress_first_page_header: bool = False,
+):
+    """Build the PDF with consistent canvas class.
+
+    `suppress_first_page_header` is used by memo exports so the cover
+    hero on page 1 has full vertical real estate.
+    """
     doc = _make_doc(buf, title, subtitle)
 
     def _canvas_maker(*args, **kwargs):
-        return _HeaderFooterCanvas(*args, report_title=title, report_subtitle=subtitle, **kwargs)
+        return _HeaderFooterCanvas(
+            *args,
+            report_title=title,
+            report_subtitle=subtitle,
+            suppress_first_page_header=suppress_first_page_header,
+            **kwargs,
+        )
 
     doc.build(story, canvasmaker=_canvas_maker)
 
@@ -171,136 +218,505 @@ def _escape(text: Any) -> str:
 # MEMO EXPORT
 # ══════════════════════════════════════════════════════════════════
 
+# ── Memo-specific flowables ──
+
+class _CoverBand(Flowable):
+    """Brand band that anchors the top of the cover page.
+
+    Two-tone wordmark on the left, eyebrow + date on the right, with a
+    thin accent rule beneath. Replaces the tiny default page header on
+    the cover so the title can lead.
+    """
+
+    def __init__(self, eyebrow: str, date_text: str, width: float):
+        super().__init__()
+        self.eyebrow = eyebrow
+        self.date_text = date_text
+        self.width = width
+        self.height = 36
+
+    def wrap(self, *_):
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        c.saveState()
+        c.setFillColor(INK)
+        c.setFont("Helvetica-Bold", 13)
+        c.drawString(0, 18, "ALPHA ")
+        w = c.stringWidth("ALPHA ", "Helvetica-Bold", 13)
+        c.setFillColor(ACCENT)
+        c.drawString(w, 18, "ENGINE")
+
+        # Right side — eyebrow + date stacked
+        c.setFillColor(INK_MUTED)
+        c.setFont("Courier-Bold", 8)
+        c.drawRightString(self.width, 22, self.eyebrow)
+        c.setFillColor(INK_GHOST)
+        c.setFont("Helvetica", 8)
+        c.drawRightString(self.width, 10, self.date_text)
+
+        # Accent rule + ghost rule for the band
+        c.setStrokeColor(ACCENT)
+        c.setLineWidth(1.4)
+        c.line(0, 4, 56, 4)
+        c.setStrokeColor(DIVIDER)
+        c.setLineWidth(0.4)
+        c.line(56, 4, self.width, 4)
+        c.restoreState()
+
+
+class _ConvictionBar(Flowable):
+    """Slim horizontal bar showing 0–100 conviction next to a trade idea."""
+
+    def __init__(self, value: int, width: float = 110, height: float = 6):
+        super().__init__()
+        self.value = max(0, min(100, int(value or 0)))
+        self.width = width
+        self.height = height
+
+    def wrap(self, *_):
+        return self.width, self.height
+
+    def draw(self):
+        c = self.canv
+        c.saveState()
+        # Track
+        c.setFillColor(DIVIDER)
+        c.roundRect(0, 0, self.width, self.height, self.height / 2, fill=1, stroke=0)
+        # Fill — green if ≥70, yellow 50–69, red <50
+        if self.value >= 70:
+            fill = GREEN
+        elif self.value >= 50:
+            fill = YELLOW
+        else:
+            fill = RED
+        c.setFillColor(fill)
+        fill_w = max(self.height, self.width * self.value / 100)
+        c.roundRect(0, 0, fill_w, self.height, self.height / 2, fill=1, stroke=0)
+        c.restoreState()
+
+
+def _section_title(label: str) -> Table:
+    """Section header: `///` accent + uppercase label + ghost rule."""
+    style = ParagraphStyle_section_eyebrow()
+    eyebrow = Paragraph(
+        f"<font color='{ACCENT.hexval()}'>///</font>  <b>{_escape(label.upper())}</b>",
+        style,
+    )
+    rule = HRFlowable(width="100%", thickness=0.5, color=DIVIDER, spaceBefore=0, spaceAfter=0)
+    tbl = Table([[eyebrow], [rule]], colWidths=[CONTENT_W])
+    tbl.setStyle(TableStyle_NoBorder())
+    return tbl
+
+
+def ParagraphStyle_section_eyebrow():
+    """Hover-style section eyebrow used by _section_title."""
+    from reportlab.lib.styles import ParagraphStyle
+    return ParagraphStyle(
+        "SectionEyebrow",
+        fontName="Helvetica-Bold", fontSize=10, leading=14,
+        textColor=INK, spaceBefore=8, spaceAfter=4,
+        letterSpacing=1.2,
+    )
+
+
+def _kpi_strip(items: list[tuple[str, str, colors.Color | None]]) -> Table:
+    """Cover-page KPI row. Each item: (label, value, optional value color)."""
+    cells = []
+    for label, value, val_color in items:
+        val_style = S["KPIValue"].clone("kpiVal")
+        if val_color is not None:
+            val_style.textColor = val_color
+        cells.append([
+            Paragraph(label.upper(), S["KPILabel"]),
+            Spacer(1, 2),
+            Paragraph(value, val_style),
+        ])
+    tbl = Table([cells], colWidths=[CONTENT_W / max(1, len(items))] * len(items))
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), PAPER_SOFT),
+        ("BOX", (0, 0), (-1, -1), 0.5, DIVIDER),
+        ("LINEAFTER", (0, 0), (-2, -1), 0.4, DIVIDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("TOPPADDING", (0, 0), (-1, -1), 12),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 12),
+    ]))
+    return tbl
+
+
+def _trade_idea_card(idea: dict, index: int) -> KeepTogether:
+    """Bordered card for a single trade idea — header, thesis, stat strip, catalysts."""
+    direction = (idea.get("direction") or "neutral").lower()
+    side = "LONG" if "bullish" in direction else "SHORT" if "bearish" in direction else "NEUTRAL"
+    dir_color = direction_color(direction)
+    conviction = int(idea.get("conviction") or 0)
+
+    ticker = _escape(idea.get("ticker") or "?")
+    thesis = _escape(idea.get("thesis") or "")
+
+    # Header row: #N ticker · direction pill · conviction bar
+    direction_pill = Paragraph(
+        f"<font color='{dir_color.hexval()}' size='8'><b>{side}</b></font>",
+        ParagraphStyle_pill(dir_color),
+    )
+    ticker_line = Paragraph(
+        f"<font color='{INK_MUTED.hexval()}' size='9'>#{index}</font>  "
+        f"<font color='{INK.hexval()}' size='14'><b>{ticker}</b></font>",
+        S["Body"],
+    )
+
+    bar = _ConvictionBar(conviction, width=110, height=6)
+    bar_label = Paragraph(
+        f"<font color='{INK_MUTED.hexval()}' size='7'><b>CONV</b></font>  "
+        f"<font color='{INK.hexval()}' size='10'><b>{conviction}</b></font>",
+        S["Body"],
+    )
+
+    head_tbl = Table(
+        [[ticker_line, direction_pill, [bar_label, Spacer(1, 2), bar]]],
+        colWidths=[CONTENT_W * 0.45, CONTENT_W * 0.20, CONTENT_W * 0.35],
+    )
+    head_tbl.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 0), (1, 0), "CENTER"),
+        ("ALIGN", (2, 0), (2, 0), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+
+    thesis_para = Paragraph(thesis, S["IdeaThesis"])
+
+    # Stat strip: 6 metrics in a single bordered row
+    entry = idea.get("entry_zone") or "—"
+    stop = f"${idea['stop_loss']}" if idea.get("stop_loss") else "—"
+    target = f"${idea['take_profit']}" if idea.get("take_profit") else "—"
+    rr = f"{idea['risk_reward_ratio']}:1" if idea.get("risk_reward_ratio") else "—"
+    size = f"{idea.get('position_size_pct', 0)}%"
+    horizon = idea.get("time_horizon") or "weeks"
+
+    def _cell(label: str, value: str) -> list:
+        return [
+            Paragraph(label, S["CardLabel"]),
+            Paragraph(_escape(value), S["CardValue"]),
+        ]
+
+    stat_tbl = Table(
+        [[
+            _cell("ENTRY", entry),
+            _cell("STOP", stop),
+            _cell("TARGET", target),
+            _cell("R/R", rr),
+            _cell("SIZE", size),
+            _cell("HORIZON", horizon),
+        ]],
+        colWidths=[CONTENT_W / 6] * 6,
+    )
+    stat_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), PAPER_SOFT),
+        ("BOX", (0, 0), (-1, -1), 0.4, DIVIDER),
+        ("LINEAFTER", (0, 0), (-2, -1), 0.4, DIVIDER),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]))
+
+    body_flowables = [head_tbl, Spacer(1, 4), thesis_para, stat_tbl]
+
+    catalysts = idea.get("catalysts")
+    if catalysts:
+        cats = catalysts if isinstance(catalysts, list) else [catalysts]
+        body_flowables.append(Spacer(1, 6))
+        body_flowables.append(Paragraph(
+            f"<font color='{INK_MUTED.hexval()}'><b>CATALYSTS</b></font> &nbsp; "
+            f"{_escape(' · '.join(str(c) for c in cats[:4]))}",
+            S["Small"],
+        ))
+
+    # Wrap the card in an outer single-cell table so we get a clean border
+    # AND can use KeepTogether so a card never splits across pages.
+    outer = Table([[body_flowables]], colWidths=[CONTENT_W])
+    outer.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.6, DIVIDER),
+        ("LEFTPADDING", (0, 0), (-1, -1), 14),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 14),
+        ("TOPPADDING", (0, 0), (-1, -1), 14),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 14),
+    ]))
+    return KeepTogether([outer, Spacer(1, 10)])
+
+
+def ParagraphStyle_pill(color):
+    """Inline style helper for the direction pill in trade-idea headers."""
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.enums import TA_CENTER
+    return ParagraphStyle(
+        "Pill", fontName="Helvetica-Bold", fontSize=8, leading=10,
+        textColor=color, alignment=TA_CENTER,
+    )
+
+
+def _risk_factor_block(rf: dict) -> KeepTogether:
+    """One risk factor — left severity bar + colored severity tag + content."""
+    sev = (rf.get("severity") or "medium").lower()
+    sev_color = severity_color(sev)
+    cat = (rf.get("category") or "").upper() or "RISK"
+
+    # Header: colored severity pill + uppercase category
+    head = Paragraph(
+        f"<font color='{sev_color.hexval()}' face='Courier-Bold' size='8'>"
+        f"[{sev.upper()}]</font>  "
+        f"<font color='{INK.hexval()}' size='10'><b>{_escape(cat)}</b></font>",
+        S["Body"],
+    )
+    desc = rf.get("description") or ""
+    mit = rf.get("mitigation") or ""
+
+    body = [head]
+    if desc:
+        body.append(Paragraph(_escape(desc), S["IdeaThesis"]))
+    if mit:
+        body.append(Paragraph(
+            f"<font color='{INK_MUTED.hexval()}'><b>Mitigation:</b></font>  <i>{_escape(mit)}</i>",
+            S["Small"],
+        ))
+
+    # Two-column layout: left = severity color bar, right = content
+    outer = Table(
+        [[Spacer(0, 0), body]],
+        colWidths=[3.5, CONTENT_W - 3.5],
+    )
+    outer.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (0, 0), sev_color),
+        ("LEFTPADDING", (0, 0), (0, 0), 0),
+        ("RIGHTPADDING", (0, 0), (0, 0), 0),
+        ("LEFTPADDING", (1, 0), (1, 0), 12),
+        ("RIGHTPADDING", (1, 0), (1, 0), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    return KeepTogether([outer, Spacer(1, 6)])
+
+
+def _source_ledger(lineage: dict | None) -> list:
+    """Render the memo's source/provenance section.
+
+    Returns a list of flowables. Empty list when there's nothing to show.
+    """
+    if not lineage or not isinstance(lineage, dict):
+        return []
+    sources = lineage.get("sources") or []
+    if not sources:
+        return []
+
+    # Group by type for readability
+    by_type: dict[str, list[dict]] = {}
+    for src in sources:
+        if not isinstance(src, dict):
+            continue
+        t = src.get("type") or "other"
+        by_type.setdefault(t, []).append(src)
+
+    type_labels = {
+        "sec_filing": "SEC FILINGS",
+        "sec_insider": "INSIDER TRADES (FORM 4)",
+        "sec_13f": "13F HOLDINGS",
+        "fred_series": "FRED MACRO SERIES",
+        "market_price": "MARKET DATA",
+        "news_article": "NEWS",
+        "web_search": "WEB RESEARCH",
+        "technical": "TECHNICAL INDICATORS",
+        "screen": "DISCOVERY SCREENS",
+        "computed": "COMPUTED ANALYTICS",
+        "other": "OTHER",
+    }
+
+    n_calls = lineage.get("n_tool_calls", 0)
+    n_unique = lineage.get("n_unique_sources", len(sources))
+
+    flowables = [
+        _section_title("Sources & Provenance"),
+        Paragraph(
+            f"{n_calls} tool calls produced {n_unique} unique sources. "
+            f"Every numerical claim in this memo traces back to one of these.",
+            S["Small"],
+        ),
+        Spacer(1, 8),
+    ]
+
+    for t in sorted(by_type.keys(), key=lambda k: -len(by_type[k])):
+        items = by_type[t]
+        flowables.append(Paragraph(
+            f"<font color='{INK_MUTED.hexval()}'><b>{type_labels.get(t, t.upper())}</b></font>"
+            f"  <font color='{INK_GHOST.hexval()}'>·  {len(items)}</font>",
+            S["Body"],
+        ))
+        for src in items[:8]:
+            src_id = _escape(src.get("id") or "—")
+            tool = _escape(src.get("tool") or "")
+            form = src.get("form_type")
+            tag = f"[{form}]" if form else ""
+            url = src.get("url")
+            line = (
+                f"<font color='{INK_GHOST.hexval()}' face='Courier' size='7.5'>"
+                f"{tool}</font>  "
+                f"<font color='{INK.hexval()}' face='Courier' size='8'>{src_id}</font>  "
+                f"<font color='{INK_GHOST.hexval()}' size='8'>{_escape(tag)}</font>"
+            )
+            if url:
+                # "→" — keep glyph to one that Helvetica reliably renders.
+                # The earlier "↗" rendered as a tofu box in some PDF viewers.
+                line += (
+                    f"  <font color='{ACCENT.hexval()}' size='7.5'>"
+                    f"<link href='{_escape(url)}'>OPEN &#8594;</link></font>"
+                )
+            flowables.append(Paragraph(line, S["SourceItem"]))
+        flowables.append(Spacer(1, 6))
+
+    return flowables
+
+
 def render_memo(memo: dict) -> bytes:
-    """Render a single intelligence memo to PDF bytes."""
+    """Render a single intelligence memo to PDF bytes.
+
+    Layout:
+      Page 1 (cover)  — band, KPI strip, big title, decision badge,
+                        executive summary, key findings.
+      Page 2+         — analysis prose, trade-idea cards, risk factor
+                        blocks with severity bar, hedging, sources.
+
+    The first page suppresses the small repeating header so the cover
+    treatment can own the top of the page.
+    """
     buf = io.BytesIO()
-    title_text = memo.get("title") or memo.get("query", "Intelligence Memo")[:100]
-    subtitle = memo.get("query", "")[:80]
+    title_text = memo.get("title") or memo.get("query", "Intelligence Memo")[:120]
+    subtitle = (memo.get("query") or title_text)[:80]
+
+    decision = (memo.get("decision") or "WATCH").upper()
+    conf = int(memo.get("decision_confidence") or 0)
+    macro_regime = (memo.get("macro_regime") or "").replace("_", " ").strip() or "—"
+    risk_level = (memo.get("overall_risk_level") or "—").upper()
+    created_at = (memo.get("created_at") or "")[:10] or datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
     story: list = []
 
-    # Header block: decision badge + title
-    decision = memo.get("decision", "WATCH")
-    conf = memo.get("decision_confidence", 0)
+    # ── COVER ────────────────────────────────────────────────────
+    story.append(_CoverBand(eyebrow="INTELLIGENCE MEMO", date_text=created_at, width=CONTENT_W))
+    story.append(Spacer(1, 28))
 
-    header_tbl = Table(
-        [[DecisionBadge(decision), Paragraph(f"<b>{_escape(title_text)}</b>", S["Title"])]],
-        colWidths=[0.9 * inch, CONTENT_W - 0.9 * inch],
+    # Decision badge + KPI strip in a two-column header
+    badge_w = 0.95 * inch
+    badge = DecisionBadge(decision, width=badge_w, height=24)
+    kpi_items = [
+        ("MACRO REGIME", macro_regime, INK),
+        ("RISK LEVEL", risk_level,
+            RED if "ELEVATED" in risk_level or "HIGH" in risk_level
+            else YELLOW if "MODERATE" in risk_level
+            else INK),
+        ("CONVICTION", str(conf) if conf else "—", INK),
+        ("DATE", created_at, INK),
+    ]
+    cover_top = Table(
+        [[badge, _kpi_strip(kpi_items)]],
+        colWidths=[badge_w + 0.25 * inch, CONTENT_W - badge_w - 0.25 * inch],
     )
-    header_tbl.setStyle(TableStyle_NoBorder())
-    story.append(header_tbl)
+    cover_top.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(cover_top)
+    story.append(Spacer(1, 22))
 
-    meta_parts = []
-    if memo.get("macro_regime"):
-        meta_parts.append(f"Macro: <b>{_escape(memo['macro_regime']).replace('_', ' ')}</b>")
-    if memo.get("overall_risk_level"):
-        meta_parts.append(f"Risk: <b>{_escape(memo['overall_risk_level'])}</b>")
-    if conf:
-        meta_parts.append(f"Conviction: <b>{conf}</b>")
-    if memo.get("created_at"):
-        meta_parts.append(f"Date: {memo['created_at'][:10]}")
+    # Cover title
+    story.append(Paragraph(_escape(title_text), S["CoverTitle"]))
 
-    story.append(Paragraph("  ·  ".join(meta_parts), S["Subtitle"]))
-
+    # Decision rationale, if present
     if memo.get("decision_reason"):
-        story.append(Paragraph(f"<i>{_escape(memo['decision_reason'])}</i>", S["Quote"]))
+        story.append(Paragraph(_escape(memo["decision_reason"]), S["CoverSubtitle"]))
 
-    story.append(_divider())
+    # Executive summary — leads with the eyebrow + accent rule, like the
+    # other sections so the reader gets one consistent rhythm.
+    exec_sum = memo.get("executive_summary") or ""
+    if exec_sum:
+        story.append(_section_title("Executive Summary"))
+        story.append(Paragraph(_escape(exec_sum), S["BodyJustified"]))
 
-    # Executive Summary
-    story.append(Paragraph("EXECUTIVE SUMMARY", S["SectionHeader"]))
-    exec_sum = memo.get("executive_summary") or "—"
-    story.append(Paragraph(_escape(exec_sum), S["BodyJustified"]))
-
-    # Key Findings
-    findings = memo.get("key_findings", [])
+    # Key findings as a numbered list on the cover
+    findings = memo.get("key_findings") or []
     if findings:
-        story.append(Paragraph("KEY FINDINGS", S["SectionHeader"]))
+        story.append(_section_title("Key Findings"))
         for i, f in enumerate(findings[:8], 1):
-            story.append(Paragraph(f"<b>{i}.</b>  {_escape(f)}", S["BulletItem"]))
+            story.append(Paragraph(
+                f"<font color='{ACCENT.hexval()}'><b>{i:02d}</b></font> &nbsp; {_escape(f)}",
+                S["BulletItem"],
+            ))
 
-    # Analysis (full prose)
+    # ── ANALYSIS ─────────────────────────────────────────────────
     analysis = memo.get("analysis") or ""
     if analysis:
         story.append(PageBreak())
-        story.append(Paragraph("ANALYSIS", S["SectionHeader"]))
+        story.append(_section_title("Analysis"))
         for para in analysis.split("\n\n"):
             para = para.strip()
             if para:
                 story.append(Paragraph(_escape(para), S["BodyJustified"]))
 
-    # Trade Ideas
-    trade_ideas = memo.get("trade_ideas", [])
+    # ── TRADE IDEAS ─────────────────────────────────────────────
+    trade_ideas = memo.get("trade_ideas") or []
     if trade_ideas:
         story.append(PageBreak())
-        story.append(Paragraph("TRADE IDEAS", S["SectionHeader"]))
+        story.append(_section_title(f"Trade Ideas  ·  {len(trade_ideas)}"))
+        for i, idea in enumerate(trade_ideas[:12], 1):
+            story.append(_trade_idea_card(idea, i))
 
-        for i, idea in enumerate(trade_ideas[:8], 1):
-            direction = idea.get("direction", "neutral")
-            dir_color = direction_color(direction)
-            side = "LONG" if "bullish" in direction else "SHORT" if "bearish" in direction else "NEUTRAL"
-
-            header = Paragraph(
-                f"<b>#{i}  <font color='#09090b'>{_escape(idea.get('ticker', '?'))}</font></b>  "
-                f"<font color='{dir_color.hexval()}'><b>{side}</b></font>  "
-                f"<font color='#71717a'>· conviction {idea.get('conviction', 0)}</font>",
-                S["H3"],
-            )
-            story.append(header)
-            story.append(Paragraph(_escape(idea.get("thesis", "")), S["Body"]))
-
-            rows = [
-                ["Entry", idea.get("entry_zone") or "—",
-                 "Stop", f"${idea.get('stop_loss')}" if idea.get("stop_loss") else "—"],
-                ["Target", f"${idea.get('take_profit')}" if idea.get("take_profit") else "—",
-                 "R/R", f"{idea.get('risk_reward_ratio')}:1" if idea.get("risk_reward_ratio") else "—"],
-                ["Size", f"{idea.get('position_size_pct', 0)}%",
-                 "Horizon", idea.get("time_horizon") or "weeks"],
-            ]
-            tbl = Table(rows, colWidths=[0.7 * inch, 1.8 * inch, 0.7 * inch, 1.8 * inch])
-            tbl.setStyle(TableStyle_MetaGrid())
-            story.append(tbl)
-
-            if idea.get("catalysts"):
-                catalysts = idea["catalysts"] if isinstance(idea["catalysts"], list) else [idea["catalysts"]]
-                story.append(Paragraph(
-                    f"<b>Catalysts:</b> {_escape('; '.join(str(c) for c in catalysts[:3]))}",
-                    S["Small"],
-                ))
-            story.append(Spacer(1, 8))
-
-    # Risk Factors
-    risk_factors = memo.get("risk_factors", [])
+    # ── RISK FACTORS ────────────────────────────────────────────
+    risk_factors = memo.get("risk_factors") or []
     if risk_factors:
         story.append(PageBreak())
-        story.append(Paragraph("RISK FACTORS", S["SectionHeader"]))
+        story.append(_section_title("Risk Factors"))
+        for rf in risk_factors[:12]:
+            story.append(_risk_factor_block(rf))
 
-        for rf in risk_factors[:10]:
-            sev = rf.get("severity", "medium")
-            sev_c = severity_color(sev)
-            cat = rf.get("category", "").upper()
-            head = Paragraph(
-                f"<font color='{sev_c.hexval()}'><b>[{_escape(sev)}]</b></font>  "
-                f"<b>{_escape(cat)}</b>",
-                S["Body"],
-            )
-            story.append(head)
-            desc = rf.get("description", "")
-            if desc:
-                story.append(Paragraph(_escape(desc), S["Small"]))
-            mit = rf.get("mitigation", "")
-            if mit:
-                story.append(Paragraph(f"<i>Mitigation: {_escape(mit)}</i>", S["Small"]))
-            story.append(Spacer(1, 6))
-
-    # Hedging
-    hedges = memo.get("hedging_recommendations", [])
+    # ── HEDGING ─────────────────────────────────────────────────
+    hedges = memo.get("hedging_recommendations") or []
     if hedges:
-        story.append(Paragraph("HEDGING RECOMMENDATIONS", S["SectionHeader"]))
-        for i, h in enumerate(hedges[:6], 1):
-            story.append(Paragraph(f"<b>H{i}.</b>  {_escape(h)}", S["BulletItem"]))
+        story.append(_section_title("Hedging Recommendations"))
+        for i, h in enumerate(hedges[:8], 1):
+            story.append(Paragraph(
+                f"<font color='{ACCENT.hexval()}'><b>H{i}</b></font> &nbsp; {_escape(h)}",
+                S["BulletItem"],
+            ))
 
-    _build(buf, "Intelligence Memo", title_text[:80], story)
+    # ── MANDATE WARNINGS ────────────────────────────────────────
+    mandate_warnings = memo.get("mandate_warnings") or []
+    if mandate_warnings:
+        story.append(_section_title("Mandate Check"))
+        for w in mandate_warnings[:8]:
+            story.append(Paragraph(
+                f"<font color='{YELLOW.hexval()}'>▲</font>  {_escape(w)}",
+                S["BulletItem"],
+            ))
+
+    # ── SOURCES / PROVENANCE ────────────────────────────────────
+    lineage = memo.get("lineage") or {}
+    if lineage.get("sources"):
+        story.append(PageBreak())
+        story.extend(_source_ledger(lineage))
+
+    _build(
+        buf, "Intelligence Memo", title_text[:80], story,
+        suppress_first_page_header=True,
+    )
     buf.seek(0)
     return buf.read()
 

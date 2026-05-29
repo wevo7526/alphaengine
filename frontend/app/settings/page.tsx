@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useUser } from "@clerk/nextjs";
 import { api } from "@/lib/api";
 import { TerminalHeader } from "@/components/TerminalHeader";
+import { RiskGatesEditor } from "@/components/RiskGatesEditor";
 
 interface SystemInfo {
   app: { version: string; env: string; commit: string | null };
@@ -149,15 +150,7 @@ export default function SettingsPage() {
       <TerminalHeader
         eyebrow="SETTINGS"
         title="Profile and platform"
-        sub="Your profile drives risk sizing, benchmark, and Strategist defaults."
-        meta={
-          <Link
-            href="/risk-config"
-            className="px-2.5 py-1 rounded-md border border-border-primary text-text-tertiary hover:text-text-primary hover:border-zinc-600 transition-colors"
-          >
-            RISK GATES →
-          </Link>
-        }
+        sub="Your profile drives risk sizing, benchmark, and Strategist defaults. Risk gates below are per-user overrides applied across every quant module."
         className="mb-8"
       />
 
@@ -338,6 +331,25 @@ export default function SettingsPage() {
         )}
       </div>
 
+      {/* ───────────────────────── Risk gates (editable) ────────────── */}
+      <div className="rounded-md border border-border-primary bg-bg-surface p-5 mb-6">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary">
+            <span className="text-accent">///</span> RISK GATES
+          </h2>
+          <Link
+            href="/risk"
+            className="text-[10px] font-mono tracking-wider text-text-tertiary hover:text-text-primary transition-colors"
+          >
+            LIVE DASHBOARD →
+          </Link>
+        </div>
+        <p className="text-[12px] text-text-tertiary mb-4">
+          Per-user overrides for pre-trade risk checks, sizing limits, and the optimizer.
+        </p>
+        <RiskGatesEditor />
+      </div>
+
       {/* ───────────────────────── System info (collapsible) ────────── */}
       <div className="rounded-md border border-border-primary bg-bg-surface overflow-hidden">
         <button
@@ -426,26 +438,8 @@ export default function SettingsPage() {
               </div>
             )}
 
-            {info?.risk_parameters && info.risk_parameters.length > 0 && (
-              <div>
-                <p className="text-[10px] font-mono tracking-wider text-text-quaternary mb-2">
-                  RISK PARAMETERS
-                </p>
-                <div className="divide-y divide-border-primary/40">
-                  {info.risk_parameters.map((p) => (
-                    <div key={p.label} className="flex items-center justify-between py-2">
-                      <div>
-                        <span className="text-[12px] text-text-secondary">{p.label}</span>
-                        <p className="text-[10px] text-text-quaternary">{p.description}</p>
-                      </div>
-                      <span className="text-[11px] font-mono text-text-primary bg-bg-elevated px-2 py-0.5 rounded">
-                        {p.value}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {/* Read-only risk parameters previously listed here have moved to
+                the editable RISK GATES section above. */}
           </div>
         )}
       </div>

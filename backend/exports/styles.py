@@ -35,6 +35,21 @@ def build_styles():
         fontName="Helvetica-Bold", fontSize=18, leading=22,
         textColor=INK, spaceAfter=4,
     )
+    s["CoverTitle"] = ParagraphStyle(
+        "CoverTitle", parent=base["Heading1"],
+        fontName="Helvetica-Bold", fontSize=28, leading=33,
+        textColor=INK, spaceBefore=0, spaceAfter=10,
+    )
+    s["CoverSubtitle"] = ParagraphStyle(
+        "CoverSubtitle", parent=base["Normal"],
+        fontName="Helvetica", fontSize=12, leading=17,
+        textColor=INK_SOFT, spaceAfter=18,
+    )
+    s["Eyebrow"] = ParagraphStyle(
+        "Eyebrow", parent=base["Normal"],
+        fontName="Courier-Bold", fontSize=8, leading=11,
+        textColor=INK_MUTED, spaceAfter=8,
+    )
     s["Subtitle"] = ParagraphStyle(
         "Subtitle", parent=base["Normal"],
         fontName="Helvetica", fontSize=10, leading=13,
@@ -42,9 +57,14 @@ def build_styles():
     )
     s["SectionHeader"] = ParagraphStyle(
         "SectionHeader", parent=base["Heading2"],
-        fontName="Helvetica-Bold", fontSize=9, leading=11,
-        textColor=INK_MUTED, spaceBefore=16, spaceAfter=8,
+        fontName="Helvetica-Bold", fontSize=12, leading=15,
+        textColor=INK, spaceBefore=18, spaceAfter=10,
         textTransform=None,
+    )
+    s["SectionHeaderSmall"] = ParagraphStyle(
+        "SectionHeaderSmall", parent=base["Heading2"],
+        fontName="Helvetica-Bold", fontSize=9, leading=11,
+        textColor=INK_MUTED, spaceBefore=14, spaceAfter=6,
     )
     s["Body"] = ParagraphStyle(
         "Body", parent=base["Normal"],
@@ -91,6 +111,46 @@ def build_styles():
         "H3", parent=base["Heading3"],
         fontName="Helvetica-Bold", fontSize=11, leading=14,
         textColor=INK, spaceBefore=10, spaceAfter=6,
+    )
+    s["IdeaTicker"] = ParagraphStyle(
+        "IdeaTicker", parent=base["Normal"],
+        fontName="Helvetica-Bold", fontSize=14, leading=17,
+        textColor=INK, spaceAfter=2,
+    )
+    s["IdeaThesis"] = ParagraphStyle(
+        "IdeaThesis", parent=base["Normal"],
+        fontName="Helvetica", fontSize=9.5, leading=14,
+        textColor=INK_SOFT, spaceBefore=2, spaceAfter=6,
+    )
+    s["CardLabel"] = ParagraphStyle(
+        "CardLabel", parent=base["Normal"],
+        fontName="Courier", fontSize=7.5, leading=10,
+        textColor=INK_MUTED, spaceAfter=2,
+    )
+    s["CardValue"] = ParagraphStyle(
+        "CardValue", parent=base["Normal"],
+        fontName="Helvetica-Bold", fontSize=11, leading=13,
+        textColor=INK,
+    )
+    s["KPILabel"] = ParagraphStyle(
+        "KPILabel", parent=base["Normal"],
+        fontName="Courier", fontSize=7.5, leading=10,
+        textColor=INK_MUTED,
+    )
+    s["KPIValue"] = ParagraphStyle(
+        "KPIValue", parent=base["Normal"],
+        fontName="Helvetica-Bold", fontSize=14, leading=17,
+        textColor=INK,
+    )
+    s["SourceItem"] = ParagraphStyle(
+        "SourceItem", parent=base["Normal"],
+        fontName="Helvetica", fontSize=8.5, leading=12,
+        textColor=INK_SOFT, spaceAfter=2,
+    )
+    s["SourceTag"] = ParagraphStyle(
+        "SourceTag", parent=base["Normal"],
+        fontName="Courier-Bold", fontSize=7, leading=10,
+        textColor=INK_MUTED,
     )
     return s
 
