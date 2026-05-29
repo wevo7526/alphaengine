@@ -123,6 +123,11 @@ async def _migrate_columns() -> None:
         ("intelligence_memos", "citation_index", json_col_type),
         ("intelligence_memos", "coverage", json_col_type),
         ("intelligence_memos", "verification_status", "TEXT DEFAULT 'unverified'"),
+        # Phase H — EOD snapshot tracking.
+        # portfolio_snapshots already exists; add updated_at for the
+        # idempotent upsert path. position_snapshots is brand new and
+        # created via init_db() (Base.metadata.create_all).
+        ("portfolio_snapshots", "updated_at", "TIMESTAMP"),
     ]
     for table, column, col_type in column_migrations:
         try:
@@ -155,7 +160,25 @@ async def _migrate_columns() -> None:
         ("ix_trades_user_status", "trades", "user_id, status"),
         ("ix_trades_memo", "trades", "memo_id"),
         ("ix_signal_scores_user_date", "signal_scores", "user_id, signal_date"),
+        # Phase H — EOD snapshot tracking
+        ("ix_position_snapshots_user_date", "position_snapshots", "user_id, snapshot_date"),
     ]
+    # Unique composites enforce the per-day idempotency contract on the
+    # EOD snapshot upserts. CREATE UNIQUE INDEX IF NOT EXISTS is supported
+    # on both Postgres and SQLite.
+    unique_composite_indexes = [
+        ("ix_portfolio_snapshots_user_date", "portfolio_snapshots", "user_id, snapshot_date"),
+        ("ix_position_snapshots_trade_date", "position_snapshots", "trade_id, snapshot_date"),
+    ]
+    for name, table, cols in unique_composite_indexes:
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({cols})")
+                )
+            logger.debug(f"Unique index ensured: {name}")
+        except Exception as e:
+            logger.debug(f"Unique index skip {name}: {e}")
     for name, table, cols in composite_indexes:
         try:
             async with engine.begin() as conn:

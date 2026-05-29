@@ -11,6 +11,7 @@ import logging
 from db.database import async_session
 from db.models import (
     IntelligenceMemoRecord, TradeRecord, PortfolioSnapshotRecord,
+    PositionSnapshotRecord,
     BacktestRunRecord, BacktestResultRecord, FactorExposureRecord,
     RegimeRecord, MacroSnapshotRecord, UserProfile, UserRiskProfile,
 )
@@ -358,22 +359,184 @@ class BacktestRepository:
 
 
 class SnapshotRepository:
+    """EOD portfolio + position snapshot persistence + reads.
+
+    Every method that reads or writes filters by user_id. The legacy
+    get_equity_curve() that didn't filter was a multi-tenant bug —
+    fixed here by making user_id required.
+    """
+
     @staticmethod
     async def save(snapshot_data: dict):
+        """Legacy insert. Kept for back-compat; new code uses upsert_*."""
         async with async_session() as session:
             record = PortfolioSnapshotRecord(**snapshot_data)
             session.add(record)
             await session.commit()
 
     @staticmethod
-    async def get_equity_curve(start: date, end: date) -> list[dict]:
+    async def upsert_portfolio(row: dict):
+        """Insert or update one portfolio_snapshots row by (user_id, date).
+
+        The unique index `ix_portfolio_snapshots_user_date` makes the
+        SELECT-then-INSERT/UPDATE pattern safe across reruns.
+        """
+        from datetime import datetime as _dt, timezone as _tz
+        user_id = row.get("user_id")
+        snapshot_date = row.get("snapshot_date")
+        async with async_session() as session:
+            result = await session.execute(
+                select(PortfolioSnapshotRecord).where(
+                    PortfolioSnapshotRecord.user_id == user_id,
+                    PortfolioSnapshotRecord.snapshot_date == snapshot_date,
+                )
+            )
+            existing = result.scalar_one_or_none()
+            if existing is None:
+                record = PortfolioSnapshotRecord(**row)
+                session.add(record)
+            else:
+                for k, v in row.items():
+                    if k in ("user_id", "snapshot_date", "id"):
+                        continue
+                    setattr(existing, k, v)
+                existing.updated_at = _dt.now(_tz.utc)
+            await session.commit()
+
+    @staticmethod
+    async def upsert_positions(rows: list[dict]):
+        """Insert or update many position_snapshots rows by
+        (trade_id, snapshot_date). Batched in a single transaction.
+        """
+        if not rows:
+            return
+        from db.models import PositionSnapshotRecord
+        async with async_session() as session:
+            for row in rows:
+                trade_id = row.get("trade_id")
+                snapshot_date = row.get("snapshot_date")
+                result = await session.execute(
+                    select(PositionSnapshotRecord).where(
+                        PositionSnapshotRecord.trade_id == trade_id,
+                        PositionSnapshotRecord.snapshot_date == snapshot_date,
+                    )
+                )
+                existing = result.scalar_one_or_none()
+                if existing is None:
+                    session.add(PositionSnapshotRecord(**row))
+                else:
+                    for k, v in row.items():
+                        if k in ("trade_id", "snapshot_date", "id"):
+                            continue
+                        setattr(existing, k, v)
+            await session.commit()
+
+    @staticmethod
+    async def get_equity_curve(
+        user_id: str,
+        start: date | None = None,
+        end: date | None = None,
+        days: int | None = None,
+    ) -> list[dict]:
+        """User-scoped equity curve time series.
+
+        Either pass `start`+`end` explicitly, or pass `days` to get the
+        most-recent N days ending today. The legacy unscoped signature
+        was a multi-tenant bug — user_id is now required.
+        """
+        from datetime import date as _date, timedelta as _td
+        if days is not None:
+            end = end or _date.today()
+            start = end - _td(days=int(days))
+        q = select(PortfolioSnapshotRecord).where(
+            PortfolioSnapshotRecord.user_id == user_id,
+        )
+        if start is not None:
+            q = q.where(PortfolioSnapshotRecord.snapshot_date >= start)
+        if end is not None:
+            q = q.where(PortfolioSnapshotRecord.snapshot_date <= end)
+        q = q.order_by(PortfolioSnapshotRecord.snapshot_date)
+        async with async_session() as session:
+            result = await session.execute(q)
+            return [
+                {c.name: getattr(r, c.name) for c in r.__table__.columns}
+                for r in result.scalars().all()
+            ]
+
+    @staticmethod
+    async def get_latest_before(user_id: str, on_or_before: date) -> dict | None:
+        """Return the most recent portfolio snapshot strictly before
+        `on_or_before` — used by the EOD engine to compute daily delta.
+        """
+        from sqlalchemy import desc
         async with async_session() as session:
             result = await session.execute(
                 select(PortfolioSnapshotRecord)
-                .where(PortfolioSnapshotRecord.snapshot_date.between(start, end))
-                .order_by(PortfolioSnapshotRecord.snapshot_date)
+                .where(
+                    PortfolioSnapshotRecord.user_id == user_id,
+                    PortfolioSnapshotRecord.snapshot_date < on_or_before,
+                )
+                .order_by(desc(PortfolioSnapshotRecord.snapshot_date))
+                .limit(1)
+            )
+            r = result.scalar_one_or_none()
+            if r is None:
+                return None
+            return {c.name: getattr(r, c.name) for c in r.__table__.columns}
+
+    @staticmethod
+    async def get_position_history(
+        user_id: str,
+        trade_id: str,
+        days: int = 30,
+    ) -> list[dict]:
+        """User-scoped position pnl history. Drives per-position sparkline."""
+        from datetime import date as _date, timedelta as _td
+        from sqlalchemy import asc
+        from db.models import PositionSnapshotRecord
+        start = _date.today() - _td(days=int(days))
+        async with async_session() as session:
+            result = await session.execute(
+                select(PositionSnapshotRecord)
+                .where(
+                    PositionSnapshotRecord.user_id == user_id,
+                    PositionSnapshotRecord.trade_id == trade_id,
+                    PositionSnapshotRecord.snapshot_date >= start,
+                )
+                .order_by(asc(PositionSnapshotRecord.snapshot_date))
             )
             return [
                 {c.name: getattr(r, c.name) for c in r.__table__.columns}
                 for r in result.scalars().all()
             ]
+
+    @staticmethod
+    async def get_position_history_bulk(
+        user_id: str,
+        trade_ids: list[str],
+        days: int = 30,
+    ) -> dict[str, list[dict]]:
+        """Bulk read for all open trades — avoids N+1 on the positions endpoint."""
+        from datetime import date as _date, timedelta as _td
+        from sqlalchemy import asc
+        from db.models import PositionSnapshotRecord
+        if not trade_ids:
+            return {}
+        start = _date.today() - _td(days=int(days))
+        out: dict[str, list[dict]] = {tid: [] for tid in trade_ids}
+        async with async_session() as session:
+            result = await session.execute(
+                select(PositionSnapshotRecord)
+                .where(
+                    PositionSnapshotRecord.user_id == user_id,
+                    PositionSnapshotRecord.trade_id.in_(trade_ids),
+                    PositionSnapshotRecord.snapshot_date >= start,
+                )
+                .order_by(asc(PositionSnapshotRecord.snapshot_date))
+            )
+            for r in result.scalars().all():
+                row = {c.name: getattr(r, c.name) for c in r.__table__.columns}
+                tid = row["trade_id"]
+                if tid in out:
+                    out[tid].append(row)
+        return out

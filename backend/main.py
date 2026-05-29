@@ -2445,6 +2445,56 @@ async def portfolio_attribution(req: Request):
     }
 
 
+@app.post("/api/portfolio/snapshot/run")
+async def run_eod_snapshot(req: Request):
+    """Compute + persist the EOD snapshot for the authenticated user.
+
+    Called by:
+      - Frontend "Snapshot now" button on /portfolio
+      - Railway cron (scheduled task) — same endpoint, auth via the
+        platform's standard Clerk JWT scoped to a service account
+
+    Idempotent on (user_id, today_NY). Rerunning the same day overwrites
+    the existing rollup row and per-position rows.
+    """
+    user_id = require_user_id(req)
+    from infra.eod_snapshot import compute_eod_snapshot
+    result = await compute_eod_snapshot(user_id)
+    return result
+
+
+@app.get("/api/portfolio/equity-curve")
+async def portfolio_equity_curve(req: Request, days: int = 90):
+    """User-scoped equity curve time series for the portfolio chart.
+
+    `days` caps the lookback (default 90). Each point: snapshot_date,
+    total_value, daily_pnl_pct, cumulative_pnl_pct. Empty list when
+    the user has no snapshots yet — frontend shows the empty-state.
+    """
+    user_id = require_user_id(req)
+    from db.repositories import SnapshotRepository
+    days = max(1, min(int(days or 90), 730))
+    rows = await SnapshotRepository.get_equity_curve(user_id, days=days)
+    series = [
+        {
+            "date": (r.get("snapshot_date").isoformat()
+                     if hasattr(r.get("snapshot_date"), "isoformat")
+                     else str(r.get("snapshot_date"))),
+            "total_value": float(r.get("total_value") or 0),
+            "daily_pnl": float(r.get("daily_pnl") or 0),
+            "daily_pnl_pct": float(r.get("daily_pnl_pct") or 0),
+            "cumulative_pnl": float(r.get("cumulative_pnl") or 0),
+            "cumulative_pnl_pct": float(r.get("cumulative_pnl_pct") or 0),
+        }
+        for r in rows
+    ]
+    return {
+        "series": series,
+        "count": len(series),
+        "latest": series[-1] if series else None,
+    }
+
+
 @app.get("/api/portfolio/positions")
 async def portfolio_positions(req: Request):
     """
@@ -2584,7 +2634,55 @@ async def portfolio_positions(req: Request):
             "avg_take_profit": round(avg_target, 2) if avg_target else None,
             "trade_count": len(g["trades"]),
             "opened_at": g["earliest_opened"].isoformat() if g["earliest_opened"] else None,
+            # Attached below from position_snapshots — populated only if
+            # there are snapshot rows for any of this position's trade ids.
+            "trade_ids": list(g["trades"]),
+            "pnl_history": [],
         })
+
+    # Attach 30-day pnl_history per position from position_snapshots.
+    # One bulk read across all open-trade ids — no N+1. Multi-leg
+    # positions (same ticker + direction across trades) are merged by
+    # summing pnl_dollars per date.
+    try:
+        from db.repositories import SnapshotRepository
+        all_trade_ids = [tid for p in positions for tid in p.get("trade_ids", [])]
+        history_by_trade = await SnapshotRepository.get_position_history_bulk(
+            user_id, all_trade_ids, days=30,
+        )
+        for p in positions:
+            merged: dict[str, dict] = {}
+            for tid in p.get("trade_ids", []):
+                for row in history_by_trade.get(tid, []):
+                    d_obj = row.get("snapshot_date")
+                    d = d_obj.isoformat() if hasattr(d_obj, "isoformat") else str(d_obj)
+                    bucket = merged.setdefault(d, {
+                        "date": d,
+                        "unrealized_pnl_pct": 0.0,
+                        "unrealized_pnl_dollars": 0.0,
+                        "market_value": 0.0,
+                    })
+                    bucket["unrealized_pnl_dollars"] += float(row.get("unrealized_pnl_dollars") or 0)
+                    bucket["market_value"] += float(row.get("market_value") or 0)
+                    # Weighted-by-cost pnl_pct: cost_basis × pct; we sum
+                    # the numerator and divide at the end via market_value.
+            # Replace the per-row pnl_pct with a cost-weighted recomputation
+            # from the merged dollar totals so the sparkline tracks the
+            # position-level number, not a single trade's.
+            cost_basis_total = float(p.get("cost_basis") or 0)
+            history = sorted(merged.values(), key=lambda x: x["date"])
+            for h in history:
+                if cost_basis_total > 0:
+                    h["unrealized_pnl_pct"] = round(
+                        h["unrealized_pnl_dollars"] / cost_basis_total * 100.0, 4
+                    )
+                else:
+                    h["unrealized_pnl_pct"] = 0.0
+                h["unrealized_pnl_dollars"] = round(h["unrealized_pnl_dollars"], 2)
+                h["market_value"] = round(h["market_value"], 2)
+            p["pnl_history"] = history
+    except Exception as e:
+        logger.warning(f"position pnl_history attach failed: {e}")
 
     # Sort by market value descending
     positions.sort(key=lambda p: p.get("market_value") or 0, reverse=True)

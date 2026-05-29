@@ -137,6 +137,35 @@ export const api = {
   positions: () => request("/api/portfolio/positions"),
   attribution: () => request("/api/portfolio/attribution"),
 
+  // EOD snapshot — equity curve series + manual trigger
+  equityCurve: (days = 90) =>
+    request<{
+      series: Array<{
+        date: string;
+        total_value: number;
+        daily_pnl: number;
+        daily_pnl_pct: number;
+        cumulative_pnl: number;
+        cumulative_pnl_pct: number;
+      }>;
+      count: number;
+      latest: {
+        date: string;
+        total_value: number;
+        cumulative_pnl: number;
+        cumulative_pnl_pct: number;
+      } | null;
+    }>(`/api/portfolio/equity-curve?days=${days}`),
+  snapshotRun: () =>
+    request<{
+      persisted: boolean;
+      snapshot_date?: string;
+      total_value?: number;
+      cumulative_pnl?: number;
+      cumulative_pnl_pct?: number;
+      warnings?: string[];
+    }>("/api/portfolio/snapshot/run", { method: "POST" }),
+
   // Scorecard (Desk 6)
   scorecardSummary: () => request("/api/scorecard/summary"),
   scorecardSignals: (limit = 50) => request(`/api/scorecard/signals?limit=${limit}`),

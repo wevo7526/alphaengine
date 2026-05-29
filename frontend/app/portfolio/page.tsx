@@ -9,6 +9,8 @@ import { TerminalHeader } from "@/components/TerminalHeader";
 import { TerminalPanel } from "@/components/TerminalPanel";
 import { StatPanel } from "@/components/StatPanel";
 import { StatusPill } from "@/components/StatusPill";
+import { EquityCurve } from "@/components/EquityCurve";
+import { Sparkline } from "@/components/Sparkline";
 
 interface Trade {
   id: string;
@@ -66,6 +68,14 @@ interface Position {
   weight_pct: number | null;
   trade_count: number;
   opened_at: string | null;
+  // EOD snapshot history for the sparkline. Empty array on positions
+  // that don't have snapshots yet (newly-opened trades).
+  pnl_history?: Array<{
+    date: string;
+    unrealized_pnl_pct: number;
+    unrealized_pnl_dollars: number;
+    market_value: number;
+  }>;
 }
 
 interface PositionsSummary {
@@ -97,6 +107,24 @@ export default function PortfolioPage() {
   const [positionsLoading, setPositionsLoading] = useState(true);
   const [apiError, setApiError] = useState<string | null>(null);
   const [flushing, setFlushing] = useState(false);
+  // EOD snapshot state: the equity curve series + the manual "Snapshot
+  // now" button. Both share the same loading flag so the chart shows a
+  // refreshing state while the new point is computed.
+  const [equitySeries, setEquitySeries] = useState<
+    Array<{
+      date: string;
+      total_value: number;
+      daily_pnl: number;
+      daily_pnl_pct: number;
+      cumulative_pnl: number;
+      cumulative_pnl_pct: number;
+    }>
+  >([]);
+  const [equityLatest, setEquityLatest] = useState<
+    | { date: string; total_value: number; cumulative_pnl: number; cumulative_pnl_pct: number }
+    | null
+  >(null);
+  const [snapshotRunning, setSnapshotRunning] = useState(false);
 
   const recordError = (label: string, e: unknown) => {
     const msg = e instanceof Error ? e.message : String(e);
@@ -126,9 +154,39 @@ export default function PortfolioPage() {
       .finally(() => setLoading(false));
   };
 
+  const loadEquityCurve = () => {
+    api
+      .equityCurve(90)
+      .then((d) => {
+        setEquitySeries(d.series ?? []);
+        setEquityLatest(d.latest ?? null);
+      })
+      .catch((e) => {
+        // Quiet failure — empty chart is its own informative state.
+        if (typeof console !== "undefined") console.warn("[portfolio] equity curve", e);
+      });
+  };
+
+  const handleSnapshotNow = async () => {
+    if (snapshotRunning) return;
+    setSnapshotRunning(true);
+    try {
+      await api.snapshotRun();
+      // Refresh both the curve and positions — the new snapshot extends
+      // both the curve and each position's pnl_history.
+      loadEquityCurve();
+      loadPositions();
+    } catch (e) {
+      recordError("snapshot", e);
+    } finally {
+      setSnapshotRunning(false);
+    }
+  };
+
   useEffect(() => {
     loadTrades();
     loadPositions();
+    loadEquityCurve();
   }, []);
 
   const runBacktest = () => {
@@ -318,6 +376,37 @@ export default function PortfolioPage() {
                 />
               </div>
 
+              {/* EOD equity curve — driven by /api/portfolio/equity-curve.
+                  Empty state explains the cron cadence; Snapshot Now button
+                  lets the user seed the curve with today's mark on demand. */}
+              <TerminalPanel
+                label="EQUITY CURVE"
+                status={
+                  <div className="flex items-center gap-3">
+                    {equityLatest && (
+                      <span className="text-text-quaternary tabular-nums">
+                        {equityLatest.cumulative_pnl_pct >= 0 ? "+" : ""}
+                        {equityLatest.cumulative_pnl_pct.toFixed(2)}% · LATEST{" "}
+                        {new Date(equityLatest.date).toLocaleDateString()}
+                      </span>
+                    )}
+                    <button
+                      onClick={handleSnapshotNow}
+                      disabled={snapshotRunning}
+                      className="text-accent hover:text-text-primary transition-colors disabled:opacity-30"
+                    >
+                      {snapshotRunning ? "SNAPSHOTTING…" : "SNAPSHOT NOW"}
+                    </button>
+                  </div>
+                }
+                bodyClassName="p-4"
+              >
+                <EquityCurve
+                  series={equitySeries}
+                  baseline={positionsSummary.portfolio_base}
+                />
+              </TerminalPanel>
+
               <TerminalPanel
                 label="OPEN POSITIONS"
                 status={
@@ -340,6 +429,7 @@ export default function PortfolioPage() {
                         <th className="px-4 py-2.5 text-right font-medium">Current</th>
                         <th className="px-4 py-2.5 text-right font-medium">P&L %</th>
                         <th className="px-4 py-2.5 text-right font-medium">P&L $</th>
+                        <th className="px-4 py-2.5 text-center font-medium">30D</th>
                         <th className="px-4 py-2.5 text-right font-medium">Weight</th>
                         <th className="px-4 py-2.5 text-right font-medium">Stop / Target</th>
                       </tr>
@@ -396,6 +486,14 @@ export default function PortfolioPage() {
                               {p.unrealized_pnl_dollars !== null
                                 ? `${p.unrealized_pnl_dollars >= 0 ? "+" : ""}$${Math.abs(p.unrealized_pnl_dollars).toFixed(0)}`
                                 : "—"}
+                            </td>
+                            <td className="px-4 py-3 text-center align-middle">
+                              {/* 30-day pnl% trajectory from position_snapshots.
+                                  Empty/placeholder line shown when there's no
+                                  snapshot history yet (newly opened trades). */}
+                              <span className="inline-block align-middle">
+                                <Sparkline data={p.pnl_history ?? []} />
+                              </span>
                             </td>
                             <td className="px-4 py-3 text-right font-mono text-[12px] text-text-tertiary tabular-nums">
                               {p.weight_pct != null

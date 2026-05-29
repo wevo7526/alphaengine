@@ -67,7 +67,11 @@ class BacktestResultRecord(Base):
 
 
 class PortfolioSnapshotRecord(Base):
-    """Point-in-time portfolio state for equity curve tracking."""
+    """Point-in-time portfolio state for equity curve tracking.
+
+    One row per (user_id, snapshot_date). The EOD snapshot job upserts —
+    rerunning the same day overwrites instead of duplicating.
+    """
     __tablename__ = "portfolio_snapshots"
 
     id = Column(String, primary_key=True, default=gen_uuid)
@@ -82,6 +86,46 @@ class PortfolioSnapshotRecord(Base):
     cumulative_pnl_pct = Column(Float)
     positions_json = Column(JSON, default=list)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_portfolio_snapshots_user_date", "user_id", "snapshot_date", unique=True),
+    )
+
+
+class PositionSnapshotRecord(Base):
+    """Per-position EOD state. Lets us reconstruct contribution to the
+    portfolio's equity curve and render per-position pnl sparklines.
+
+    One row per (trade_id, snapshot_date). Upserted by the EOD snapshot
+    job so reruns on the same day are safe.
+    """
+    __tablename__ = "position_snapshots"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=True, index=True)
+    trade_id = Column(String, nullable=False, index=True)
+    ticker = Column(String(20), nullable=False)
+    direction = Column(String(20), nullable=True)
+    snapshot_date = Column(Date, nullable=False)
+    entry_price = Column(Float)
+    close_price = Column(Float)
+    position_size_pct = Column(Float)
+    unrealized_pnl_pct = Column(Float)
+    unrealized_pnl_dollars = Column(Float)
+    market_value = Column(Float)
+    cost_basis = Column(Float)
+    days_held = Column(Integer)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_position_snapshots_user_date", "user_id", "snapshot_date"),
+        Index("ix_position_snapshots_trade_date", "trade_id", "snapshot_date", unique=True),
+    )
 
 
 class FactorExposureRecord(Base):
