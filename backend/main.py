@@ -3121,6 +3121,10 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
             yield send({"phase": "error", "error": f"Query interpretation failed: {e}"})
             return
 
+        # Accumulate each desk's tool calls so the provenance pipeline can
+        # build the lineage + Fact Sheet for citations (mirrors the orchestrator).
+        tool_steps_by_agent: dict = {}
+
         # === Desk 2: Research ===
         yield send({"type": "desk_start", "desk": "research", "label": "Research Desk", "agent": "research_analyst"})
         yield send({"phase": "researching", "agent": "research_analyst"})  # Backward compat
@@ -3134,6 +3138,8 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                 if isinstance(chunk, tuple) and chunk[0] == "__result__":
                     output = chunk[1]
                     research_data = output.output if output and not output.error else {"data_summary": "Research unavailable."}
+                    if output and getattr(output, "intermediate_steps", None):
+                        tool_steps_by_agent["research_analyst"] = list(output.intermediate_steps)
                     # Run sub-question completeness heuristic
                     try:
                         from agents.orchestrator import _research_completeness_check
@@ -3178,6 +3184,8 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "risk_factors": [], "overall_risk_level": "elevated",
                         "risk_narrative": "Risk assessment unavailable.",
                     }
+                    if output and getattr(output, "intermediate_steps", None):
+                        tool_steps_by_agent["risk_manager"] = list(output.intermediate_steps)
                 else:
                     for evt in chunk:
                         if evt.get("_keepalive"):
@@ -3252,6 +3260,8 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         "trade_ideas": [], "portfolio_positioning": "neutral",
                         "hedging_recommendations": [], "strategy_narrative": "Strategy unavailable.",
                     }
+                    if output and getattr(output, "intermediate_steps", None):
+                        tool_steps_by_agent["portfolio_strategist"] = list(output.intermediate_steps)
                     # Post-validate trade ideas against live prices +
                     # diversity assessment (with required style labels).
                     if isinstance(strategy_data, dict):
@@ -3464,6 +3474,68 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         except Exception as e:
             logger.debug(f"[stream] grounding aggregation skipped: {e}")
 
+        # === Phase 1/2 provenance + NLP (Build Plan) ===
+        # The streaming path used to skip this entirely — THE reason citations
+        # never appeared. We now run the NLP conviction tilt, build the Fact
+        # Sheet, attach citations deterministically, and persist evidence —
+        # mirroring the orchestrator path so streaming and non-streaming match.
+        from config import settings as _prov_settings
+        nlp_receipts: list = []
+        try:
+            if _prov_settings.FILING_NLP_ENABLED or _prov_settings.TRANSCRIPT_NLP_ENABLED:
+                from agents.nlp.runner import gather_nlp_signals, apply_nlp_tilt_to_ideas
+                yield send({"type": "desk_start", "desk": "nlp", "label": "NLP Signals",
+                            "agent": "nlp_signals"})
+                _bundle = await gather_nlp_signals(plan_data.get("tickers", []) or [])
+                _ideas = memo_data.get("trade_ideas") or []
+                if _ideas and _bundle["signals"]:
+                    _ideas, _adj = apply_nlp_tilt_to_ideas(_ideas, _bundle["by_ticker_tilt"])
+                    memo_data["trade_ideas"] = _ideas
+                    memo_data["nlp_adjustments"] = _adj
+                nlp_receipts = list(_bundle.get("receipts") or [])
+                for _sig in _bundle.get("signals") or []:
+                    yield send({"type": "nlp_signal", "desk": "nlp", "ticker": _sig.ticker,
+                                "signal": _sig.signal_name, "direction": _sig.direction,
+                                "value": round(_sig.value, 3), "confidence": _sig.confidence,
+                                "model": _sig.model})
+                _cov = _bundle.get("coverage") or {}
+                yield send({"type": "desk_done", "desk": "nlp",
+                            "summary": f"{len(_bundle.get('signals') or [])} signals · "
+                                       f"{_cov.get('covered_pct', 0)}% coverage · "
+                                       f"{len(memo_data.get('nlp_adjustments', []))} conviction adj"})
+        except Exception as _e:
+            logger.warning(f"[stream] NLP signal pass failed (non-fatal): {_e}")
+
+        try:
+            if _prov_settings.PROVENANCE_PIPELINE:
+                from infra.lineage import extract_tool_lineage
+                from pipeline import build_fact_sheet, finalize_with_evidence
+                from infra.coverage import compute_coverage, grade_verification
+                _lineage = extract_tool_lineage(tool_steps_by_agent)
+                memo_data["lineage"] = _lineage
+                _fs = build_fact_sheet(
+                    macro_context=macro_context_for_interp,
+                    strategy_data={"trade_ideas": memo_data.get("trade_ideas") or []},
+                    risk_data=risk_data,
+                    live_prices=live_prices_for_strategy,
+                    lineage=_lineage,
+                    extra_receipts=nlp_receipts,
+                )
+                _fin = finalize_with_evidence(memo_data, _fs)
+                memo_data = _fin["memo"]
+                memo_data["citation_index"] = _fin["citation_index"]
+                memo_data["coverage"] = compute_coverage(memo_data)
+                memo_data["verification_status"] = grade_verification(memo_data["coverage"])
+                memo_data["evidence_receipts"] = _fs.entries
+                memo_data["evidence_links"] = _fin["links"]
+                yield send({"type": "provenance", "desk": "cio", "agent": "provenance",
+                            "fact_sheet_entries": len(_fs),
+                            "citations": len(memo_data.get("citation_index") or []),
+                            "verification": memo_data.get("verification_status"),
+                            "coverage_pct": (memo_data.get("coverage") or {}).get("citation_coverage_pct")})
+        except Exception as _e:
+            logger.warning(f"[stream] provenance pipeline failed (non-fatal): {_e}")
+
         try:
             memo = IntelligenceMemo(**memo_data)
             result = memo.model_dump(mode="json")
@@ -3488,6 +3560,13 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                         tickers_analyzed=memo.tickers_analyzed,
                         themes=memo.themes,
                         lineage=memo.lineage or {},
+                        # Phase 1 — claim-level citations + verification
+                        citation_index=[
+                            c.model_dump() if hasattr(c, "model_dump") else c
+                            for c in (memo.citation_index or [])
+                        ],
+                        coverage=memo.coverage or {},
+                        verification_status=memo.verification_status or "unverified",
                         thread_id=memo.thread_id,
                         parent_memo_id=memo.parent_memo_id,
                         sequence_in_thread=memo.sequence_in_thread,
@@ -3504,6 +3583,21 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
                     result["thread_id"] = record.thread_id
                     result["parent_memo_id"] = record.parent_memo_id
                     result["sequence_in_thread"] = record.sequence_in_thread
+                    # Phase 1 — persist evidence receipts + claim links.
+                    try:
+                        receipts = getattr(memo, "evidence_receipts", None) or []
+                        ev_links = getattr(memo, "evidence_links", None) or []
+                        if receipts:
+                            from provenance import EvidenceRepository
+                            hash_to_id = await EvidenceRepository.upsert_many(receipts, user_id=user_id)
+                            links = [
+                                (l.get("claim_ref"), hash_to_id.get(l.get("content_hash")))
+                                for l in ev_links if hash_to_id.get(l.get("content_hash"))
+                            ]
+                            if links:
+                                await EvidenceRepository.link_claims(record.id, links)
+                    except Exception as ev_err:
+                        logger.warning(f"[stream] evidence persist failed (non-fatal): {ev_err}")
             except Exception as db_err:
                 logger.warning(f"[stream] DB persist failed (non-fatal): {db_err}")
 

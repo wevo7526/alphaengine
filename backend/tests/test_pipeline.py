@@ -27,34 +27,45 @@ def test_compute_harvests_trade_idea_and_macro_receipts():
     assert "agents.portfolio_strategist.trade_idea" in rendered  # trade-idea fields receipted
 
 
-def test_finalize_converts_markers_and_continues_numbering():
+def test_finalize_is_deterministic_and_always_populates_citations():
+    """Citations must appear even when the LLM emits NO [[ev:n]] markers."""
     fs = build_fact_sheet(**_state())
     memo = {
-        "analysis": "VIX is 25.78 [[ev:1]] in a late_cycle regime [[ev:2]]; long AAPL at 257.48 [[ev:3]], stop 240.0 [[ev:4]].",
-        "executive_summary": "Conviction 72 [[ev:6]].",
+        "analysis": "VIX is 25.78 in a late_cycle regime; long AAPL at 257.48, stop 240.0.",
+        "executive_summary": "We are long AAPL.",
+        "trade_ideas": [{"ticker": "AAPL", "conviction": 72}],
+        "risk_factors": [{"description": "macro risk"}],
+    }
+    fin = finalize_with_evidence(memo, fs)
+    # citation_index = the FULL fact sheet, independent of LLM markers.
+    assert len(fin["citation_index"]) == len(fs)
+    # The trade idea gets its AAPL-ticker receipts attached (price/stop/etc.).
+    idea_cites = fin["memo"]["trade_ideas"][0]["citations"]
+    assert len(idea_cites) >= 1
+    # The risk factor gets at least one anchor (DoD: every RF cited).
+    assert len(fin["memo"]["risk_factors"][0]["citations"]) >= 1
+
+
+def test_finalize_converts_markers_to_footnotes_when_present():
+    fs = build_fact_sheet(**_state())
+    memo = {
+        "analysis": "VIX is 25.78 [[ev:1]] in a late_cycle regime [[ev:2]]; stop 240.0 [[ev:4]].",
         "key_findings": ["Take profit at 290.0 [[ev:5]]"],
-        "citation_index": [{"n": 1, "source_type": "market_price", "source_id": "X"},
-                           {"n": 2, "source_type": "fred_series", "source_id": "Y"}],
+        "trade_ideas": [], "risk_factors": [],
     }
     v = validate_against_fact_sheet(memo, fs)
     assert v.ok, (v.orphans, v.dangling)
-
-    fin = finalize_with_evidence(memo, fs, base_index=2)
+    fin = finalize_with_evidence(memo, fs)
     out = fin["memo"]
-    # ev:1 → [3], ev:3 → [5], ev:6 → [8]
-    assert "[3]" in out["analysis"] and "[5]" in out["analysis"]
-    assert "[8]" in out["executive_summary"]
-    assert "[7]" in out["key_findings"][0]
-    # evidence footnotes continue past the 2 existing source citations
-    assert all(c["n"] > 2 for c in fin["citation_additions"])
-    # every cited evidence carries a content_hash link to persist
-    assert all(l["content_hash"] for l in fin["links"])
+    # n maps 1:1 to the Fact Sheet index (no base offset).
+    assert "[1]" in out["analysis"] and "[2]" in out["analysis"] and "[4]" in out["analysis"]
+    assert "[5]" in out["key_findings"][0]
+    assert "[[ev:" not in out["analysis"]  # all markers converted
 
 
 def test_computed_citation_label_carries_value_and_formula():
     fs = build_fact_sheet(**_state())
-    memo = {"analysis": "VIX is 25.78 [[ev:1]].", "citation_index": []}
-    fin = finalize_with_evidence(memo, fs, base_index=0)
-    add = fin["citation_additions"][0]
-    assert add["label"] == "VIX = 25.78"                 # value visible in the receipt
-    assert "get_macro_snapshot" in add["source_id"]      # named formula visible
+    fin = finalize_with_evidence({"analysis": "", "trade_ideas": [], "risk_factors": []}, fs)
+    vix = next(c for c in fin["citation_index"] if c["label"].startswith("VIX"))
+    assert vix["label"] == "VIX = 25.78"                  # value visible in the receipt
+    assert "get_macro_snapshot" in vix["source_id"]       # named formula visible

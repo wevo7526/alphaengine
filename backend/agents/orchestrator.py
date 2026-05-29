@@ -824,12 +824,23 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
                                 memo[f] = repair.output[f]
                         vres = validate_against_fact_sheet(memo, fact_sheet)
 
-                base_index = len(memo.get("citation_index") or [])
-                fin = finalize_with_evidence(memo, fact_sheet, base_index=base_index)
+                # The Fact Sheet is AUTHORITATIVE for citations: every receipt
+                # becomes a numbered citation and each trade idea / risk factor
+                # gets its ticker-matched receipts — deterministically, whether
+                # or not the LLM emitted markers. This is why citations always
+                # appear now (the old path only surfaced LLM-cited sources).
+                fin = finalize_with_evidence(memo, fact_sheet)
                 memo = fin["memo"]
-                memo["citation_index"] = (memo.get("citation_index") or []) + fin["citation_additions"]
+                memo["citation_index"] = fin["citation_index"]
                 memo["evidence_receipts"] = fact_sheet.entries
                 memo["evidence_links"] = fin["links"]
+                # Recompute coverage/verification AGAINST the populated index.
+                try:
+                    from infra.coverage import compute_coverage, grade_verification
+                    memo["coverage"] = compute_coverage(memo)
+                    memo["verification_status"] = grade_verification(memo["coverage"])
+                except Exception:
+                    pass
                 cov = memo.get("coverage") or {}
                 cov["evidence"] = {
                     "numeric_claims": vres.numeric_claims,
@@ -844,8 +855,8 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
                 if not vres.ok:
                     memo["verification_status"] = "unverified"
                 logger.info(
-                    "[orchestrator] provenance: %s | evidence footnotes +%d | status=%s",
-                    vres.summary(), len(fin["citation_additions"]), memo.get("verification_status"),
+                    "[orchestrator] provenance: %s | citation_index=%d entries | status=%s",
+                    vres.summary(), len(memo.get("citation_index") or []), memo.get("verification_status"),
                 )
             except Exception as e:
                 logger.exception(f"[orchestrator] provenance finalize failed: {e}")
