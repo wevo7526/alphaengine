@@ -162,6 +162,21 @@ class IntelligenceMemoRecord(Base):
     # validation | time_horizon_shift | comparison). Set by the Interpreter
     # so the consumer can show which kind of follow-up produced the memo.
     query_class = Column(String(40), nullable=True)
+    # Phase G — claim-level citations.
+    # citation_index: deduplicated, numbered list of every Citation
+    # referenced across trade_ideas, risk_factors, and inline `[N]`
+    # markers in `analysis` prose. Each entry: {n, source_type, source_id,
+    # url, label, excerpt}. Citations on trade_ideas / risk_factors are
+    # stored in-place inside their respective JSON columns above.
+    citation_index = Column(JSON, default=list)
+    # coverage: {citation_coverage_pct, claim_coverage_pct, trade_ideas_cited,
+    # trade_ideas_total, risk_factors_cited, risk_factors_total,
+    # numeric_claims, inline_anchors}
+    coverage = Column(JSON, default=dict)
+    # verification_status: "verified" | "partial" | "unverified". Drives
+    # the VERIFIED pill on the memo header. Defaults to "unverified" for
+    # older memos persisted before this column existed.
+    verification_status = Column(String(20), default="unverified")
 
     # /api/signals/latest filters by user_id ordered by created_at desc.
     # Without this composite, every call scans the whole table.

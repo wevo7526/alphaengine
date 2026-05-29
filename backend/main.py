@@ -442,6 +442,13 @@ async def analyze(request: AnalyzeRequest, req: Request):
                     sequence_in_thread=memo.sequence_in_thread,
                     thread_summary=memo.thread_summary,
                     query_class=memo.query_class,
+                    # Phase G — claim-level citations
+                    citation_index=[
+                        c.model_dump() if hasattr(c, "model_dump") else c
+                        for c in (memo.citation_index or [])
+                    ],
+                    coverage=memo.coverage or {},
+                    verification_status=memo.verification_status or "unverified",
                 )
                 session.add(record)
                 await session.commit()
@@ -501,6 +508,14 @@ async def latest_signals(req: Request, limit: int = 20):
                     "tickers_analyzed": r.tickers_analyzed or [],
                     "themes": r.themes or [],
                     "created_at": r.created_at.isoformat() if r.created_at else None,
+                    # Phase G — claim-level citations + verification
+                    "citation_index": r.citation_index or [],
+                    "coverage": r.coverage or {},
+                    "verification_status": r.verification_status or "unverified",
+                    # Lineage already lives on the record — expose it so the
+                    # frontend's existing LineagePanel keeps working alongside
+                    # the new per-claim citation rendering.
+                    "lineage": r.lineage or {},
                 }
                 for r in records
             ]

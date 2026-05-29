@@ -12,12 +12,24 @@ export type QueryIntent =
   | "portfolio_ideas"
   | "market_regime";
 
+// Phase G — claim-level citation. Resolved against memo.lineage by the
+// backend; the frontend only consumes the enriched shape (with url/label/n).
+export interface Citation {
+  source_type: string;     // sec_filing | fred_series | market_price | …
+  source_id: string;       // accession #, FRED series id, "AAPL@yfinance"
+  url?: string | null;
+  label?: string | null;
+  excerpt?: string | null;
+  n?: number;              // numeric index for inline footnotes
+}
+
 export interface RiskFactor {
   category: string;
   description: string;
   severity: string;
   probability: string;
   mitigation: string;
+  citations?: Citation[];
 }
 
 export interface TradeIdea {
@@ -59,6 +71,8 @@ export interface TradeIdea {
   // Which screen surfaced this name (insider_clusters, 13f_new_initiations,
   // post_earnings_drift, 52w_low_insider_buy, sector_adjacent, multi).
   screen_source?: string | null;
+  // Phase G — claim-anchored citations resolved against memo.lineage.
+  citations?: Citation[];
 }
 
 export interface IntelligenceMemo {
@@ -159,6 +173,27 @@ export interface IntelligenceMemo {
     yield_curve?: number | null;
     fed_funds_rate?: number | null;
   };
+  // Phase G — claim-level citations.
+  // Deduplicated, numbered list of every Citation referenced anywhere
+  // in this memo. Drives the inline `[N]` footnotes in prose and the
+  // bottom CITATIONS rail on trade-idea / risk-factor cards.
+  citation_index?: Citation[];
+  // Coverage stats — % of trade ideas + risk factors with ≥1 citation,
+  // and % of inline numeric claims that resolved to a footnote.
+  coverage?: {
+    citation_coverage_pct?: number;
+    claim_coverage_pct?: number;
+    trade_ideas_cited?: number;
+    trade_ideas_total?: number;
+    risk_factors_cited?: number;
+    risk_factors_total?: number;
+    numeric_claims?: number;
+    inline_anchors?: number;
+  };
+  // Drives the VERIFIED / PARTIAL pill on the memo header.
+  verification_status?: "verified" | "partial" | "unverified";
+  // Phase F — mandate enforcement warnings.
+  mandate_warnings?: string[];
 }
 
 export interface MacroIndicator {

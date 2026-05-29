@@ -203,6 +203,9 @@ class ResearchData(BaseModel):
 
 # === Risk Assessment ===
 
+from agents.citations import Citation
+
+
 class RiskFactor(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -211,6 +214,10 @@ class RiskFactor(BaseModel):
     severity: str = "medium"
     probability: str = "medium"
     mitigation: str = ""
+    # Claim-anchored citations resolved against the memo's lineage block.
+    # Empty list when no citations were emitted; the resolver auto-fills
+    # from ticker-scoped tool calls when an idea is uncited.
+    citations: list[Citation] = Field(default_factory=list)
 
 
 class FalsificationScore(BaseModel):
@@ -313,6 +320,11 @@ class TradeIdea(BaseModel):
     # post_earnings_drift, 52w_low_insider_buy, sector_adjacent, multi).
     # None means the name was already in the user's plan / primary universe.
     screen_source: Optional[str] = None
+    # Claim-anchored citations resolved against the memo's lineage block.
+    # Strategist is asked to emit `{source_type, source_id}` references;
+    # post-processor (infra/citations_resolver) fills in url/label and
+    # drops anything that doesn't match a real lineage entry.
+    citations: list[Citation] = Field(default_factory=list)
 
     @field_validator("price_corrected", mode="before")
     @classmethod
@@ -424,6 +436,16 @@ class IntelligenceMemo(BaseModel):
     # mandate gate. Empty list when no violations. UI renders these as a
     # "MANDATE CHECK · N issues" pill on the memo header.
     mandate_warnings: list[str] = Field(default_factory=list)
+    # Phase G — claim-level citations.
+    # citation_index is the deduplicated, numbered list of every Citation
+    # referenced across trade_ideas, risk_factors, and inline markers in
+    # `analysis` prose. The resolver builds it after all desks finish.
+    citation_index: list[Citation] = Field(default_factory=list)
+    # Coverage stats — % of trade ideas + risk factors with ≥1 citation,
+    # plus % of inline numeric claims that resolved to a footnote.
+    # Drives the VERIFIED / PARTIAL / UNVERIFIED pill in the UI.
+    coverage: dict = Field(default_factory=dict)
+    verification_status: str = "unverified"  # verified | partial | unverified
 
     @field_validator("intent", mode="before")
     @classmethod

@@ -119,6 +119,10 @@ async def _migrate_columns() -> None:
         # Phase E — working-order tracking on trades.
         ("trades", "working_status", "TEXT DEFAULT 'active'"),
         ("trades", "watchlist_id", "TEXT"),
+        # Phase G — claim-level citations on memos.
+        ("intelligence_memos", "citation_index", json_col_type),
+        ("intelligence_memos", "coverage", json_col_type),
+        ("intelligence_memos", "verification_status", "TEXT DEFAULT 'unverified'"),
     ]
     for table, column, col_type in column_migrations:
         try:

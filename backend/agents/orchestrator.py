@@ -692,9 +692,31 @@ async def run_synthesizer(state: ResearchDeskState) -> ResearchDeskState:
             memo["lineage"] = extract_tool_lineage(
                 state.get("tool_steps_by_agent") or {}
             )
+            # Merge structured outputs from prior desks into the memo dict
+            # BEFORE we run the citation resolver — the resolver walks
+            # memo["trade_ideas"] and memo["risk_factors"], which the
+            # CIO typically doesn't echo verbatim. We backfill from
+            # strategy_data / risk_data here so the resolver has the
+            # complete picture.
+            strategy = state.get("strategy_data") or {}
+            risk = state.get("risk_data") or {}
+            if isinstance(strategy, dict) and not memo.get("trade_ideas"):
+                memo["trade_ideas"] = strategy.get("trade_ideas") or []
+            if isinstance(risk, dict) and not memo.get("risk_factors"):
+                memo["risk_factors"] = risk.get("risk_factors") or []
+
+            # Resolve every agent-emitted citation against the lineage,
+            # build the deduplicated citation_index, and replace inline
+            # [[src:...]] markers in prose with [N] numeric anchors.
+            from infra.citations_resolver import resolve_memo_citations
+            from infra.coverage import compute_coverage, grade_verification
+            memo = resolve_memo_citations(memo)
+            memo["coverage"] = compute_coverage(memo)
+            memo["verification_status"] = grade_verification(memo["coverage"])
+
             state["memo_data"] = memo
     except Exception as e:  # noqa: BLE001 — never let lineage break the memo
-        logger.warning(f"[orchestrator] lineage extraction failed: {e}")
+        logger.warning(f"[orchestrator] lineage/citations failed: {e}")
     return state
 
 
@@ -794,8 +816,15 @@ async def run_research_desk(
     memo_data["themes"] = plan.get("themes", [])
     memo_data["macro_regime"] = risk.get("macro_regime", "")
     memo_data["overall_risk_level"] = risk.get("overall_risk_level", "")
-    memo_data["risk_factors"] = risk.get("risk_factors", [])  # Always use structured data
-    memo_data["trade_ideas"] = strategy.get("trade_ideas", [])  # Always use structured data
+    # CITATIONS PRESERVATION: the resolver in run_synthesizer mutated
+    # memo_data["trade_ideas"] and memo_data["risk_factors"] in place
+    # to attach resolved citations. Only fall back to strategy/risk
+    # outputs when the CIO didn't echo these structured fields at all —
+    # otherwise we'd wipe the citation work.
+    if not memo_data.get("risk_factors"):
+        memo_data["risk_factors"] = risk.get("risk_factors", [])
+    if not memo_data.get("trade_ideas"):
+        memo_data["trade_ideas"] = strategy.get("trade_ideas", [])
     memo_data["portfolio_positioning"] = strategy.get("portfolio_positioning", "")
     memo_data["hedging_recommendations"] = strategy.get("hedging_recommendations", [])
     # Mandate-gate warnings: surfaced on the memo so the UI can render a
