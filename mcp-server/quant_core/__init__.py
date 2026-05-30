@@ -20,10 +20,20 @@ Beta cut (6 tools):
 """
 
 from quant_core.validation import deflated_sharpe, pbo_cscv
+from quant_core.pairs import find_cointegrated_pairs, compute_spread_signal
+from quant_core.risk import compute_var_cvar
+from quant_core.factors import decompose_factors
 
 __all__ = [
+    # Validation
     "deflated_sharpe",
     "pbo_cscv",
+    # Signals
+    "find_cointegrated_pairs",
+    "compute_spread_signal",
+    # Risk
+    "compute_var_cvar",
+    "decompose_factors",
 ]
 
 # engine_version is stamped on every SignalEnvelope so a consumer can reproduce
