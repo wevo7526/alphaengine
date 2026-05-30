@@ -350,6 +350,57 @@ async def complete_onboarding(payload: OnboardingCompletePayload, request: Reque
     return {"profile": profile, "onboarded": True}
 
 
+# === API KEYS (portal) ===
+
+class KeyCreate(BaseModel):
+    name: str | None = None
+
+
+def _require_portal_user(req: Request) -> str:
+    """Keys are a portal feature — block anonymous demo identities."""
+    from auth import is_demo_user
+    user_id = require_user_id(req)
+    if is_demo_user(user_id):
+        raise HTTPException(status_code=403, detail="API keys require a portal account. Start a free trial.")
+    return user_id
+
+
+@app.get("/api/me/keys")
+async def list_keys(req: Request):
+    from db.repositories import ApiKeyRepository
+    user_id = _require_portal_user(req)
+    return {"keys": await ApiKeyRepository.list_for_user(user_id)}
+
+
+@app.post("/api/me/keys")
+async def create_key(payload: KeyCreate, req: Request):
+    """Generate a key. The full plaintext is in the response ONCE (show it in the
+    reveal modal); afterwards only the masked form is available."""
+    from db.repositories import ApiKeyRepository
+    user_id = _require_portal_user(req)
+    return await ApiKeyRepository.create(user_id, payload.name)
+
+
+@app.post("/api/me/keys/{key_id}/regenerate")
+async def regenerate_key(key_id: str, payload: KeyCreate, req: Request):
+    from db.repositories import ApiKeyRepository
+    user_id = _require_portal_user(req)
+    out = await ApiKeyRepository.regenerate(user_id, key_id, payload.name)
+    if out is None:
+        raise HTTPException(status_code=404, detail="Key not found")
+    return out
+
+
+@app.delete("/api/me/keys/{key_id}")
+async def revoke_key(key_id: str, req: Request):
+    from db.repositories import ApiKeyRepository
+    user_id = _require_portal_user(req)
+    ok = await ApiKeyRepository.revoke(user_id, key_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Key not found or already revoked")
+    return {"revoked": True, "id": key_id}
+
+
 # === USER RISK PROFILE — per-user overrides for risk gates ===
 
 @app.get("/api/me/risk")

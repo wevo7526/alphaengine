@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { useUser } from "@clerk/nextjs";
+import { ApiKeys } from "@/components/ApiKeys";
 
 /**
  * Paying-user portal (skeleton). Two pillars per the landed spec:
@@ -152,13 +153,7 @@ function Console() {
       </div>
 
       <div className="grid lg:grid-cols-2 gap-6">
-        <Panel title="KEYS" note="beta">
-          <div className="font-mono text-[12px] text-text-secondary bg-bg-primary/60 border border-border-primary/60 rounded-sm px-3 py-2.5 flex items-center justify-between">
-            <span>ae_live_••••••••••••••••</span>
-            <span className="text-[10px] tracking-[0.16em] text-text-quaternary">PROVISIONING</span>
-          </div>
-          <p className="mt-3 text-[11px] text-text-tertiary">Provision / rotate / revoke land with the gateway deploy. One key works across REST + MCP.</p>
-        </Panel>
+        <ApiKeys />
         <SchemaExplorer />
       </div>
     </div>

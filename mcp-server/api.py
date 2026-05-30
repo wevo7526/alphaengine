@@ -130,6 +130,25 @@ async def status():
     return {"schema_version": SCHEMA_VERSION, "engine_version": ENGINE_VERSION, **snapshot()}
 
 
+@app.get("/")
+async def root():
+    return {
+        "service": "alphaengine-gateway",
+        "schema_version": SCHEMA_VERSION,
+        "engine_version": ENGINE_VERSION,
+        "rest": "/v1/tools/{tool}",
+        "mcp": "/mcp/",
+        "health": "/v1/health",
+        "status": "/v1/status",
+    }
+
+
+@app.get("/favicon.ico")
+async def favicon():
+    from fastapi import Response
+    return Response(status_code=204)
+
+
 @app.get("/v1/health")
 async def health():
     return {"status": "ok", "schema_version": SCHEMA_VERSION, "engine_version": ENGINE_VERSION}

@@ -6,7 +6,9 @@ Keeps route handlers thin and quant modules testable.
 from sqlalchemy import select, desc, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import date, datetime, timezone
+import hashlib
 import logging
+import secrets
 
 from db.database import async_session
 from db.models import (
@@ -14,9 +16,103 @@ from db.models import (
     PositionSnapshotRecord,
     BacktestRunRecord, BacktestResultRecord, FactorExposureRecord,
     RegimeRecord, MacroSnapshotRecord, UserProfile, UserRiskProfile,
+    ApiKeyRecord,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _hash_key(plaintext: str) -> str:
+    return hashlib.sha256(plaintext.encode("utf-8")).hexdigest()
+
+
+class ApiKeyRepository:
+    """API key lifecycle. Plaintext is returned ONCE on create; only the hash
+    is stored. The gateway calls verify() to authenticate an incoming bearer."""
+
+    @staticmethod
+    def _masked(row: ApiKeyRecord) -> dict:
+        return {
+            "id": row.id,
+            "name": row.name,
+            "prefix": row.prefix,
+            "last4": row.last4,
+            "masked": f"{row.prefix}…{row.last4}" if row.last4 else row.prefix,
+            "created_at": str(row.created_at) if row.created_at else None,
+            "last_used_at": str(row.last_used_at) if row.last_used_at else None,
+            "revoked": row.revoked_at is not None,
+        }
+
+    @staticmethod
+    async def create(user_id: str, name: str | None = None) -> dict:
+        """Generate a key. Returns the masked record PLUS `key` (the full
+        plaintext) which is shown to the user exactly once and never persisted."""
+        plaintext = "ae_live_" + secrets.token_urlsafe(24)
+        row = ApiKeyRecord(
+            user_id=user_id,
+            name=(name or None),
+            prefix=plaintext[:12],          # "ae_live_" + 4 chars
+            last4=plaintext[-4:],
+            key_hash=_hash_key(plaintext),
+        )
+        async with async_session() as session:
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+            out = ApiKeyRepository._masked(row)
+        out["key"] = plaintext  # ONE-TIME reveal
+        return out
+
+    @staticmethod
+    async def list_for_user(user_id: str, include_revoked: bool = False) -> list[dict]:
+        async with async_session() as session:
+            q = select(ApiKeyRecord).where(ApiKeyRecord.user_id == user_id).order_by(desc(ApiKeyRecord.created_at))
+            if not include_revoked:
+                q = q.where(ApiKeyRecord.revoked_at.is_(None))
+            rows = (await session.execute(q)).scalars().all()
+            return [ApiKeyRepository._masked(r) for r in rows]
+
+    @staticmethod
+    async def revoke(user_id: str, key_id: str) -> bool:
+        async with async_session() as session:
+            row = (await session.execute(
+                select(ApiKeyRecord).where(ApiKeyRecord.id == key_id, ApiKeyRecord.user_id == user_id)
+            )).scalar_one_or_none()
+            if not row or row.revoked_at is not None:
+                return False
+            row.revoked_at = datetime.now(timezone.utc)
+            await session.commit()
+            return True
+
+    @staticmethod
+    async def regenerate(user_id: str, key_id: str, name: str | None = None) -> dict | None:
+        """Revoke an existing key and mint a fresh one (same name unless given)."""
+        async with async_session() as session:
+            row = (await session.execute(
+                select(ApiKeyRecord).where(ApiKeyRecord.id == key_id, ApiKeyRecord.user_id == user_id)
+            )).scalar_one_or_none()
+            if not row:
+                return None
+            keep_name = name if name is not None else row.name
+            if row.revoked_at is None:
+                row.revoked_at = datetime.now(timezone.utc)
+                await session.commit()
+        return await ApiKeyRepository.create(user_id, keep_name)
+
+    @staticmethod
+    async def verify(plaintext: str) -> str | None:
+        """Return the owning user_id for a valid, non-revoked key (and stamp
+        last_used_at), else None. Used by the gateway to authenticate."""
+        key_hash = _hash_key(plaintext)
+        async with async_session() as session:
+            row = (await session.execute(
+                select(ApiKeyRecord).where(ApiKeyRecord.key_hash == key_hash, ApiKeyRecord.revoked_at.is_(None))
+            )).scalar_one_or_none()
+            if not row:
+                return None
+            row.last_used_at = datetime.now(timezone.utc)
+            await session.commit()
+            return row.user_id
 
 
 class MemoRepository:

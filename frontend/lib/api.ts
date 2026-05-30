@@ -72,6 +72,17 @@ async function request<T>(path: string, init?: RequestInit & { timeoutMs?: numbe
   }
 }
 
+export interface ApiKeyMasked {
+  id: string;
+  name: string | null;
+  prefix: string;
+  last4: string | null;
+  masked: string;
+  created_at: string | null;
+  last_used_at: string | null;
+  revoked: boolean;
+}
+
 export const api = {
   health: () => request("/api/health"),
   systemInfo: () => request("/api/system/info"),
@@ -255,6 +266,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify(fields),
     }),
+
+  // API keys (portal). `key` (full plaintext) is present ONLY on create/regenerate.
+  myKeys: () =>
+    request<{ keys: ApiKeyMasked[] }>("/api/me/keys"),
+  createKey: (name?: string) =>
+    request<ApiKeyMasked & { key: string }>("/api/me/keys", {
+      method: "POST",
+      body: JSON.stringify({ name: name || null }),
+    }),
+  regenerateKey: (id: string, name?: string) =>
+    request<ApiKeyMasked & { key: string }>(`/api/me/keys/${id}/regenerate`, {
+      method: "POST",
+      body: JSON.stringify({ name: name || null }),
+    }),
+  revokeKey: (id: string) =>
+    request<{ revoked: boolean; id: string }>(`/api/me/keys/${id}`, { method: "DELETE" }),
 
   // Per-user risk gate overrides
   myRisk: () =>

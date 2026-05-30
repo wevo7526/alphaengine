@@ -407,6 +407,26 @@ class UserProfile(Base):
     onboarded_at = Column(DateTime(timezone=True), nullable=True)
 
 
+class ApiKeyRecord(Base):
+    """
+    Per-user API key for the gateway (REST + MCP). The plaintext key is shown
+    ONCE at creation and never stored — we keep only a SHA-256 hash plus a
+    display prefix + last4 for the masked list. The gateway authenticates an
+    incoming bearer by hashing it and matching a non-revoked key_hash.
+    """
+    __tablename__ = "api_keys"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    user_id = Column(String, nullable=False, index=True)
+    name = Column(String(80), nullable=True)
+    prefix = Column(String(16), nullable=False)      # e.g. "ae_live_3f2a" (display only)
+    last4 = Column(String(8), nullable=True)
+    key_hash = Column(String(64), nullable=False, unique=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_used_at = Column(DateTime(timezone=True), nullable=True)
+    revoked_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class UserRiskProfile(Base):
     """
     Per-user overrides for the platform's risk gates.
