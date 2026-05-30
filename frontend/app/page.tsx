@@ -97,15 +97,17 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
             </div>
 
             <h1 className="font-display text-[38px] sm:text-[48px] lg:text-[54px] font-semibold tracking-[-0.01em] leading-[1.06] mb-8">
-              AI Agents for
+              Your data.
               <br />
-              Investment Managers.
+              Our quant engine.
             </h1>
 
             <p className="text-[16px] text-text-secondary leading-relaxed mb-10 max-w-md">
-              A team of agents handles research, risk, and portfolio construction,
-              and a CIO agent signs off. They take your question from plain English
-              to a sourced, risk-checked memo with trade ideas. In minutes.
+              A stateless research engine you run on your own licensed data:
+              cointegration, factor decomposition, risk, deflated Sharpe, and a
+              desk of agents that turn it into a sourced memo. You bring the
+              data; it runs the math and hands back the result. Nothing sourced,
+              nothing stored.
             </p>
 
             <div className="flex items-center gap-5 flex-wrap mb-10">
@@ -217,13 +219,13 @@ function TaglineStrip() {
     <section className="relative border-y border-border-primary/60 bg-bg-surface/20">
       <div className="max-w-[920px] mx-auto px-6 py-20 text-center">
         <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-6">
-          <span className="text-text-tertiary">///</span> THE DESK
+          <span className="text-text-tertiary">///</span> NO DATA, BY DESIGN
         </p>
         <p className="font-display text-[26px] sm:text-[32px] font-semibold tracking-[-0.01em] leading-[1.2] text-text-primary">
-          A team of agents, one workflow.
+          Your data goes in. The math comes out. Nothing stays.
           <br className="hidden sm:block" />
           <span className="text-text-tertiary">
-            {" "}They read the question, pull the filings and prices, weigh the risk, build the trades, and a CIO agent signs off. It is the path a research desk takes, run end to end.
+            {" "}We never source, store, or redistribute market data. You already license yours; the engine runs on it in the moment and discards it. No data to leak, no licensing to untangle, no vendor lock between you and your numbers.
           </span>
         </p>
       </div>
@@ -244,23 +246,22 @@ function StatusStrip() {
             <span className="text-text-tertiary">///</span> A TYPICAL RUN
           </p>
           <h2 className="font-display text-[26px] sm:text-[32px] font-semibold tracking-[-0.01em] leading-[1.2]">
-            What a single question feels like, at a glance.
+            A computation service, not a data vendor.
           </h2>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-sm overflow-hidden">
           <StatPanel
-            label="NAMES SCANNED"
-            value="50+"
-            unit="live"
-            sub="Real-time market scan, per query"
-            mini={<MiniDots />}
+            label="DATA STORED"
+            value="0"
+            unit="bytes"
+            sub="Stateless — every call is discarded"
+            mini={<MiniSparkline kind="flat" />}
           />
           <StatPanel
-            label="CLAIMS CITED"
-            value="100"
-            unit="%"
-            sub="Every number traces to a source"
-            mini={<MiniSparkline kind="up" />}
+            label="DATA LICENSE"
+            value="YOURS"
+            sub="You bring it; we never source it"
+            mini={<MiniDots />}
           />
           <StatPanel
             label="NOISE-TESTED"
@@ -269,11 +270,11 @@ function StatusStrip() {
             mini={<MiniBars />}
           />
           <StatPanel
-            label="MEMO TURNAROUND"
-            value="~10"
-            unit="min"
-            sub="From query to final memo"
-            mini={<MiniSparkline kind="flat" />}
+            label="CLAIMS CITED"
+            value="100"
+            unit="%"
+            sub="Every number traces to a receipt"
+            mini={<MiniSparkline kind="up" />}
           />
         </div>
       </div>
@@ -377,41 +378,41 @@ function ProductShowcase() {
       <div className="max-w-[1280px] mx-auto px-6 py-24">
         <div className="text-center mb-20 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
-            <span className="text-text-tertiary">///</span> PRODUCT
+            <span className="text-text-tertiary">///</span> THE ENGINE
           </p>
           <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
-            Four things you&apos;ll reach for, day in and day out.
+            The math, exposed as tools.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            Scan the market, pressure-test the edge, size the risk, and keep
-            the thread going. All four are live today, waiting whenever you
-            need them.
+            Connect the engine to your data and call the computation directly,
+            or let the desk of agents run it for you. Either way, the data is
+            yours and nothing is retained.
           </p>
         </div>
 
         <div className="max-w-[1040px] mx-auto space-y-6">
           <ShowcaseCard
-            tag="01 / DISCOVERY"
-            title="Scan the whole market, not a watchlist."
-            sub="Every query runs a live scan across sectors, size, and style, surfacing dozens of under-covered names ranked on merit, never a hardcoded list. Insider clusters, fund initiations, post-earnings drift, and 52-week-low setups layer on top."
+            tag="01 / PAIRS"
+            title="Cointegrated pairs from your prices."
+            sub="Pass in a set of price series; get back the cointegrated pairs with test statistic and p-value, the half-life of mean reversion, the hedge ratio, and the live spread z-score. Engle-Granger done right, on your data."
             visual={<DiscoveryViz />}
           />
           <ShowcaseCard
             tag="02 / RIGOR"
             title="Know when it&apos;s edge, and when it&apos;s noise."
-            sub="Conviction is a decomposable, calibrated score, not a vibe. Signals are graded at 1/5/20 days against realized outcomes (Brier + reliability), and every backtest shows a deflated Sharpe, corrected for how many ideas were tried, never the flattering raw number."
+            sub="Every backtest reports a deflated Sharpe, corrected for how many ideas were tried and for non-normal returns, plus probability of backtest overfitting and purged, embargoed cross-validation. We tell you when a result is probably noise."
             visual={<TrackRecordViz />}
           />
           <ShowcaseCard
-            tag="03 / RISK & STRESS"
-            title="Sensible guardrails on every trade."
-            sub="Position, sector, marginal VaR, drawdown, and liquidity checks all run quietly in the background. Dial in a macro shock and watch each position respond in real time."
+            tag="03 / RISK"
+            title="Risk and stress on your book."
+            sub="VaR and CVaR (parametric, historical, Cornish-Fisher, bootstrapped), Ledoit-Wolf covariance, factor decomposition, and macro-shock stress, computed on the positions and returns you supply. No black box, every figure traceable."
             visual={<RiskViz />}
           />
           <ShowcaseCard
-            tag="04 / FOLLOW-UP THREADS"
-            title="Pick up right where you left off."
-            sub="Continue any memo with a single click. Drill into a name, sanity-check a thesis, or stress a slate in a sentence. Nothing starts from scratch."
+            tag="04 / AGENTS"
+            title="A desk of agents over the same engine."
+            sub="Research, risk, and portfolio agents with a CIO that signs off run the same math and turn it into a sourced, risk-checked memo. Shipped as the included desk UI, running on your data through the engine."
             visual={<ThreadViz />}
           />
         </div>
@@ -679,13 +680,13 @@ function SourceLedger() {
             <span className="text-text-tertiary">///</span> SOURCE LEDGER
           </p>
           <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
-            Every claim comes with a receipt.
+            Every figure comes with a receipt.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            Each memo carries a complete ledger of the filings, quotes, and
-            computed figures that shaped it, and a validator refuses to ship a
-            number it can&apos;t trace. Open any source, check any figure. Years
-            from now, it still works.
+            Every number the engine returns binds to a receipt: the named
+            formula that produced it and the data you supplied. A validator
+            refuses to ship a figure it can&apos;t trace. Your data, your audit
+            trail, computed and handed back. We keep none of it.
           </p>
         </div>
 
@@ -727,16 +728,17 @@ function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
       <div className="absolute inset-0 grid-bg opacity-[0.08]" aria-hidden="true" />
       <div className="max-w-[920px] mx-auto px-6 py-24 text-center relative">
         <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-6">
-          <span className="text-text-tertiary">///</span> READY WHEN YOU ARE
+          <span className="text-text-tertiary">///</span> CONNECT YOUR DESK
         </p>
         <h2 className="font-display text-[34px] sm:text-[46px] font-semibold tracking-[-0.01em] leading-[1.08] mb-7">
-          Your next memo is ten
+          Point the engine
           <br />
-          minutes away.
+          at your data.
         </h2>
         <p className="text-[15px] text-text-tertiary max-w-md mx-auto mb-12 leading-relaxed">
-          Signing up takes about a minute, and your first memo runs right after.
-          We&apos;ll be here when you&apos;re ready.
+          Connect your agents to the engine over a secure endpoint, or try the
+          live demo on sample data. Your data stays yours; we run the math and
+          hand it back.
         </p>
         {isSignedIn ? (
           <Link
