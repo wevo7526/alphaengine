@@ -225,7 +225,7 @@ function TaglineStrip() {
           Your data goes in. The math comes out. Nothing stays.
           <br className="hidden sm:block" />
           <span className="text-text-tertiary">
-            {" "}We never source, store, or redistribute market data. You already license yours; the engine runs on it in the moment and discards it. No data to leak, no licensing to untangle, no vendor lock between you and your numbers.
+            {" "}We never source, store, or redistribute market data. Your data runs through the engine in the moment and is discarded. No data to leak, no licensing to untangle, no vendor lock between you and your numbers.
           </span>
         </p>
       </div>
@@ -251,29 +251,27 @@ function StatusStrip() {
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-sm overflow-hidden">
           <StatPanel
-            label="DATA STORED"
-            value="0"
-            unit="bytes"
-            sub="Stateless — every call is discarded"
+            label="RETENTION"
+            value="None"
+            sub="Each call processed, then discarded"
             mini={<MiniSparkline kind="flat" />}
           />
           <StatPanel
-            label="DATA LICENSE"
-            value="YOURS"
-            sub="You bring it; we never source it"
+            label="DATA"
+            value="Supplied"
+            sub="Passed in per call, never sourced"
             mini={<MiniDots />}
           />
           <StatPanel
-            label="NOISE-TESTED"
-            value="DSR"
-            sub="Deflated Sharpe on every backtest"
+            label="BACKTESTS"
+            value="Deflated"
+            sub="Sharpe adjusted for trials tried"
             mini={<MiniBars />}
           />
           <StatPanel
-            label="CLAIMS CITED"
-            value="100"
-            unit="%"
-            sub="Every number traces to a receipt"
+            label="FIGURES"
+            value="Traceable"
+            sub="Each binds to its formula"
             mini={<MiniSparkline kind="up" />}
           />
         </div>
