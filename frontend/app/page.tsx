@@ -294,20 +294,20 @@ function StatPanel({
   mini?: React.ReactNode;
 }) {
   return (
-    <div className="bg-bg-surface px-6 py-7 flex items-center justify-between gap-4">
-      <div>
+    <div className="bg-bg-surface px-6 py-7 flex items-start justify-between gap-4">
+      <div className="min-w-0">
         <p className="text-[9px] font-mono tracking-[0.18em] text-text-quaternary mb-3">
           {label}
         </p>
-        <div className="flex items-baseline gap-2 mb-1.5">
-          <span className="text-[28px] font-semibold tracking-tight text-text-primary leading-none counter-tick">
+        <div className="flex items-baseline gap-2 mb-2">
+          <span className="text-[22px] font-semibold tracking-tight text-text-primary leading-none">
             {value}
           </span>
           {unit && <span className="text-[11px] font-mono text-text-tertiary">{unit}</span>}
         </div>
-        <p className="text-[11px] text-text-tertiary">{sub}</p>
+        <p className="text-[11px] text-text-tertiary leading-snug min-h-[2.1rem]">{sub}</p>
       </div>
-      <div className="shrink-0 w-20 h-12">{mini}</div>
+      <div className="shrink-0 w-16 h-8 flex items-center">{mini}</div>
     </div>
   );
 }
