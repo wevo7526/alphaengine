@@ -19,6 +19,7 @@ layer on in T9/T10 — this module is the tool surface.
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -92,6 +93,22 @@ app = FastAPI(title="AlphaEngine — deterministic API", version=SCHEMA_VERSION)
 async def _api_error_handler(request: Request, exc: ApiError):
     # Catches typed errors raised in dependencies (auth/metering) and bodies.
     return JSONResponse(exc.to_dict(_request_id(request)), status_code=exc.http_status)
+
+
+@app.middleware("http")
+async def _telemetry_mw(request: Request, call_next):
+    # No-data-safe: records route + status + latency only, never payloads.
+    from telemetry import record
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    record(request.url.path, response.status_code, (time.perf_counter() - t0) * 1000.0)
+    return response
+
+
+@app.get("/v1/status")
+async def status():
+    from telemetry import snapshot
+    return {"schema_version": SCHEMA_VERSION, "engine_version": ENGINE_VERSION, **snapshot()}
 
 
 @app.get("/v1/health")

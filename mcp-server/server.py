@@ -27,6 +27,10 @@ from contracts import TOOL_INPUTS, parse_input
 from contracts.errors import ApiError
 
 mcp = FastMCP("alphaengine")
+# Serve the streamable endpoint at the app root so mounting it at "/mcp" in the
+# combined deploy app (app.py) lands the MCP endpoint exactly at /mcp (not
+# /mcp/mcp). Standalone `python server.py` then serves it at "/".
+mcp.settings.streamable_http_path = "/"
 
 
 def _call(tool: str, body: dict) -> dict:
