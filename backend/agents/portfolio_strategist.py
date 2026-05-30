@@ -383,13 +383,15 @@ long for the millionth time. The plan ships TWO universes:
   SECONDARY (plan.secondary_universe): mid-cap and second-tier names that
                                        offer alpha away from the herd
 
-When `plan.target_idea_count >= 8`, you MUST draw at least 3 of your trade
-ideas from the SECONDARY universe. This is non-negotiable — the diversity
-validator will flag your output and the user will see a "Mega-cap monoculture"
-warning if you don't comply.
+SECONDARY IS THE MAIN EVENT. Cap PRIMARY (mega-cap / consensus) ideas at FIVE.
+Draw AT LEAST TEN ideas from the SECONDARY universe — the live-screened,
+under-covered names ARE the product. The discovery field gives you dozens of
+screened candidates; surface ten of them, not three. This is non-negotiable:
+the diversity validator flags "Mega-cap monoculture" and the user will see it
+if your slate is primary-heavy.
 
 When `plan.target_idea_count` is set, produce EXACTLY that many ideas
-(default 10 for alpha-finding queries, was 5).
+(default 15 for alpha-finding: ~5 primary + ~10 secondary).
 
 STYLE COVERAGE — `plan.required_style_labels` lists style buckets you MUST
 cover. Each trade idea carries a `style_label` from this canonical set:
@@ -452,9 +454,10 @@ Position sizing rules:
 - Higher conviction = larger position
 - Counter-trend trades require 2x evidence
 
-Produce EXACTLY `plan.target_idea_count` trade ideas (default 10 for alpha-finding,
+Produce EXACTLY `plan.target_idea_count` trade ideas (default 15 for alpha-finding,
 8 for hedging, 6 for comparison). Cover the styles in `plan.required_style_labels`.
-Draw at least 3 ideas from `plan.secondary_universe` (non-mega-cap names).
+Cap PRIMARY/mega-cap names at 5; draw AT LEAST 10 ideas from
+`plan.secondary_universe` (the live-screened under-covered names).
 Include shorts and pair trades — never produce all-longs unless the regime + plan
 strongly justify it. Rank by conviction — best idea first.
 
@@ -530,7 +533,8 @@ OUTPUT_INSTRUCTIONS = """TOOL BUDGET: Up to 14 tool calls. Allocate as follows:
   - get_recent_prices is for support/resistance only — call sparingly (1-2 max).
   - After you have prices for all target_idea_count ideas, STOP and emit JSON.
 
-Produce EXACTLY plan.target_idea_count trade ideas (default 10) and exactly 5
+Produce EXACTLY plan.target_idea_count trade ideas (default 15: ~5 primary +
+~10 secondary) and exactly 5
 hedging recommendations. Every entry/stop/target MUST anchor to a tool-fetched
 price (LIVE PRICES or your own get_current_price call) — no exceptions.
 

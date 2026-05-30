@@ -148,23 +148,20 @@ function EmptyState({
           onSubmit={onSubmit}
           className="rounded-md border border-border-primary bg-bg-surface/70 backdrop-blur-sm overflow-hidden mb-6 focus-within:border-zinc-600 transition-colors"
         >
-          <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center gap-1.5 text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-            <span className="w-1.5 h-1.5 rounded-full bg-signal-red/60" />
-            <span className="w-1.5 h-1.5 rounded-full bg-signal-yellow/60" />
-            <span className="w-1.5 h-1.5 rounded-full bg-signal-green/60" />
-            <span className="ml-2">ANALYSIS · NEW</span>
-            <span className="ml-auto text-[9px]">~10 min</span>
+          <div className="px-3 py-2 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
+            <span>QUERY</span>
+            <span>PLAIN ENGLISH</span>
           </div>
           <div className="flex items-center gap-2 px-4 py-3.5">
-            <span className="text-accent font-mono text-[14px] shrink-0">{">"}</span>
+            <span className="text-text-tertiary font-mono text-[14px] shrink-0">{">"}</span>
             <input
               type="text"
               autoFocus
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="long/short setup in regional banks ahead of FOMC"
+              placeholder="under-covered mid-cap industrials that can beat the S&P"
               disabled={activeRun}
-              className="flex-1 bg-transparent text-[14px] font-mono text-text-primary placeholder:text-text-quaternary outline-none disabled:opacity-40"
+              className="flex-1 bg-transparent text-[14px] font-mono text-text-primary placeholder:text-text-quaternary outline-none disabled:opacity-40 caret-[#fafafa]"
             />
             <button
               type="submit"

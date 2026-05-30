@@ -1013,7 +1013,7 @@ async def run_research_desk(
     memo_data["regime_sensitivity"] = plan.get("regime_sensitivity", []) or []
     memo_data["macro_context"] = final_state.get("macro_context") or {}
     memo_data["secondary_universe"] = plan.get("secondary_universe", []) or []
-    memo_data["target_idea_count"] = int(plan.get("target_idea_count", 10) or 10)
+    memo_data["target_idea_count"] = int(plan.get("target_idea_count", 15) or 15)
     memo_data["required_style_labels"] = plan.get("required_style_labels", []) or []
 
     # Phase E — thread metadata. The orchestrator sets these so the persist

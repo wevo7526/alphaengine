@@ -149,7 +149,7 @@ Given a query, produce a JSON plan with this shape (every field matters):
         "<directive 1>", "<directive 2>"
     ],
 
-    "target_idea_count": 10,
+    "target_idea_count": 15,
     // Default 10 for alpha_finding queries. Drop to 6-8 for hedging
     // queries where there are fewer instruments to choose from.
 
@@ -195,8 +195,10 @@ INSTRUMENT PREFERENCE — pick from query semantics:
 
 IDEA ARCHETYPE — force structural AND universe diversity:
 
-  Default target_idea_count for alpha_finding is 10 (was 5). The hedge fund
-  desk demands breadth, not 5 echoes of the same mega-cap thesis.
+  Default target_idea_count for alpha_finding is 15 — roughly 5 primary
+  (mega-cap) ideas plus AT LEAST 10 from the live-screened secondary universe.
+  The desk demands breadth from under-covered names, not echoes of the same
+  mega-cap thesis.
 
   alpha_finding (10 ideas) →
     "3 longs in primary mega-caps,
@@ -307,7 +309,7 @@ EXAMPLE 1 — query: "Best risk-adjusted trade in tech, paying attention to AI c
         "1 long calls position for convexity (NVDA monthly calls)",
         "1 hedge (SMH puts or VIX calls)"
     ],
-    "target_idea_count": 10,
+    "target_idea_count": 15,
     "required_style_labels": ["growth", "quality", "momentum", "secular_winner", "small_cap", "contrarian", "hedge"],
     "plan_confidence": 78,
     "plan_confidence_reason": "Query is specific about theme (inference compute) and asks for risk-adjusted (suggesting convex/hedged structure); ticker universe inferred but well-bounded by theme."
