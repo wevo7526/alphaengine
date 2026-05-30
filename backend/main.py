@@ -2618,22 +2618,21 @@ async def portfolio_positions(req: Request):
         if t.opened_at and (not g.get("earliest_opened") or t.opened_at < g["earliest_opened"]):
             g["earliest_opened"] = t.opened_at
 
-    # Fetch current prices concurrently
+    # Mark all positions in ONE Massive call via the grouped-daily tape
+    # (not get_fundamentals per ticker — that's ~4 calls each and gets dropped
+    # by the 5/min limiter, which is why the portfolio stopped marking).
     tickers = list({g["ticker"] for g in grouped.values()})
-
-    def _fetch_price(tk: str) -> tuple[str, float | None]:
-        try:
-            data = market_client.get_fundamentals(tk)
-            return tk, data.get("current_price")
-        except Exception as e:
-            logger.warning(f"Failed to fetch price for {tk}: {e}")
-            return tk, None
-
     prices: dict[str, float | None] = {}
     if tickers:
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            for ticker, price in pool.map(_fetch_price, tickers):
-                prices[ticker] = price
+        try:
+            from data import massive_client
+            prices = dict(massive_client.last_prices(tickers) or {})
+            # Fallback only for names absent from the tape.
+            for tk in tickers:
+                if tk not in prices or not prices.get(tk):
+                    prices[tk] = massive_client.last_price(tk)
+        except Exception as e:
+            logger.warning(f"Failed to bulk-price positions: {e}")
 
     # Compute per-position metrics.
     # portfolio_base honors the user's onboarding/Settings value so the

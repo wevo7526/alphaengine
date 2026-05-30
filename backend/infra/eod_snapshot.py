@@ -235,23 +235,30 @@ def _days_since(opened_at: Any) -> int:
 
 
 def _batch_close_prices(tickers: list[str], warnings: list[str]) -> dict[str, float]:
-    """Fetch most-recent close prices for a batch of tickers.
+    """Most-recent close price for a batch of tickers in ONE Massive call.
 
-    Uses MarketDataClient.get_fundamentals which already caches per
-    ticker — repeated snapshots within the cache TTL are free. For a
-    handful of open positions the cost is negligible.
+    Sources from Massive's grouped-daily tape (the whole market's closes in a
+    single request) instead of get_fundamentals-per-ticker. Pricing N positions
+    costs 1 call, not 4N — critical under the 5/min budget (this is why the
+    portfolio stopped marking). Falls back to prev_close only for names absent
+    from the tape.
     """
     if not tickers:
         return {}
-    from data.market_client import MarketDataClient
-    mc = MarketDataClient()
-    out: dict[str, float] = {}
+    from data import massive_client
+    try:
+        out = {tk: float(px) for tk, px in (massive_client.last_prices(tickers) or {}).items() if px and px > 0}
+    except Exception as e:  # noqa: BLE001
+        warnings.append(f"bulk price fetch failed: {e}")
+        out = {}
+    # Per-ticker fallback only for the few names missing from the tape.
     for tk in tickers:
-        try:
-            data = mc.get_fundamentals(tk) or {}
-            px = data.get("current_price")
-            if px and px > 0:
-                out[tk] = float(px)
-        except Exception as e:
-            warnings.append(f"price fetch failed for {tk}: {e}")
+        u = (tk or "").strip().upper()
+        if u and u not in out:
+            try:
+                px = massive_client.last_price(u)
+                if px and px > 0:
+                    out[u] = float(px)
+            except Exception as e:  # noqa: BLE001
+                warnings.append(f"price fetch failed for {u}: {e}")
     return out
