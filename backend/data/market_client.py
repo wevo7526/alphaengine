@@ -156,23 +156,36 @@ class MarketDataClient:
         except Exception as e:  # never let the data layer crash a run
             logger.warning("consensus revenue_growth compute failed for %s: %s", ticker, e)
 
-        # GAP: target_*, num_analysts, recommendation_*, *_eps,
-        # earnings_growth, implied_upside_pct have NO Massive source -> None.
+        # Analyst data: filled from Alpha Vantage OVERVIEW (free tier, budget-
+        # capped + 24h cached). This is the ONLY source for price targets +
+        # ratings — Massive has none. Over budget / no key -> {} -> stays None.
+        ov = {}
+        try:
+            from data.alpha_vantage_client import get_overview
+            ov = get_overview(ticker) or {}
+        except Exception as e:  # noqa: BLE001
+            logger.debug("AV overview skipped for %s: %s", ticker, e)
+
+        target = ov.get("analyst_target_price")
+        implied = None
+        if target and current and current > 0:
+            implied = round((target - current) / current * 100, 2)
+
         result = {
             "ticker": ticker.upper(),
             "current_price": current,
-            "target_mean": None,
-            "target_high": None,
+            "target_mean": target,
+            "target_high": None,   # AV OVERVIEW gives a single target, not hi/lo
             "target_low": None,
-            "target_median": None,
-            "num_analysts": None,
+            "target_median": target,
+            "num_analysts": ov.get("num_analysts"),
             "recommendation_mean": None,
-            "recommendation_key": None,
+            "recommendation_key": ov.get("recommendation_key"),
             "forward_eps": None,
-            "trailing_eps": None,
+            "trailing_eps": ov.get("eps"),
             "earnings_growth": None,
-            "revenue_growth": revenue_growth,
-            "implied_upside_pct": None,
+            "revenue_growth": revenue_growth if revenue_growth is not None else ov.get("revenue_growth"),
+            "implied_upside_pct": implied,
         }
         self._fundamentals_cache.set(cache_key, result)
         return result

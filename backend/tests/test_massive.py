@@ -237,10 +237,15 @@ def test_get_fundamentals_full_key_set(monkeypatch):
 
 
 def test_get_consensus_reduced_shape(monkeypatch):
-    """get_consensus preserves its full shape but only current_price /
-    revenue_growth are populated (Massive has no analyst data)."""
+    """With AV unavailable, get_consensus preserves its full shape but only
+    current_price is populated (Massive has no analyst data; AV fills it
+    when configured — see test_alpha_vantage)."""
     monkeypatch.setattr(massive_client, "last_price", lambda t: 123.45)
     monkeypatch.setattr(massive_client, "financials", lambda t, limit=8: [])
+    # AV is the analyst source now — disable it for this Massive-only path.
+    import data.alpha_vantage_client as _av
+    _av._overview_cache.clear()
+    monkeypatch.setattr(_av.settings, "ALPHA_VANTAGE_KEY", "", raising=False)
 
     client = MarketDataClient()
     c = client.get_consensus("AAPL")

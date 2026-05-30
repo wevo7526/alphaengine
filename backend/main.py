@@ -200,6 +200,7 @@ async def system_info():
             {"name": "FRED (Macro)", "configured": bool(settings.FRED_API_KEY), "note": "13 indicators, 1hr cache"},
             {"name": "Massive (Market)", "configured": bool(settings.MASSIVE_API_KEY), "note": "Price, fundamentals, options, news"},
             {"name": "SEC EDGAR (sec-api.io)", "configured": bool(settings.SEC_API_KEY), "note": "Filings, insider trades, 13F"},
+            {"name": "Alpha Vantage", "configured": bool(settings.ALPHA_VANTAGE_KEY), "note": "Analyst targets + ratings (free, 25/day)"},
             {"name": "Firecrawl", "configured": bool(settings.FIRECRAWL_API_KEY), "note": "Web validation (optional)"},
         ],
         "auth": {

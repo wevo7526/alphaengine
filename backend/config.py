@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     # Raise it when on a paid plan.
     MASSIVE_RATE_PER_MIN: int = 5
 
+    # Alpha Vantage — FREE tier (25/day, 5/min). Used ONLY for the analyst-
+    # consensus gap Massive can't fill (OVERVIEW endpoint: target price +
+    # rating + ready ratios), hard-cached 24h. A per-day budget guard keeps
+    # us under the free cap; over budget, consensus degrades to nulls.
+    ALPHA_VANTAGE_KEY: str = ""
+    ALPHA_VANTAGE_DAILY_BUDGET: int = 20
+
     # Clerk Auth.
     # CLERK_ISSUER and CLERK_SECRET_KEY are optional — if either CLERK_ISSUER
     # or CLERK_PUBLISHABLE_KEY (or NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) is set,
