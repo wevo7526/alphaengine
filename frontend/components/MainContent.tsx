@@ -9,6 +9,7 @@ export function MainContent({ children }: { children: React.ReactNode }) {
   // demo + legal pages, and the standalone portal.
   const isFullScreen =
     pathname === "/" ||
+    pathname.startsWith("/portal") ||
     pathname.startsWith("/docs") ||
     pathname.startsWith("/plans") ||
     pathname.startsWith("/terms") ||

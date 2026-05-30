@@ -30,50 +30,93 @@ export default function PortalPage() {
 
   return (
     <div className="min-h-screen bg-bg-primary text-text-primary">
-      <PortalNav tab={tab} setTab={setTab} />
-      <div className="max-w-[1100px] mx-auto px-6 py-10">
-        <div className="rounded-sm border border-border-primary bg-bg-surface/40 px-5 py-3 mb-8 flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-[10px] font-mono tracking-[0.16em] text-text-primary">YOUR DATA · YOUR KEYS · NOTHING STORED</span>
-          <span className="text-[11px] text-text-quaternary">
-            We retain derived rigor stats only (verdicts, deflated Sharpe, gates, regime, trial counts). Never your payloads, market data, positions, or returns.
-          </span>
+      <PortalSidebar tab={tab} setTab={setTab} firstName={first} />
+      <main className="lg:ml-56 min-h-screen">
+        <div className="max-w-[1100px] mx-auto px-6 py-10">
+          <div className="rounded-sm border border-border-primary bg-bg-surface/40 px-5 py-3 mb-8 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-[10px] font-mono tracking-[0.16em] text-text-primary">YOUR DATA · YOUR KEYS · NOTHING STORED</span>
+            <span className="text-[11px] text-text-quaternary">
+              We retain derived rigor stats only (verdicts, deflated Sharpe, gates, regime, trial counts). Never your payloads, market data, positions, or returns.
+            </span>
+          </div>
+
+          <h1 className="font-display text-[28px] sm:text-[34px] font-semibold tracking-[-0.01em] mb-6">
+            {TAB_TITLES[tab]}
+          </h1>
+
+          {tab === "console" && <Console />}
+          {tab === "cockpit" && <Cockpit />}
+          {tab === "account" && <Account />}
         </div>
-
-        <h1 className="font-display text-[28px] sm:text-[34px] font-semibold tracking-[-0.01em] mb-6">
-          Welcome{first ? `, ${first}` : ""}.
-        </h1>
-
-        {tab === "console" && <Console />}
-        {tab === "cockpit" && <Cockpit />}
-        {tab === "account" && <Account />}
-      </div>
+      </main>
     </div>
   );
 }
 
-function PortalNav({ tab, setTab }: { tab: Tab; setTab: (t: Tab) => void }) {
-  const tabs: [Tab, string][] = [["console", "Dev Console"], ["cockpit", "Rigor Cockpit"], ["account", "Account"]];
+const TAB_TITLES: Record<Tab, string> = {
+  console: "Dev Console",
+  cockpit: "Rigor Cockpit",
+  account: "Account",
+};
+
+function PortalSidebar({ tab, setTab, firstName }: { tab: Tab; setTab: (t: Tab) => void; firstName?: string }) {
+  const items: { id: Tab; label: string; desc: string }[] = [
+    { id: "console", label: "Dev Console", desc: "Connect, run, debug" },
+    { id: "cockpit", label: "Rigor Cockpit", desc: "Your research conscience" },
+    { id: "account", label: "Account", desc: "Plan & billing" },
+  ];
   return (
-    <header className="border-b border-border-primary/60 bg-bg-primary/85 backdrop-blur-lg sticky top-0 z-40">
-      <div className="max-w-[1100px] mx-auto px-6 h-14 flex items-center justify-between">
-        <Link href="/" className="text-[15px] font-semibold tracking-tight">
+    <>
+      {/* Desktop fixed left rail */}
+      <aside className="hidden lg:flex fixed inset-y-0 left-0 w-56 flex-col border-r border-border-primary bg-bg-surface/30 z-40">
+        <Link href="/" className="px-5 h-14 flex items-center text-[15px] font-semibold tracking-tight border-b border-border-primary/60">
           alpha<span className="text-brand">engine</span>
-          <span className="ml-2 text-[11px] font-mono tracking-[0.18em] text-text-quaternary">/ PORTAL</span>
         </Link>
-        <nav className="flex items-center gap-1 text-[12px]">
-          {tabs.map(([id, label]) => (
+        <div className="px-3 py-2 text-[9px] font-mono tracking-[0.2em] text-text-quaternary">/// PORTAL</div>
+        <nav className="flex-1 px-2 space-y-1">
+          {items.map((it) => (
             <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={`px-3 py-1.5 rounded-sm transition-colors ${tab === id ? "bg-bg-elevated text-text-primary" : "text-text-tertiary hover:text-text-primary"}`}
+              key={it.id}
+              onClick={() => setTab(it.id)}
+              className={`w-full text-left rounded-sm px-3 py-2.5 transition-colors border-l-2 ${
+                tab === it.id
+                  ? "bg-bg-elevated/60 border-accent text-text-primary"
+                  : "border-transparent text-text-tertiary hover:text-text-primary hover:bg-bg-elevated/30"
+              }`}
             >
-              {label}
+              <p className="text-[13px] font-medium">{it.label}</p>
+              <p className="text-[10px] text-text-quaternary">{it.desc}</p>
             </button>
           ))}
-          <Link href="/docs" className="px-3 py-1.5 text-text-tertiary hover:text-text-primary transition-colors">Docs</Link>
+          <Link href="/docs" className="block rounded-sm px-3 py-2.5 text-[13px] text-text-tertiary hover:text-text-primary hover:bg-bg-elevated/30 transition-colors">
+            Docs ↗
+          </Link>
         </nav>
-      </div>
-    </header>
+        <div className="px-4 py-4 border-t border-border-primary/60">
+          <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary mb-1">SIGNED IN</p>
+          <p className="text-[12px] text-text-secondary truncate">{firstName || "Portal user"}</p>
+          <Link href="/plans" className="mt-1 inline-block text-[11px] text-accent hover:underline">Free trial · view plans</Link>
+        </div>
+      </aside>
+
+      {/* Mobile top bar */}
+      <header className="lg:hidden border-b border-border-primary/60 bg-bg-primary/90 sticky top-0 z-40">
+        <div className="px-4 h-12 flex items-center gap-2 overflow-x-auto">
+          <Link href="/" className="text-[14px] font-semibold tracking-tight shrink-0">
+            alpha<span className="text-brand">engine</span>
+          </Link>
+          {items.map((it) => (
+            <button
+              key={it.id}
+              onClick={() => setTab(it.id)}
+              className={`shrink-0 px-2.5 py-1 rounded-sm text-[12px] transition-colors ${tab === it.id ? "bg-bg-elevated text-text-primary" : "text-text-tertiary"}`}
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      </header>
+    </>
   );
 }
 
