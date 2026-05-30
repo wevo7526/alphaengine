@@ -32,6 +32,42 @@ from contracts.errors import AuthInvalid, AuthMissing, QuotaExceeded
 
 _DEFAULT_SANDBOX_KEY = "ae_sandbox_public"
 
+# Cache for portal-key verification against the backend: key -> (client_id|None, expiry)
+_VERIFY_TTL = 60.0
+_verify_cache: dict[str, tuple] = {}
+_verify_lock = threading.Lock()
+
+
+def _verify_via_backend(key: str) -> str | None:
+    """Validate a portal-issued key against the backend's internal verify
+    endpoint (keeps the gateway DB-free). Cached for _VERIFY_TTL. Returns the
+    owning client_id, or None if no backend is configured / key is invalid."""
+    base = os.getenv("GATEWAY_BACKEND_URL")
+    secret = os.getenv("INTERNAL_API_SECRET")
+    if not base or not secret:
+        return None
+    now = time.time()
+    with _verify_lock:
+        hit = _verify_cache.get(key)
+        if hit and hit[1] > now:
+            return hit[0]
+    client_id = None
+    try:
+        import httpx
+        r = httpx.post(
+            f"{base.rstrip('/')}/api/internal/keys/verify",
+            json={"key": key},
+            headers={"X-Internal-Secret": secret},
+            timeout=3.0,
+        )
+        data = r.json()
+        client_id = data.get("user_id") if data.get("valid") else None
+    except Exception:  # noqa: BLE001 — backend unreachable -> treat as not verified
+        client_id = None
+    with _verify_lock:
+        _verify_cache[key] = (client_id, now + _VERIFY_TTL)
+    return client_id
+
 
 @dataclass
 class Identity:
@@ -77,6 +113,10 @@ def resolve_identity(request: Request) -> Identity:
     paid = _load_paid_keys()
     if key in paid:
         return Identity(paid[key], "paid")
+    # Portal-issued key? Verify against the backend store.
+    client_id = _verify_via_backend(key)
+    if client_id:
+        return Identity(client_id, "paid")
     raise AuthInvalid("unrecognized API key")
 
 

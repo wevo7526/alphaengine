@@ -401,6 +401,23 @@ async def revoke_key(key_id: str, req: Request):
     return {"revoked": True, "id": key_id}
 
 
+class _KeyVerify(BaseModel):
+    key: str
+
+
+@app.post("/api/internal/keys/verify")
+async def internal_verify_key(payload: _KeyVerify, req: Request):
+    """Internal: the gateway verifies a portal-issued key here. Secret-gated via
+    X-Internal-Secret == INTERNAL_API_SECRET (disabled if the env var is unset).
+    Returns {valid, user_id}. Never exposed to end users."""
+    secret = os.getenv("INTERNAL_API_SECRET")
+    if not secret or req.headers.get("x-internal-secret") != secret:
+        raise HTTPException(status_code=403, detail="forbidden")
+    from db.repositories import ApiKeyRepository
+    uid = await ApiKeyRepository.verify(payload.key)
+    return {"valid": uid is not None, "user_id": uid}
+
+
 # === USER RISK PROFILE — per-user overrides for risk gates ===
 
 @app.get("/api/me/risk")

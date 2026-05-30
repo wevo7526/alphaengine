@@ -36,6 +36,21 @@ def test_demo_cap_ip_fallback_blocks_id_rotation():
     assert consume_demo_run(["demo:C", ip])["allowed"] is False
 
 
+def test_portal_key_authenticates_via_backend(monkeypatch):
+    # A portal-issued key (not in MCP_API_KEYS) authenticates by verifying
+    # against the backend store; an unknown key is rejected.
+    reset_meter()
+    monkeypatch.setenv("AUTH_STUB", "0")
+    monkeypatch.delenv("MCP_API_KEYS", raising=False)
+    import gateway.access as access
+    monkeypatch.setattr(access, "_verify_via_backend", lambda k: "u_portal" if k == "portalkey" else None)
+    ok = client.post("/v1/tools/compute_var_cvar", json=_BODY, headers={"Authorization": "Bearer portalkey"})
+    assert ok.status_code == 200
+    bad = client.post("/v1/tools/compute_var_cvar", json=_BODY, headers={"Authorization": "Bearer nope"})
+    assert bad.status_code == 401
+    assert bad.json()["error"]["code"] == "AUTH_INVALID"
+
+
 def test_demo_cap_per_id_still_enforced():
     from infra.demo_limits import consume_demo_run, reset
 
