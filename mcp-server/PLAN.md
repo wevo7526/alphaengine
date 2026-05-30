@@ -175,3 +175,145 @@ size limits, output). ★ = the four required tools.
 ## Out of scope (explicitly)
 Data fetching of any kind, any DB, any caching of client inputs, session state,
 v2 data-by-reference, universe-scale screening, the demo SaaS's data layer.
+
+---
+
+# SHIP DIRECTION — repositioning the whole product
+
+The licensing reality ($1k+/mo for any commercial market data; options worse;
+free tiers non-commercial) forces a clean two-surface split. This section is
+the map for moving the ship.
+
+## The two surfaces
+
+| | **AlphaEngine app (the demo)** | **MCP server (the product)** |
+|---|---|---|
+| Purpose | Show prospects the engine + agents + UI | The thing we sell seats to |
+| Data | **yfinance** (free, generous, **non-commercial → personal/eval/demo ONLY**) | **None.** The fund brings their licensed data in the call |
+| Commercial? | No — never sold, never paid-customer-driven | Yes — legally clean (we never touch data) |
+| Who runs it | Us, to demo. Optionally a customer's BYO-data instance (perk) | The fund, over HTTPS |
+| Status | revert to yfinance + button up | build (this plan) |
+
+**The rule that keeps it legal:** a *paying customer* must never be driven by
+data **we** source. They either watch our demo (we drive it, eval use) or run
+the frontend perk on **their own** data through the MCP. Money near data we
+supply = commercial use of that data. Keep our hands off the data.
+
+## How we sell it
+
+> **Buy AlphaEngine MCP seats** — your licensed data, our agents + quant engine.
+> Stateless: nothing sourced, nothing stored, nothing to leak.
+> **The AlphaEngine desk UI is included** — a research frontend that runs on
+> *your* data through the MCP. Memos, slates, cointegration, risk, deflated
+> Sharpe — on data you already pay for.
+
+The frontend is a **perk/differentiator**, not a separately-sold data app, and
+in a customer's hands it is **BYO-data** (talks to the MCP + a customer data
+adapter; the yfinance path is demo-only and disabled for customers).
+
+---
+
+## Workstream 1 — Revert AlphaEngine app to yfinance (button up the demo)
+
+Goal: the demo works freely again (no Massive 5/min wall), same data shapes.
+The Massive migration already preserved the contract, so this is a source swap.
+
+**Surgical revert (preserves post-migration product logic — idea-count 5/10
+split, discovery blend, provenance, NLP — which live in the agents, not the
+data layer):**
+
+1. Restore the **pure data files** to their pre-migration (yfinance) state from
+   git (commit just before `0ea54a9` "Migrate market data + news to Massive"):
+   - `backend/data/market_client.py` (yfinance prices/fundamentals/options)
+   - `backend/data/news_client.py` (NewsAPI + Finnhub)
+   - `backend/data/market_screener.py` (`yf.screen` + AV movers)
+   - `backend/data/alpha_vantage_client.py` (restore deleted — RSI/MACD/movers)
+   - `backend/tests/test_screener.py` (asserts `yfinance_screener`)
+2. `requirements.txt`: re-add `yfinance`, `finnhub`/`finnhub-python`,
+   `newsapi-python`. (Massive needs no SDK; leaving `massive_client` unused is
+   harmless, or delete it + its tests.)
+3. `config.py`: re-add `FINNHUB_API_KEY`, `NEWS_API_KEY` (+ keep `ALPHA_VANTAGE_KEY`).
+   Keep `MASSIVE_API_KEY` field (unused) or remove. `data_sources` display →
+   Yahoo Finance / FRED / sec-api / Firecrawl / Finnhub / NewsAPI.
+4. Revert the **three consumers** that were rewired to Massive/price-tape back to
+   `MarketDataClient` (yfinance has no hard rate cap, so per-ticker is fine for
+   a demo):
+   - `agents/orchestrator.py::_fetch_live_prices_for` → `get_fundamentals` per ticker
+   - `main.py /api/portfolio/positions` → `get_fundamentals` per ticker
+   - `infra/eod_snapshot.py::_batch_close_prices` → `get_fundamentals`
+5. Decide on the **price tape**: it was a Massive optimization. For yfinance it
+   is unnecessary — either remove (`data/price_tape.py`, the model/repo/endpoint,
+   `tests/test_price_tape.py`) or leave dormant (consumers no longer call it).
+   Cleanest: remove it with the Massive layer.
+6. Re-add to Railway: `FINNHUB_API_KEY`, `NEWS_API_KEY`. (Demo keys; non-commercial use.)
+7. Verify: full pytest green, `main` boots, a memo run prices + marks the
+   portfolio, screener returns names.
+
+**Keep (do NOT revert):** all agent/quant/provenance/NLP/marketing work — none
+of it is data-layer. The 5-primary/10-secondary split + discovery blend stay.
+
+---
+
+## Workstream 2 — Marketing reposition (MCP-first)
+
+The site currently sells "AI Agents for Investment Managers" (a data app). Re-aim
+it at the MCP, with the app as a demo/perk. Keep the institutional design system.
+
+- **Hero** → the engine, not the data app. e.g. *"The quant research engine your
+  desk runs on its own data."* Subhead: stateless MCP, BYO-data, agents + math,
+  nothing stored.
+- **New section: "How it works"** — the no-data flow: your data → MCP tools →
+  results → your desk UI. Sell the **trust posture** (we never touch your data).
+- **Reframe the existing product/intelligence sections** as *what the engine
+  computes* (cointegration, factor decomposition, deflated Sharpe, risk), not
+  *what data we pull*.
+- **The frontend** becomes "included desk UI (runs on your data)," not the
+  headline product.
+- **"Try the demo"** CTA → the yfinance app, clearly labeled a demo on sample
+  data (sets the eval-use framing explicitly).
+- Drop any copy implying we supply market data commercially.
+
+## Workstream 3 — Clerk × MCP auth (seats)
+
+Two layers, cleanly separated:
+- **Clerk = human identity + billing/seats** (sign-in/up, orgs, plan). Already in
+  the app; reuse for the customer dashboard.
+- **MCP = machine auth via per-client API key** (checked on every HTTPS request;
+  `AUTH_STUB` for local).
+
+**Bridge:** on Clerk sign-up / seat purchase, **provision an MCP API key** mapped
+to that Clerk org/user (store the key→identity map; the MCP server validates the
+key, the app manages issuance/rotation). Sign-up flow:
+1. Clerk sign-up → org/seat created.
+2. App provisions an MCP key for the org (Clerk org id → key).
+3. Dashboard shows the key + the **connection snippet** (MCP server URL + key)
+   to paste into the fund's Claude/agent client.
+4. Revocation/rotation = app action that updates the key store the MCP reads.
+
+Sign-in/up pages get repositioned: "Connect your desk to the AlphaEngine MCP" —
+not "log into the data app." Keep the institutional reskin.
+
+## Workstream 4 — Frontend BYO-data mode (the perk, productized)
+
+The included frontend, in a customer's hands, must be no-(our)-data:
+- A **data adapter** the customer configures (their feed / file upload / their
+  own MCP-data source) feeds the same shapes the engine expects.
+- The frontend calls the **MCP server** for all computation (cointegration,
+  risk, etc.) instead of the backend's quant endpoints.
+- The **yfinance path is demo-only**, hard-disabled for authenticated customers.
+- `# TODO`: this is the larger build; v1 can ship MCP + demo, with the BYO-data
+  frontend as fast-follow.
+
+---
+
+## Sequencing (move the ship)
+
+1. **Revert app → yfinance** (Workstream 1) — button up the demo. *First.*
+2. **Build the MCP** (Build order above) — quant_core + tools + deploy. *The product.*
+3. **Reposition marketing** (Workstream 2) — MCP-first, app as demo/perk.
+4. **Clerk × MCP keys** (Workstream 3) — seat provisioning + connection UX.
+5. **BYO-data frontend mode** (Workstream 4) — the perk, productized. *Fast-follow.*
+
+Legal: have a lawyer bless the no-data structure + the demo/eval framing before
+selling. The principle is sound (we're outside the data license's scope, not
+working around it), but it's a litigated area — cheap consult, worth it.
