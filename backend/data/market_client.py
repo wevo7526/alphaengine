@@ -1,44 +1,38 @@
 """
-Market data client — Massive-backed (api.massive.com, Polygon.io-compatible).
+Market data client via Yahoo Finance (yfinance).
 
-This is a THIN delegation layer over `data.massive_client`. It preserves the
-exact public contract the rest of Alpha Engine depends on (class name,
-method names + signatures, async `a*` variants, and — critically — the exact
-RETURN SHAPES) so downstream quant code (cointegration, factors, spreads,
-backtester, optimizer, pairs, stress, curve) and the agents need ZERO changes.
-
-History: this used to wrap yfinance directly. After the data-layer
-consolidation, all market data comes from Massive:
-  - Prices            -> massive.price_bars (aggregate bars)
-  - Fundamentals      -> COMPUTED from massive.financials + ticker_reference +
-                         last_price + 1y price_bars (52w hi/lo) + compute_beta
-  - Options           -> massive.options_snapshot
-  - Consensus         -> REDUCED: Massive has no analyst data (see method)
-  - Earnings calendar -> REDUCED: Massive has no analyst estimates (see method)
+No API key required. Provides price history, fundamentals, and options chains.
+Used by the Fundamental Agent, Options Flow Agent, and Quant Strategist.
 
 Stability notes:
-  - `massive_client` functions NEVER raise — they log and return the empty
-    shape ([] / {} / None). This client mirrors that: it never crashes a run.
-  - The TTLCaches + cache keys are preserved from the old client so cache
-    behavior (and any external assumptions about it) is unchanged.
-  - Sync methods are still used inside LangChain tool wrappers; async callers
-    use the `a*` variants which dispatch onto a thread via `run_sync`.
+  - yfinance is a synchronous library that makes HTTP calls. All calls MUST
+    go through `run_sync` when invoked from an async context; otherwise a
+    slow Yahoo response blocks the entire event loop.
+  - yfinance throttles around ~2000 requests/hour. We cache aggressively and
+    use a bounded TTLCache so a long-running process doesn't grow without
+    bound.
+  - Transient yfinance errors (empty DataFrame, network glitch) get one retry
+    with backoff. Past that the cache's last-good value is returned if
+    available, otherwise the caller gets an explicit error shape.
 """
 
 from __future__ import annotations
 
 import logging
+import random
+import time
 
-from data import massive_client
+import yfinance as yf
+
 from infra.async_utils import run_sync
 from infra.cache import TTLCache
 
 logger = logging.getLogger(__name__)
 
-# Cache TTL in seconds (unchanged from the yfinance-era client)
-_PRICE_TTL = 900          # 15 min — prices move, but agents don't need tick-level
+# Cache TTL in seconds
+_PRICE_TTL = 900        # 15 min — prices move, but agents don't need tick-level
 _FUNDAMENTALS_TTL = 3600  # 1 hour — fundamentals update at most daily
-_OPTIONS_TTL = 900        # 15 min — options chains shift intraday
+_OPTIONS_TTL = 900      # 15 min — options chains shift intraday
 
 # Bounded sizes: a single user can touch O(100) tickers × periods in a scan.
 # 512 entries per cache × ~5 KB each = <3 MB ceiling.
@@ -48,7 +42,7 @@ _OPTIONS_MAX = 256
 
 
 def _safe_float(v) -> float | None:
-    """Coerce a scalar to a plain float. NaN -> None."""
+    """Coerce yfinance/pandas scalars to plain floats. NaN -> None."""
     try:
         if v is None:
             return None
@@ -60,27 +54,21 @@ def _safe_float(v) -> float | None:
         return None
 
 
-def _g(d, *keys):
-    """Return the first present-and-non-None value among `keys` in dict `d`.
-
-    Massive/Polygon financial statement line items vary by company and
-    timeframe; line items are nested as {"value": <num>, ...}. This walks the
-    candidate keys and unwraps the `value` field defensively. Returns None if
-    nothing matches.
-    """
-    if not isinstance(d, dict):
-        return None
-    for k in keys:
-        item = d.get(k)
-        if item is None:
-            continue
-        if isinstance(item, dict):
-            val = item.get("value")
-            if val is not None:
-                return val
-        else:
-            return item
-    return None
+def _retry_sync(fn, retries: int = 1, label: str = "yfinance"):
+    """Single retry with jittered backoff for yfinance calls."""
+    last_exc: Exception | None = None
+    for attempt in range(retries + 1):
+        try:
+            return fn()
+        except Exception as e:  # yfinance raises a zoo of exceptions; catch broadly but log
+            last_exc = e
+            if attempt < retries:
+                wait = 0.5 + random.uniform(0, 0.5)
+                logger.warning(f"[{label}] transient error, retry {attempt + 1}/{retries}: {e}")
+                time.sleep(wait)
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"[{label}] unreachable")
 
 
 class MarketDataClient:
@@ -101,115 +89,157 @@ class MarketDataClient:
 
     def get_earnings_calendar(self, ticker: str) -> dict:
         """
-        Next earnings date + last reported date for a ticker.
+        Next earnings date + last reported date for a ticker, plus EPS
+        actuals/estimates when available. Cached on the same TTL as
+        fundamentals — earnings calendars don't move daily.
 
-        REDUCED SOURCE: Massive has NO analyst earnings estimates and no
-        forward earnings calendar. The yfinance-era version returned
-        next_earnings_date / recent_earnings / last_reported populated from
-        Yahoo's analyst feed; Massive cannot supply any of those.
-
-        We preserve the return SHAPE (so callers don't break) but populate the
-        analyst-only fields with None/empty. Return shape:
-            {ticker, next_earnings_date, recent_earnings, last_reported}
+        Replaces LLM-hallucinated catalyst dates ("Q2 earnings July 25")
+        with tool-verified ones.
         """
         cache_key = f"EARN:{ticker}"
         cached = self._fundamentals_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        # GAP: no Massive source for forward earnings dates or EPS
-        # actual/estimate history. Shape preserved, fields nulled.
-        result = {
-            "ticker": ticker.upper(),
-            "next_earnings_date": None,
-            "recent_earnings": [],
-            "last_reported": None,
-        }
+        def _fetch() -> dict:
+            stock = yf.Ticker(ticker)
+            out: dict = {"ticker": ticker.upper()}
+            # Calendar — yfinance returns a DataFrame with "Earnings Date" col
+            try:
+                cal = stock.calendar
+                if cal is not None:
+                    if hasattr(cal, "to_dict"):  # DataFrame
+                        d = cal.to_dict()
+                        # Extract first earnings date if present
+                        ed = d.get("Earnings Date") or d.get("earningsDate")
+                        if ed:
+                            vals = list(ed.values()) if isinstance(ed, dict) else list(ed)
+                            if vals:
+                                out["next_earnings_date"] = str(vals[0])
+                    elif isinstance(cal, dict):
+                        ed = cal.get("Earnings Date") or cal.get("earningsDate")
+                        if ed:
+                            vals = ed if isinstance(ed, list) else [ed]
+                            out["next_earnings_date"] = str(vals[0])
+            except Exception as e:
+                logger.debug(f"earnings calendar fetch (cal) {ticker}: {e}")
+            # Earnings dates DataFrame — historical actual vs estimate
+            try:
+                ed = stock.earnings_dates
+                if ed is not None and hasattr(ed, "head"):
+                    rows = []
+                    for idx, row in ed.head(8).iterrows():
+                        rows.append({
+                            "date": str(idx.date()) if hasattr(idx, "date") else str(idx),
+                            "eps_estimate": _safe_float(row.get("EPS Estimate")),
+                            "eps_actual": _safe_float(row.get("Reported EPS")),
+                            "surprise_pct": _safe_float(row.get("Surprise(%)")),
+                        })
+                    out["recent_earnings"] = rows
+                    # Most recent past report
+                    past = [r for r in rows if r.get("eps_actual") is not None]
+                    if past:
+                        out["last_reported"] = past[0]
+                    # Next upcoming
+                    upcoming = [r for r in rows if r.get("eps_actual") is None]
+                    if upcoming:
+                        out.setdefault("next_earnings_date", upcoming[-1]["date"])
+            except Exception as e:
+                logger.debug(f"earnings calendar fetch (dates) {ticker}: {e}")
+            return out
+
+        try:
+            result = _retry_sync(_fetch, label=f"yf.calendar({ticker})")
+        except Exception as e:
+            logger.warning(f"earnings calendar failed for {ticker}: {e}")
+            return {"ticker": ticker.upper(), "error": str(e)}
+
         self._fundamentals_cache.set(cache_key, result)
         return result
 
     def get_consensus(self, ticker: str) -> dict:
         """
         Analyst consensus (target price, recommendation, EPS forward).
+        Pulled from yfinance `info` — no separate API call required.
 
-        REDUCED SOURCE: Massive has NO analyst data (no price targets, no
-        recommendation distribution, no analyst count, no forward EPS). The
-        yfinance-era version pulled all of this from Yahoo's `info` block.
-
-        We preserve the return SHAPE and populate only what Massive CAN give:
-        `current_price` (from massive.last_price) and `revenue_growth`
-        (cheaply derived from the latest two financials reports). All
-        analyst-only fields are left None.
+        Returns target_mean / target_high / target_low / num_analysts /
+        recommendation_key + forward EPS estimate.
         """
         cache_key = f"CONS:{ticker}"
         cached = self._fundamentals_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        current = _safe_float(massive_client.last_price(ticker))
+        def _fetch() -> dict:
+            stock = yf.Ticker(ticker)
+            info = stock.info or {}
+            current = info.get("currentPrice") or info.get("regularMarketPrice")
+            target_mean = info.get("targetMeanPrice")
+            implied = None
+            if target_mean and current and current > 0:
+                implied = round((target_mean - current) / current * 100, 2)
+            return {
+                "ticker": ticker.upper(),
+                "current_price": current,
+                "target_mean": target_mean,
+                "target_high": info.get("targetHighPrice"),
+                "target_low": info.get("targetLowPrice"),
+                "target_median": info.get("targetMedianPrice"),
+                "num_analysts": info.get("numberOfAnalystOpinions"),
+                "recommendation_mean": info.get("recommendationMean"),
+                "recommendation_key": info.get("recommendationKey"),
+                "forward_eps": info.get("forwardEps"),
+                "trailing_eps": info.get("trailingEps"),
+                "earnings_growth": info.get("earningsGrowth"),
+                "revenue_growth": info.get("revenueGrowth"),
+                "implied_upside_pct": implied,
+            }
 
-        # revenue_growth is the one consensus field with a Massive source.
-        revenue_growth = None
         try:
-            reports = massive_client.financials(ticker, limit=8)
-            revenue_growth = self._latest_revenue_growth(reports)
-        except Exception as e:  # never let the data layer crash a run
-            logger.warning("consensus revenue_growth compute failed for %s: %s", ticker, e)
+            result = _retry_sync(_fetch, label=f"yf.consensus({ticker})")
+        except Exception as e:
+            logger.warning(f"consensus fetch failed for {ticker}: {e}")
+            return {"ticker": ticker.upper(), "error": str(e)}
 
-        # Analyst data: filled from Alpha Vantage OVERVIEW (free tier, budget-
-        # capped + 24h cached). This is the ONLY source for price targets +
-        # ratings — Massive has none. Over budget / no key -> {} -> stays None.
-        ov = {}
-        try:
-            from data.alpha_vantage_client import get_overview
-            ov = get_overview(ticker) or {}
-        except Exception as e:  # noqa: BLE001
-            logger.debug("AV overview skipped for %s: %s", ticker, e)
-
-        target = ov.get("analyst_target_price")
-        implied = None
-        if target and current and current > 0:
-            implied = round((target - current) / current * 100, 2)
-
-        result = {
-            "ticker": ticker.upper(),
-            "current_price": current,
-            "target_mean": target,
-            "target_high": None,   # AV OVERVIEW gives a single target, not hi/lo
-            "target_low": None,
-            "target_median": target,
-            "num_analysts": ov.get("num_analysts"),
-            "recommendation_mean": None,
-            "recommendation_key": ov.get("recommendation_key"),
-            "forward_eps": None,
-            "trailing_eps": ov.get("eps"),
-            "earnings_growth": None,
-            "revenue_growth": revenue_growth if revenue_growth is not None else ov.get("revenue_growth"),
-            "implied_upside_pct": implied,
-        }
         self._fundamentals_cache.set(cache_key, result)
         return result
 
     def get_total_return_history(self, ticker: str, period: str = "1y") -> list[dict]:
         """
-        Total-return-adjusted price history (split-adjusted via Massive).
+        Total-return-adjusted price history. Adjusted for splits AND
+        dividends — used by the backtester so dividend-paying names don't
+        understate strategy returns by 2-5%/yr.
 
-        Adjusted bars at 4dp — used by the backtester. Cached separately from
-        `get_price_history` (which keeps unadjusted closes for live UI /
-        mark-to-market display).
-
-        NOTE on adjustment: Massive aggregates adjust SPLITS only; full
-        dividend adjustment is a TODO(alpha) in massive_client. Shape is
-        preserved byte-for-byte from the yfinance era (4dp OHLC, int volume).
+        Cached separately from `get_price_history` (which keeps unadjusted
+        closes for live UI / mark-to-market display).
         """
         cache_key = f"TR:{ticker}:{period}"
         cached = self._price_cache.get(cache_key)
         if cached is not None:
             return cached
 
-        result = massive_client.price_bars(
-            ticker, period=period, adjusted=True, round_dp=4,
-        )
+        def _fetch() -> list[dict]:
+            stock = yf.Ticker(ticker)
+            df = stock.history(period=period, auto_adjust=True, actions=False)
+            if df is None or df.empty:
+                return []
+            return [
+                {
+                    "date": str(idx.date()),
+                    "open": round(float(row["Open"]), 4),
+                    "high": round(float(row["High"]), 4),
+                    "low": round(float(row["Low"]), 4),
+                    "close": round(float(row["Close"]), 4),
+                    "volume": int(row["Volume"]),
+                }
+                for idx, row in df.iterrows()
+            ]
+
+        try:
+            result = _retry_sync(_fetch, label=f"yf.history({ticker},auto_adjust)")
+        except Exception as e:
+            logger.warning(f"yfinance total-return history failed for {ticker}: {e}")
+            return []
 
         if result:
             self._price_cache.set(cache_key, result)
@@ -223,10 +253,28 @@ class MarketDataClient:
             logger.debug(f"Returning cached price history for {ticker}")
             return cached
 
-        # Unadjusted, 2dp — matches the old yfinance get_price_history shape.
-        result = massive_client.price_bars(
-            ticker, period=period, adjusted=False, round_dp=2,
-        )
+        def _fetch() -> list[dict]:
+            stock = yf.Ticker(ticker)
+            df = stock.history(period=period)
+            if df is None or df.empty:
+                return []
+            return [
+                {
+                    "date": str(idx.date()),
+                    "open": round(float(row["Open"]), 2),
+                    "high": round(float(row["High"]), 2),
+                    "low": round(float(row["Low"]), 2),
+                    "close": round(float(row["Close"]), 2),
+                    "volume": int(row["Volume"]),
+                }
+                for idx, row in df.iterrows()
+            ]
+
+        try:
+            result = _retry_sync(_fetch, label=f"yf.history({ticker})")
+        except Exception as e:
+            logger.warning(f"yfinance price history failed for {ticker}: {e}")
+            return []
 
         if result:
             self._price_cache.set(cache_key, result)
@@ -239,214 +287,45 @@ class MarketDataClient:
             logger.debug(f"Returning cached fundamentals for {ticker}")
             return cached
 
-        result = self._compute_fundamentals(ticker)
+        def _fetch() -> dict:
+            stock = yf.Ticker(ticker)
+            info = stock.info or {}
+            return {
+                "pe_ratio": info.get("trailingPE"),
+                "forward_pe": info.get("forwardPE"),
+                "pb_ratio": info.get("priceToBook"),
+                "ev_ebitda": info.get("enterpriseToEbitda"),
+                "market_cap": info.get("marketCap"),
+                "revenue_growth": info.get("revenueGrowth"),
+                "profit_margin": info.get("profitMargins"),
+                "debt_to_equity": info.get("debtToEquity"),
+                "free_cash_flow": info.get("freeCashflow"),
+                "dividend_yield": info.get("dividendYield"),
+                "beta": info.get("beta"),
+                "52w_high": info.get("fiftyTwoWeekHigh"),
+                "52w_low": info.get("fiftyTwoWeekLow"),
+                "short_ratio": info.get("shortRatio"),
+                "sector": info.get("sector"),
+                "industry": info.get("industry"),
+                "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
+                # Liquidity inputs: average daily volume + bid/ask + float
+                "avg_volume_10d": info.get("averageDailyVolume10Day") or info.get("averageVolume10days"),
+                "avg_volume_3m": info.get("averageVolume") or info.get("averageDailyVolume3Month"),
+                "bid": info.get("bid"),
+                "ask": info.get("ask"),
+                "shares_outstanding": info.get("sharesOutstanding"),
+                "float_shares": info.get("floatShares"),
+            }
+
+        try:
+            result = _retry_sync(_fetch, label=f"yf.info({ticker})")
+        except Exception as e:
+            logger.warning(f"yfinance fundamentals failed for {ticker}: {e}")
+            return {}
+
         self._fundamentals_cache.set(ticker, result)
         logger.info(f"Fetched fundamentals for {ticker}")
         return result
-
-    # ── Fundamentals computation (Massive financials -> ratios) ────────────
-
-    @staticmethod
-    def _statements(report: dict) -> tuple[dict, dict, dict]:
-        """Unwrap a single financials report into its three statement dicts."""
-        fin = (report or {}).get("financials") or {}
-        income = fin.get("income_statement") or {}
-        balance = fin.get("balance_sheet") or {}
-        cash = fin.get("cash_flow_statement") or {}
-        return income, balance, cash
-
-    @classmethod
-    def _latest_revenue_growth(cls, reports: list) -> float | None:
-        """(rev - prev_rev) / prev_rev from the two most recent reports.
-
-        `reports` is massive.financials() output, ordered desc (newest first).
-        Returns None if either revenue is missing/zero.
-        """
-        if not isinstance(reports, list) or len(reports) < 2:
-            return None
-        inc0, _, _ = cls._statements(reports[0])
-        inc1, _, _ = cls._statements(reports[1])
-        rev = _safe_float(_g(inc0, "revenues", "revenue"))
-        prev_rev = _safe_float(_g(inc1, "revenues", "revenue"))
-        if rev is None or prev_rev in (None, 0):
-            return None
-        return round((rev - prev_rev) / prev_rev, 4)
-
-    def _compute_fundamentals(self, ticker: str) -> dict:
-        """Build the exact fundamentals dict from Massive sources.
-
-        Computed (best-effort, defensive — any missing input -> None for that
-        field, never a crash):
-          pe_ratio       = price / EPS,  EPS = net_income / shares
-          pb_ratio       = market_cap / total_equity
-          ev_ebitda      = (market_cap + total_debt - cash) / EBITDA
-          profit_margin  = net_income / revenue
-          revenue_growth = (rev - prev_rev) / prev_rev
-          debt_to_equity = total_debt / total_equity
-          free_cash_flow = operating_cash_flow - capex
-          beta           = massive.compute_beta(ticker vs SPY)
-          market_cap / shares / sector = ticker_reference
-          current_price  = massive.last_price
-          52w_high/low   = max/min close over 1y of price bars
-
-        REDUCED (no Massive source -> None):
-          forward_pe, short_ratio, bid, ask, float_shares, dividend_yield
-          (dividend_yield is left None — the dividends endpoint isn't wired
-          here; computing it cheaply isn't possible without it).
-        """
-        # Exact key contract — start all None, fill what we can.
-        out: dict = {
-            "pe_ratio": None,
-            "forward_pe": None,        # GAP: no Massive forward EPS estimate
-            "pb_ratio": None,
-            "ev_ebitda": None,
-            "market_cap": None,
-            "revenue_growth": None,
-            "profit_margin": None,
-            "debt_to_equity": None,
-            "free_cash_flow": None,
-            "dividend_yield": None,    # GAP: dividends endpoint not wired here
-            "beta": None,
-            "52w_high": None,
-            "52w_low": None,
-            "short_ratio": None,       # GAP: no Massive short-interest source
-            "sector": None,
-            "industry": None,
-            "current_price": None,
-            "avg_volume_10d": None,
-            "avg_volume_3m": None,
-            "bid": None,               # GAP: quote bid not surfaced here
-            "ask": None,               # GAP: quote ask not surfaced here
-            "shares_outstanding": None,
-            "float_shares": None,      # GAP: no Massive float source
-        }
-
-        # ── Reference details: market_cap, shares, sector, industry ────────
-        ref: dict = {}
-        try:
-            ref = massive_client.ticker_reference(ticker) or {}
-        except Exception as e:
-            logger.warning("ticker_reference failed for %s: %s", ticker, e)
-        market_cap = _safe_float(ref.get("market_cap"))
-        out["market_cap"] = market_cap
-        out["sector"] = ref.get("sector")
-        # Massive has no GICS industry; sic_description is the closest proxy
-        # (same field used for sector). Kept distinct so the key exists.
-        out["industry"] = ref.get("sic_description") or ref.get("sector")
-        shares = (
-            _safe_float(ref.get("weighted_shares_outstanding"))
-            or _safe_float(ref.get("share_class_shares_outstanding"))
-        )
-        out["shares_outstanding"] = shares
-
-        # ── Current price ──────────────────────────────────────────────────
-        current_price = None
-        try:
-            current_price = _safe_float(massive_client.last_price(ticker))
-        except Exception as e:
-            logger.warning("last_price failed for %s: %s", ticker, e)
-        out["current_price"] = current_price
-
-        # ── Financials-derived ratios ──────────────────────────────────────
-        reports: list = []
-        try:
-            reports = massive_client.financials(ticker, limit=8) or []
-        except Exception as e:
-            logger.warning("financials failed for %s: %s", ticker, e)
-
-        if reports:
-            inc, bal, cf = self._statements(reports[0])
-
-            net_income = _safe_float(
-                _g(inc, "net_income_loss", "net_income_loss_attributable_to_parent",
-                   "net_income")
-            )
-            revenue = _safe_float(_g(inc, "revenues", "revenue"))
-            ebitda = _safe_float(_g(inc, "ebitda"))
-
-            total_equity = _safe_float(
-                _g(bal, "equity_attributable_to_parent", "equity",
-                   "stockholders_equity")
-            )
-            total_debt = _safe_float(
-                _g(bal, "long_term_debt", "debt", "total_debt")
-            )
-            cash_and_equiv = _safe_float(
-                _g(bal, "cash", "cash_and_equivalents",
-                   "cash_and_cash_equivalents")
-            )
-
-            op_cashflow = _safe_float(
-                _g(cf, "net_cash_flow_from_operating_activities",
-                   "operating_cash_flow")
-            )
-            capex = _safe_float(
-                _g(cf, "capital_expenditure", "payments_to_acquire_ppe")
-            )
-
-            # profit_margin = net_income / revenue
-            if net_income is not None and revenue not in (None, 0):
-                out["profit_margin"] = round(net_income / revenue, 4)
-
-            # pe_ratio = price / (net_income / shares)
-            if (current_price is not None and net_income not in (None, 0)
-                    and shares not in (None, 0)):
-                eps = net_income / shares
-                if eps not in (None, 0):
-                    out["pe_ratio"] = round(current_price / eps, 4)
-
-            # pb_ratio = market_cap / total_equity
-            if market_cap is not None and total_equity not in (None, 0):
-                out["pb_ratio"] = round(market_cap / total_equity, 4)
-
-            # debt_to_equity = total_debt / total_equity
-            if total_debt is not None and total_equity not in (None, 0):
-                out["debt_to_equity"] = round(total_debt / total_equity, 4)
-
-            # ev_ebitda = (market_cap + total_debt - cash) / EBITDA
-            if (market_cap is not None and ebitda not in (None, 0)):
-                ev = market_cap + (total_debt or 0.0) - (cash_and_equiv or 0.0)
-                out["ev_ebitda"] = round(ev / ebitda, 4)
-
-            # free_cash_flow = operating_cash_flow - capex
-            # (capex is typically reported negative; subtract its magnitude)
-            if op_cashflow is not None:
-                fcf = op_cashflow - abs(capex) if capex is not None else op_cashflow
-                out["free_cash_flow"] = round(fcf, 2)
-
-            # revenue_growth from the two latest reports
-            out["revenue_growth"] = self._latest_revenue_growth(reports)
-
-        # ── Beta vs SPY ────────────────────────────────────────────────────
-        try:
-            out["beta"] = massive_client.compute_beta(ticker, benchmark="SPY", period="1y")
-        except Exception as e:
-            logger.warning("compute_beta failed for %s: %s", ticker, e)
-
-        # ── 52-week high/low + avg volume from 1y of price bars ────────────
-        try:
-            bars = massive_client.price_bars(ticker, period="1y", adjusted=False, round_dp=2)
-        except Exception as e:
-            logger.warning("price_bars(1y) failed for %s: %s", ticker, e)
-            bars = []
-        if bars:
-            highs = [b["high"] for b in bars if b.get("high") is not None]
-            lows = [b["low"] for b in bars if b.get("low") is not None]
-            vols = [b["volume"] for b in bars if b.get("volume") is not None]
-            if highs:
-                out["52w_high"] = round(max(highs), 2)
-            if lows:
-                out["52w_low"] = round(min(lows), 2)
-            if vols:
-                # avg_volume_3m ~ last ~63 trading days; 10d ~ last 10.
-                last10 = vols[-10:]
-                last63 = vols[-63:]
-                if last10:
-                    out["avg_volume_10d"] = int(sum(last10) / len(last10))
-                if last63:
-                    out["avg_volume_3m"] = int(sum(last63) / len(last63))
-
-        return out
 
     def get_options_chain(self, ticker: str, expiry: str | None = None) -> dict:
         cache_key = f"{ticker}:{expiry or 'nearest'}"
@@ -455,12 +334,40 @@ class MarketDataClient:
             logger.debug(f"Returning cached options chain for {ticker}")
             return cached
 
-        # massive.options_snapshot already returns the canonical shape
-        # {expiration, all_expirations, calls[], puts[]} and trims ~30 NTM
-        # contracts each side, mirroring the old yfinance behavior. On failure
-        # it returns {"expirations": [], "calls": [], "puts": []} — same empty
-        # shape the old client returned.
-        result = massive_client.options_snapshot(ticker, expiry=expiry)
+        def _fetch() -> dict:
+            stock = yf.Ticker(ticker)
+            expirations = stock.options or ()
+            if not expirations:
+                return {"expirations": [], "calls": [], "puts": []}
+            target = expiry or expirations[0]
+            chain = stock.option_chain(target)
+
+            call_cols = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
+            put_cols = call_cols
+            calls_df = chain.calls[call_cols] if all(c in chain.calls.columns for c in call_cols) else chain.calls
+            puts_df = chain.puts[put_cols] if all(c in chain.puts.columns for c in put_cols) else chain.puts
+
+            calls_list = calls_df.to_dict(orient="records")
+            puts_list = puts_df.to_dict(orient="records")
+            if len(calls_list) > 30:
+                mid = len(calls_list) // 2
+                calls_list = calls_list[mid - 15: mid + 15]
+            if len(puts_list) > 30:
+                mid = len(puts_list) // 2
+                puts_list = puts_list[mid - 15: mid + 15]
+
+            return {
+                "expiration": target,
+                "all_expirations": list(expirations[:5]),
+                "calls": calls_list,
+                "puts": puts_list,
+            }
+
+        try:
+            result = _retry_sync(_fetch, label=f"yf.options({ticker})")
+        except Exception as e:
+            logger.warning(f"yfinance options chain failed for {ticker}: {e}")
+            return {"expirations": [], "calls": [], "puts": []}
 
         self._options_cache.set(cache_key, result)
         logger.info(f"Fetched options chain for {ticker} exp={result.get('expiration')}")
@@ -468,7 +375,7 @@ class MarketDataClient:
 
     # ── Async interface ───────────────────────────────────────────
     # Route handlers / orchestrator MUST use these; they free the event loop
-    # while the blocking HTTP call runs on a thread.
+    # while the blocking yfinance call runs on a thread.
 
     async def aget_price_history(self, ticker: str, period: str = "6mo") -> list[dict]:
         return await run_sync(self.get_price_history, ticker, period)

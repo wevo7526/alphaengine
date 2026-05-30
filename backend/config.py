@@ -69,21 +69,10 @@ class Settings(BaseSettings):
     # Data Sources
     SEC_API_KEY: str = ""
     FRED_API_KEY: str = ""
-    FIRECRAWL_API_KEY: str = ""
-    # Massive (api.massive.com — Polygon.io-compatible). Single key for all
-    # market data: aggregates, reference, financials, options, news, grouped.
-    MASSIVE_API_KEY: str = ""
-    # Free tier is ~5 requests/minute. A process-wide sliding-window limiter
-    # in data/massive_client.py blocks every live call to stay under this.
-    # Raise it when on a paid plan.
-    MASSIVE_RATE_PER_MIN: int = 5
-
-    # Alpha Vantage — FREE tier (25/day, 5/min). Used ONLY for the analyst-
-    # consensus gap Massive can't fill (OVERVIEW endpoint: target price +
-    # rating + ready ratios), hard-cached 24h. A per-day budget guard keeps
-    # us under the free cap; over budget, consensus degrades to nulls.
+    NEWS_API_KEY: str = ""
+    FINNHUB_API_KEY: str = ""
     ALPHA_VANTAGE_KEY: str = ""
-    ALPHA_VANTAGE_DAILY_BUDGET: int = 20
+    FIRECRAWL_API_KEY: str = ""
 
     # Clerk Auth.
     # CLERK_ISSUER and CLERK_SECRET_KEY are optional — if either CLERK_ISSUER
@@ -156,7 +145,8 @@ if not settings.CLERK_ISSUER:
 
 REQUIRED_IN_PRODUCTION = ("ANTHROPIC_API_KEY", "CLERK_ISSUER")
 RECOMMENDED = (
-    "SEC_API_KEY", "FRED_API_KEY", "MASSIVE_API_KEY", "FIRECRAWL_API_KEY",
+    "SEC_API_KEY", "FRED_API_KEY", "NEWS_API_KEY",
+    "FINNHUB_API_KEY", "ALPHA_VANTAGE_KEY", "FIRECRAWL_API_KEY",
 )
 
 

@@ -1,142 +1,107 @@
 """
 News and sentiment data client.
 
-Source: Massive ticker-news feed (api.massive.com — Polygon.io-compatible),
-with Firecrawl web search as a fallback when the Massive feed is empty.
+Primary: NewsAPI.org (100 requests/day — treat every call as precious)
+Supplementary: Finnhub (60 calls/min — more generous but still cached)
 
-Used by the Sentiment / Research agents for news flow analysis and sentiment
-scoring.
-
-Data-layer consolidation note:
-  - NewsAPI.org and Finnhub have been REMOVED. All news now flows through
-    `data.massive_client.ticker_news` (primary) and `data.firecrawl_client`
-    (fallback). The `_finnhub` suffix on two public methods is LEGACY — the
-    names are retained ONLY because callers (agents/research_analyst.py)
-    depend on them. They no longer touch Finnhub.
+Used by the Sentiment Agent for news flow analysis and sentiment scoring.
 
 Stability notes:
-  - All HTTP work happens inside massive_client / firecrawl_client, which
-    already go through infra.http (retries + Retry-After) and enforce
-    timeouts. Nothing here raises — failures degrade to the empty shape.
+  - All Finnhub HTTP calls go through infra.http (retries + honours Retry-After).
+  - NewsAPI's client is synchronous; wrap in run_sync when called from async.
   - Bounded caches prevent heap growth under sustained traffic.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from data import firecrawl_client
-from data import massive_client
+from newsapi import NewsApiClient
+
+from config import settings
 from infra.async_utils import run_sync
 from infra.cache import TTLCache
+from infra.http import HttpError, http_get_json
 
 logger = logging.getLogger(__name__)
 
-_NEWS_TTL = 1800       # 30 min — news cadence; matches the old NewsAPI budget
-_SENTIMENT_TTL = 900   # 15 min — company-news rollup cache
-
-
-def _to_epoch_seconds(published_at: str | None) -> int:
-    """Best-effort convert an ISO-8601 publish timestamp to epoch seconds.
-
-    The legacy Finnhub shape exposed a `datetime` int (epoch seconds); some
-    callers may key off it, so we preserve an int there. Returns 0 when the
-    value is missing or unparseable.
-    """
-    if not published_at:
-        return 0
-    try:
-        s = published_at.strip()
-        # Normalise a trailing 'Z' to an explicit UTC offset for fromisoformat.
-        if s.endswith("Z"):
-            s = s[:-1] + "+00:00"
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return int(dt.timestamp())
-    except (ValueError, TypeError):
-        return 0
+_NEWS_TTL = 1800       # 30 min — NewsAPI has 100/day, cache hard
+_FINNHUB_TTL = 900     # 15 min — Finnhub is more generous
 
 
 class NewsDataClient:
     def __init__(self):
+        self.newsapi = NewsApiClient(api_key=settings.NEWS_API_KEY) if settings.NEWS_API_KEY else None
+        self.finnhub_key = settings.FINNHUB_API_KEY
         self._news_cache: TTLCache[list[dict]] = TTLCache(max_entries=256, ttl_seconds=_NEWS_TTL)
-        self._sentiment_cache: TTLCache[dict] = TTLCache(max_entries=256, ttl_seconds=_SENTIMENT_TTL)
+        self._sentiment_cache: TTLCache[dict] = TTLCache(max_entries=256, ttl_seconds=_FINNHUB_TTL)
 
     def get_ticker_news(self, ticker: str, page_size: int = 10) -> list[dict]:
-        """Fetch recent news articles for a ticker via the Massive news feed.
-
-        Returns a list of {title, description, source, published_at, url} dicts
-        — the same shape the old NewsAPI client produced, so the Sentiment
-        Agent needs zero changes.
-        """
-        if not ticker:
+        """Fetch recent news articles for a ticker via NewsAPI."""
+        if self.newsapi is None:
+            logger.debug("NewsAPI not configured — skipping ticker news")
             return []
 
-        cache_key = f"{ticker.upper()}:{page_size}"
-        cached = self._news_cache.get(cache_key)
+        cached = self._news_cache.get(ticker)
         if cached is not None:
-            logger.debug("Returning cached news for %s", ticker)
+            logger.debug(f"Returning cached news for {ticker}")
             return cached
 
-        # massive_client.ticker_news already returns the canonical
-        # {title, description, source, published_at, url} shape.
-        articles = massive_client.ticker_news(ticker, limit=page_size)
+        try:
+            response = self.newsapi.get_everything(
+                q=ticker,
+                sort_by="publishedAt",
+                language="en",
+                page_size=page_size,
+            )
+        except Exception as e:
+            logger.warning(f"NewsAPI fetch failed for {ticker}: {e}")
+            return []
+
         articles = [
             {
-                "title": a.get("title") or "",
-                "description": a.get("description") or "",
-                "source": a.get("source") or "",
-                "published_at": a.get("published_at") or "",
-                "url": a.get("url") or "",
+                "title": a.get("title", ""),
+                "description": a.get("description", ""),
+                "source": a.get("source", {}).get("name", ""),
+                "published_at": a.get("publishedAt", ""),
+                "url": a.get("url", ""),
             }
-            for a in (articles or [])
+            for a in response.get("articles", [])
         ]
-
-        # Fallback: if Massive has no coverage for this ticker, try a Firecrawl
-        # web search so the agent still sees *some* recent flow.
-        if not articles:
-            try:
-                results = firecrawl_client.search_web(f"{ticker} stock news", limit=page_size)
-            except Exception as e:  # noqa: BLE001 — a news source must never crash a run
-                logger.warning("Firecrawl news fallback failed for %s: %s", ticker, e)
-                results = []
-            articles = [
-                {
-                    "title": r.get("title") or "",
-                    "description": (r.get("content") or "")[:500],
-                    "source": r.get("url") or "",
-                    "published_at": "",
-                    "url": r.get("url") or "",
-                }
-                for r in (results or [])
-            ]
-
-        self._news_cache.set(cache_key, articles)
-        logger.info("Fetched %d articles for %s", len(articles), ticker)
+        self._news_cache.set(ticker, articles)
+        logger.info(f"Fetched {len(articles)} articles for {ticker}")
         return articles
 
     def get_market_sentiment_finnhub(self, ticker: str) -> dict:
-        """Company-news rollup for a ticker.
-
-        LEGACY NAME — no longer touches Finnhub. Sourced from the Massive news
-        feed and reshaped into the historical Finnhub return contract:
-            {article_count, articles: [{headline, summary, source, datetime, url}]}
-        so agents/research_analyst.py needs zero changes.
-        """
-        if not ticker:
+        """Get company news from Finnhub (free-tier endpoint)."""
+        if not self.finnhub_key:
+            logger.debug("FINNHUB_API_KEY not set, skipping Finnhub fetch")
             return {}
 
-        tk = ticker.upper()
-        cached = self._sentiment_cache.get(tk)
+        cached = self._sentiment_cache.get(ticker)
         if cached is not None:
-            logger.debug("Returning cached company news for %s", ticker)
+            logger.debug(f"Returning cached Finnhub news for {ticker}")
             return cached
 
-        # Reuse the ticker-news path (cached) so we don't double-fetch.
-        articles = self.get_ticker_news(ticker, page_size=15)
-        if not articles:
+        end = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        start = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        try:
+            articles = http_get_json(
+                "https://finnhub.io/api/v1/company-news",
+                params={"symbol": ticker, "from": start, "to": end, "token": self.finnhub_key},
+                read_timeout=10,
+                total_timeout=15,
+                max_retries=2,
+                label=f"finnhub.company-news({ticker})",
+            )
+        except HttpError as e:
+            logger.warning(f"Finnhub company news failed for {ticker}: {e}")
+            return {}
+
+        if not isinstance(articles, list):
+            logger.warning(f"Finnhub returned unexpected shape for {ticker}: {type(articles).__name__}")
             return {}
 
         trimmed = articles[:15]
@@ -144,42 +109,37 @@ class NewsDataClient:
             "article_count": len(articles),
             "articles": [
                 {
-                    "headline": a.get("title") or "",
-                    "summary": (a.get("description") or "")[:200],
-                    "source": a.get("source") or "",
-                    "datetime": _to_epoch_seconds(a.get("published_at")),
-                    "url": a.get("url") or "",
+                    "headline": a.get("headline", ""),
+                    "summary": (a.get("summary") or "")[:200],
+                    "source": a.get("source", ""),
+                    "datetime": a.get("datetime", 0),
+                    "url": a.get("url", ""),
                 }
                 for a in trimmed
             ],
         }
-        self._sentiment_cache.set(tk, data)
-        logger.info("Fetched %d company-news articles for %s", len(data["articles"]), ticker)
+        self._sentiment_cache.set(ticker, data)
+        logger.info(f"Fetched {len(data['articles'])} Finnhub articles for {ticker}")
         return data
 
     def get_market_news_finnhub(self, category: str = "general") -> list[dict]:
-        """General (non-ticker) market news headlines.
-
-        LEGACY NAME — no longer touches Finnhub. Massive has no broad
-        market-news endpoint, so this is sourced from a Firecrawl web search.
-        Preserves the historical list return shape; returns [] on failure or
-        when Firecrawl is not configured.
-        """
-        query = f"{category} stock market news today" if category else "stock market news today"
-        try:
-            results = firecrawl_client.search_web(query, limit=10)
-        except Exception as e:  # noqa: BLE001 — a news source must never crash a run
-            logger.warning("Firecrawl market news failed (%s): %s", category, e)
+        if not self.finnhub_key:
             return []
-        return [
-            {
-                "headline": r.get("title") or "",
-                "summary": (r.get("content") or "")[:200],
-                "source": r.get("url") or "",
-                "url": r.get("url") or "",
-            }
-            for r in (results or [])
-        ]
+        try:
+            articles = http_get_json(
+                "https://finnhub.io/api/v1/news",
+                params={"category": category, "token": self.finnhub_key},
+                read_timeout=10,
+                total_timeout=15,
+                max_retries=2,
+                label=f"finnhub.news({category})",
+            )
+        except HttpError as e:
+            logger.warning(f"Finnhub market news failed: {e}")
+            return []
+        if not isinstance(articles, list):
+            return []
+        return articles[:10]
 
     # ── Async wrappers ────────────────────────────────────────────
 

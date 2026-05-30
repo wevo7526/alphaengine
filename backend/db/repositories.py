@@ -14,86 +14,9 @@ from db.models import (
     PositionSnapshotRecord,
     BacktestRunRecord, BacktestResultRecord, FactorExposureRecord,
     RegimeRecord, MacroSnapshotRecord, UserProfile, UserRiskProfile,
-    DailyPriceTapeRecord, gen_uuid,
 )
 
 logger = logging.getLogger(__name__)
-
-
-class PriceTapeRepository:
-    """Persisted daily price tape — pricing reads here instead of hitting
-    Massive's rate-limited API. One grouped call/day populates it."""
-
-    @staticmethod
-    async def latest_date() -> date | None:
-        try:
-            async with async_session() as session:
-                result = await session.execute(
-                    select(DailyPriceTapeRecord.trade_date)
-                    .order_by(desc(DailyPriceTapeRecord.trade_date))
-                    .limit(1)
-                )
-                return result.scalar_one_or_none()
-        except Exception as e:
-            logger.warning(f"[price_tape] latest_date failed: {e}")
-            return None
-
-    @staticmethod
-    async def upsert_rows(rows: list[dict], trade_date: date) -> int:
-        """Replace the tape for `trade_date` with `rows` ({ticker, close,
-        volume}). Idempotent: deletes that day's rows then bulk-inserts."""
-        if not rows:
-            return 0
-        try:
-            from sqlalchemy import delete
-            async with async_session() as session:
-                await session.execute(
-                    delete(DailyPriceTapeRecord).where(
-                        DailyPriceTapeRecord.trade_date == trade_date
-                    )
-                )
-                session.add_all([
-                    DailyPriceTapeRecord(
-                        id=gen_uuid(),
-                        ticker=(r.get("ticker") or "").upper(),
-                        trade_date=trade_date,
-                        close=r.get("close"),
-                        volume=r.get("volume"),
-                    )
-                    for r in rows if r.get("ticker")
-                ])
-                await session.commit()
-            return len(rows)
-        except Exception as e:
-            logger.warning(f"[price_tape] upsert_rows failed: {e}")
-            return 0
-
-    @staticmethod
-    async def prices_for(tickers: list[str]) -> dict[str, float]:
-        """{TICKER: latest close} for the requested tickers. Pure DB read."""
-        ups = list({(t or "").strip().upper() for t in (tickers or []) if t})
-        if not ups:
-            return {}
-        try:
-            async with async_session() as session:
-                result = await session.execute(
-                    select(
-                        DailyPriceTapeRecord.ticker,
-                        DailyPriceTapeRecord.close,
-                        DailyPriceTapeRecord.trade_date,
-                    )
-                    .where(DailyPriceTapeRecord.ticker.in_(ups))
-                    .order_by(desc(DailyPriceTapeRecord.trade_date))
-                )
-                out: dict[str, float] = {}
-                for tk, close, _td in result.all():
-                    # First (most recent) row per ticker wins.
-                    if tk not in out and close is not None:
-                        out[tk] = float(close)
-                return out
-        except Exception as e:
-            logger.warning(f"[price_tape] prices_for failed: {e}")
-            return {}
 
 
 class MemoRepository:

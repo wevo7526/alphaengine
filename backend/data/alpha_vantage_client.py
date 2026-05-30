@@ -1,147 +1,142 @@
 """
-Alpha Vantage — FREE-tier client, narrowly scoped.
+Alpha Vantage client for pre-computed technical indicators.
 
-Massive provides everything EXCEPT analyst data (price targets, ratings) — it
-has no analyst endpoint at any tier. Alpha Vantage's `OVERVIEW` endpoint
-returns analyst target price + a rating distribution + ready fundamentals
-(P/E, EV/EBITDA, beta, 52-week range, EPS) in ONE call. That single gap is
-the only thing we spend the scarce free quota on.
+CRITICAL: 25 requests/day on free tier. Every call counts.
+Cache TTL is 4 hours — technical indicators on daily bars don't change
+intraday, so there's zero reason to re-fetch.
 
-Free-tier discipline:
-  - 25 requests/day, 5/min. A process-wide per-DAY budget guard
-    (ALPHA_VANTAGE_DAILY_BUDGET, default 20) stops us before the hard cap;
-    over budget we return {} and the caller degrades (nulls).
-  - 24h cache: OVERVIEW barely changes intraday, so one call per name per day
-    is plenty.
-  - AV signals quota/errors in the JSON body ("Note"/"Information"), not the
-    HTTP status — we detect and back off.
-  - NOTHING raises. Missing key / over budget / error -> {}.
+Used by the Quant Strategist for supplementary technical analysis
+(SMA, EMA, RSI, MACD, Bollinger Bands). The Quant Agent can also compute
+these from raw price data via market_client, so Alpha Vantage is a
+convenience layer, not a hard dependency.
+
+Stability notes:
+  - All HTTP calls use infra.http with retries and sensible timeouts.
+  - On quota breach (JSON "Note"/"Information" fields), we return {} AND
+    log the message so operators can see when they've hit the daily wall.
 """
 
 from __future__ import annotations
 
 import logging
-import threading
-from datetime import date
 
 from config import settings
+from infra.async_utils import run_sync
 from infra.cache import TTLCache
 from infra.http import HttpError, http_get_json
 
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://www.alphavantage.co/query"
-_OVERVIEW_TTL = 86400  # 24h — analyst data barely moves day to day
-
-_overview_cache: TTLCache[dict] = TTLCache(max_entries=512, ttl_seconds=_OVERVIEW_TTL)
-
-# Per-day budget guard (process-wide).
-_budget_lock = threading.Lock()
-_calls_today = 0
-_calls_date: str | None = None
+_INDICATOR_TTL = 14400  # 4h
 
 
-def _budget_take() -> bool:
-    """Reserve one call against today's budget. Returns False if exhausted."""
-    global _calls_today, _calls_date
-    budget = int(getattr(settings, "ALPHA_VANTAGE_DAILY_BUDGET", 20))
-    with _budget_lock:
-        today = date.today().isoformat()
-        if _calls_date != today:
-            _calls_date = today
-            _calls_today = 0
-        if _calls_today >= budget:
-            return False
-        _calls_today += 1
-        return True
+class AlphaVantageClient:
+    def __init__(self):
+        self.api_key = settings.ALPHA_VANTAGE_KEY
+        self._cache: TTLCache[dict] = TTLCache(max_entries=256, ttl_seconds=_INDICATOR_TTL)
 
+    def _fetch(self, params: dict) -> dict:
+        if not self.api_key:
+            logger.debug("ALPHA_VANTAGE_KEY not set — skipping")
+            return {}
 
-def _f(v) -> float | None:
-    """AV returns strings, and 'None'/'-' for missing values."""
-    if v in (None, "None", "-", "", "0", "0.0"):
-        # 0 is almost always a missing-value sentinel for these fields.
-        return None
-    try:
-        f = float(v)
-        return f if f == f else None
-    except (TypeError, ValueError):
-        return None
+        cache_key = "|".join(f"{k}={v}" for k, v in sorted(params.items()) if k != "apikey")
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            logger.debug(f"Returning cached AV data: {cache_key}")
+            return cached
 
+        params["apikey"] = self.api_key
+        try:
+            data = http_get_json(
+                _BASE_URL,
+                params=params,
+                read_timeout=15,
+                total_timeout=20,
+                max_retries=2,
+                label=f"alphavantage({params.get('function')})",
+            )
+        except HttpError as e:
+            logger.warning(f"Alpha Vantage fetch failed: {e}")
+            return {}
 
-def get_overview(ticker: str) -> dict:
-    """Analyst + fundamentals snapshot from AV OVERVIEW. {} when unavailable.
+        if not isinstance(data, dict):
+            logger.warning(f"Alpha Vantage returned non-dict payload: {type(data).__name__}")
+            return {}
 
-    Returns a normalized dict:
-        {analyst_target_price, recommendation_key, num_analysts,
-         pe_ratio, forward_pe, ev_ebitda, beta, eps, peg,
-         profit_margin, dividend_yield, market_cap,
-         "52w_high", "52w_low", sector, industry, revenue_growth}
-    """
-    if not ticker:
-        return {}
-    tk = ticker.upper()
-    cached = _overview_cache.get(tk)
-    if cached is not None:
-        return cached
+        # Alpha Vantage signals quota / errors in JSON body, not HTTP status.
+        if "Note" in data or "Information" in data or "Error Message" in data:
+            msg = data.get("Note") or data.get("Information") or data.get("Error Message")
+            logger.warning(f"Alpha Vantage rate limit or error: {msg}")
+            return {}
 
-    if not settings.ALPHA_VANTAGE_KEY:
-        return {}
-    if not _budget_take():
-        logger.info("Alpha Vantage daily budget spent — skipping OVERVIEW(%s)", tk)
-        return {}
+        # Trim time-series payloads to 20 most recent points so we don't
+        # blow the LLM context budget.
+        for key in list(data.keys()):
+            if key.startswith("Technical Analysis") or key.startswith("Meta"):
+                if isinstance(data[key], dict) and len(data[key]) > 20:
+                    data[key] = dict(list(data[key].items())[:20])
 
-    try:
-        data = http_get_json(
-            _BASE_URL,
-            params={"function": "OVERVIEW", "symbol": tk, "apikey": settings.ALPHA_VANTAGE_KEY},
-            read_timeout=15,
-            total_timeout=20,
-            max_retries=1,
-            label=f"alphavantage.overview({tk})",
-        )
-    except HttpError as e:
-        logger.warning("Alpha Vantage OVERVIEW failed for %s: %s", tk, e)
-        return {}
+        self._cache.set(cache_key, data)
+        return data
 
-    if not isinstance(data, dict) or not data or "Symbol" not in data:
-        # Empty {} or a quota note ("Note"/"Information") -> nothing usable.
-        msg = (data or {}).get("Note") or (data or {}).get("Information") if isinstance(data, dict) else None
-        if msg:
-            logger.warning("Alpha Vantage rate/quota note for %s: %s", tk, msg)
-        return {}
+    def get_top_movers(self) -> dict:
+        """TOP_GAINERS_LOSERS — live top gainers / losers / most-actively-traded.
 
-    # Map AV's rating distribution to a single recommendation_key.
-    sb = _f(data.get("AnalystRatingStrongBuy")) or 0
-    b = _f(data.get("AnalystRatingBuy")) or 0
-    h = _f(data.get("AnalystRatingHold")) or 0
-    s = _f(data.get("AnalystRatingSell")) or 0
-    ss = _f(data.get("AnalystRatingStrongSell")) or 0
-    total = sb + b + h + s + ss
-    rec = None
-    if total > 0:
-        score = (sb * 2 + b * 1 - s * 1 - ss * 2) / total
-        rec = ("strong_buy" if score >= 1.0 else "buy" if score >= 0.25
-               else "hold" if score > -0.25 else "sell" if score > -1.0 else "strong_sell")
+        One call, cached 4h (via _fetch), so it's budget-safe against the
+        25/day free tier. A live market-wide discovery surface: returns
+        {top_gainers, top_losers, most_actively_traded} each a list of
+        {ticker, price, change_amount, change_percentage, volume}.
+        """
+        return self._fetch({"function": "TOP_GAINERS_LOSERS"})
 
-    out = {
-        "analyst_target_price": _f(data.get("AnalystTargetPrice")),
-        "recommendation_key": rec,
-        "num_analysts": int(total) if total else None,
-        "pe_ratio": _f(data.get("PERatio")),
-        "forward_pe": _f(data.get("ForwardPE")),
-        "ev_ebitda": _f(data.get("EVToEBITDA")),
-        "beta": _f(data.get("Beta")),
-        "eps": _f(data.get("EPS")),
-        "peg": _f(data.get("PEGRatio")),
-        "profit_margin": _f(data.get("ProfitMargin")),
-        "dividend_yield": _f(data.get("DividendYield")),
-        "market_cap": _f(data.get("MarketCapitalization")),
-        "52w_high": _f(data.get("52WeekHigh")),
-        "52w_low": _f(data.get("52WeekLow")),
-        "sector": (data.get("Sector") or None),
-        "industry": (data.get("Industry") or None),
-        "revenue_growth": _f(data.get("QuarterlyRevenueGrowthYOY")),
-    }
-    _overview_cache.set(tk, out)
-    logger.info("Alpha Vantage OVERVIEW for %s (target=%s, rec=%s)", tk, out["analyst_target_price"], rec)
-    return out
+    def get_rsi(self, ticker: str, period: int = 14) -> dict:
+        return self._fetch({
+            "function": "RSI", "symbol": ticker, "interval": "daily",
+            "time_period": str(period), "series_type": "close",
+        })
+
+    def get_macd(self, ticker: str) -> dict:
+        return self._fetch({
+            "function": "MACD", "symbol": ticker, "interval": "daily",
+            "series_type": "close",
+        })
+
+    def get_bollinger_bands(self, ticker: str, period: int = 20) -> dict:
+        return self._fetch({
+            "function": "BBANDS", "symbol": ticker, "interval": "daily",
+            "time_period": str(period), "series_type": "close",
+        })
+
+    def get_sma(self, ticker: str, period: int = 50) -> dict:
+        return self._fetch({
+            "function": "SMA", "symbol": ticker, "interval": "daily",
+            "time_period": str(period), "series_type": "close",
+        })
+
+    def get_ema(self, ticker: str, period: int = 20) -> dict:
+        return self._fetch({
+            "function": "EMA", "symbol": ticker, "interval": "daily",
+            "time_period": str(period), "series_type": "close",
+        })
+
+    # ── Async wrappers ────────────────────────────────────────────
+
+    async def aget_top_movers(self) -> dict:
+        return await run_sync(self.get_top_movers)
+
+    async def aget_rsi(self, ticker: str, period: int = 14) -> dict:
+        return await run_sync(self.get_rsi, ticker, period)
+
+    async def aget_macd(self, ticker: str) -> dict:
+        return await run_sync(self.get_macd, ticker)
+
+    async def aget_bollinger_bands(self, ticker: str, period: int = 20) -> dict:
+        return await run_sync(self.get_bollinger_bands, ticker, period)
+
+    async def aget_sma(self, ticker: str, period: int = 50) -> dict:
+        return await run_sync(self.get_sma, ticker, period)
+
+    async def aget_ema(self, ticker: str, period: int = 20) -> dict:
+        return await run_sync(self.get_ema, ticker, period)

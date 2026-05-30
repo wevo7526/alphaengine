@@ -13,11 +13,13 @@ from data.fred_client import FREDDataClient
 from data.market_client import MarketDataClient
 from data.news_client import NewsDataClient
 from data.sec_client import SECDataClient
+from data.alpha_vantage_client import AlphaVantageClient
 
 _fred = FREDDataClient()
 _market = MarketDataClient()
 _news = NewsDataClient()
 _sec = SECDataClient()
+_av = AlphaVantageClient()
 
 
 # === Macro Tools ===
@@ -241,118 +243,16 @@ def search_web(query: str) -> list:
 
 # === Technical Tools ===
 
-# Alpha Vantage has been removed from the data layer. RSI/MACD (and any other
-# technical indicators) are now COMPUTED from Massive OHLCV bars
-# (MarketDataClient.get_price_history → massive_client.price_bars) using pandas.
-# The return-dict shapes below intentionally MIRROR the old Alpha Vantage
-# response envelopes ("Meta Data" + "Technical Analysis: <IND>" keyed by
-# YYYY-MM-DD with string values) so the agent prompt and any downstream
-# consumers see an unchanged contract. Indicators use the standard
-# definitions: Wilder's RSI(14), EMA-based MACD(12,26,9).
-
-
-def _close_series(ticker: str, period: str = "6mo"):
-    """Return a pandas Series of closes indexed by date string, ascending.
-
-    Pulls OHLCV from the Massive-backed MarketDataClient (canonical data
-    contract: list of {date, open, high, low, close, volume}). Returns an
-    empty Series when no data is available — callers translate that into the
-    Alpha-Vantage-style error envelope so nothing raises.
-    """
-    import pandas as pd
-
-    bars = _market.get_price_history(ticker, period=period) or []
-    if not bars:
-        return pd.Series(dtype="float64")
-    closes = {b["date"]: float(b["close"]) for b in bars if b.get("close") is not None}
-    s = pd.Series(closes, dtype="float64")
-    return s.sort_index()
-
-
 @tool
-def get_rsi(ticker: str, period: int = 14) -> dict:
-    """Get RSI (default 14-period), computed from Massive OHLCV via Wilder's
-    smoothing. Returns the Alpha-Vantage-compatible envelope:
-    {"Meta Data": {...}, "Technical Analysis: RSI": {"YYYY-MM-DD": {"RSI": "x"}}}
-    with the 20 most recent values (descending by date)."""
-    closes = _close_series(ticker)
-    if len(closes) < period + 1:
-        return {"error": f"insufficient price history for RSI on {ticker.upper()}"}
-
-    delta = closes.diff()
-    gain = delta.clip(lower=0.0)
-    loss = (-delta).clip(lower=0.0)
-    # Wilder's smoothing == EMA with alpha = 1/period (adjust=False).
-    avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-    avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-    rs = avg_gain / avg_loss
-    rsi = 100.0 - (100.0 / (1.0 + rs))
-    # When avg_loss is 0, RS is inf → RSI 100 (correct); fillna handles it.
-    rsi = rsi.where(avg_loss != 0, 100.0)
-    rsi = rsi.dropna()
-
-    series = {
-        date: {"RSI": f"{val:.4f}"}
-        for date, val in reversed(list(rsi.items()))
-    }
-    # Trim to 20 most recent to keep the LLM context budget bounded (matches
-    # the old client's trimming behavior).
-    series = dict(list(series.items())[:20])
-    return {
-        "Meta Data": {
-            "1: Symbol": ticker.upper(),
-            "2: Indicator": "Relative Strength Index (RSI)",
-            "3: Last Refreshed": rsi.index[-1] if len(rsi) else None,
-            "4: Interval": "daily",
-            "5: Time Period": period,
-            "6: Series Type": "close",
-        },
-        "Technical Analysis: RSI": series,
-    }
+def get_rsi(ticker: str) -> dict:
+    """Get RSI (14-period) from Alpha Vantage. CONSERVE: 25 calls/day limit."""
+    return _av.get_rsi(ticker)
 
 
 @tool
 def get_macd(ticker: str) -> dict:
-    """Get MACD (12/26/9), computed from Massive OHLCV via EMA. Returns the
-    Alpha-Vantage-compatible envelope: {"Meta Data": {...},
-    "Technical Analysis: MACD": {"YYYY-MM-DD": {"MACD": "x", "MACD_Signal": "y",
-    "MACD_Hist": "z"}}} with the 20 most recent values (descending by date)."""
-    fast, slow, signal = 12, 26, 9
-    closes = _close_series(ticker)
-    if len(closes) < slow + signal:
-        return {"error": f"insufficient price history for MACD on {ticker.upper()}"}
-
-    ema_fast = closes.ewm(span=fast, adjust=False).mean()
-    ema_slow = closes.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    hist = macd_line - signal_line
-
-    import pandas as pd
-    df = pd.DataFrame({"MACD": macd_line, "MACD_Signal": signal_line, "MACD_Hist": hist}).dropna()
-
-    series = {
-        date: {
-            "MACD": f"{row['MACD']:.4f}",
-            "MACD_Signal": f"{row['MACD_Signal']:.4f}",
-            "MACD_Hist": f"{row['MACD_Hist']:.4f}",
-        }
-        for date, row in reversed(list(df.iterrows()))
-    }
-    series = dict(list(series.items())[:20])
-    return {
-        "Meta Data": {
-            "1: Symbol": ticker.upper(),
-            "2: Indicator": "Moving Average Convergence/Divergence (MACD)",
-            "3: Last Refreshed": df.index[-1] if len(df) else None,
-            "4: Interval": "daily",
-            "5.1: Fast Period": fast,
-            "5.2: Slow Period": slow,
-            "5.3: Signal Period": signal,
-            "6: Series Type": "close",
-        },
-        "Technical Analysis: MACD": series,
-    }
+    """Get MACD from Alpha Vantage. CONSERVE: 25 calls/day limit."""
+    return _av.get_macd(ticker)
 
 
 # === Earnings calendar / analyst consensus / peer comp / short interest ===
@@ -477,9 +377,8 @@ def screen_secondary_universe(
     """
     SCAN THE LIVE MARKET for non-consensus candidates to break Mag7 monoculture.
 
-    Runs real-time screeners (small/mid-cap scans by sector + live
-    top-movers from Massive grouped daily aggregates + predefined style
-    screens) and returns
+    Runs real-time screeners (yfinance EquityQuery small/mid-cap scans by
+    sector + Alpha Vantage top-movers + predefined style screens) and returns
     up to `cap` under-covered tickers with live facts (market cap, price,
     sector). This is genuine market discovery — NOT a filter over a hardcoded
     list. Mega-caps and excluded names are dropped automatically.
@@ -742,7 +641,7 @@ You have access to:
 - Market data (Yahoo Finance): fundamentals, price history, options chains
 - News (NewsAPI + Finnhub): ticker news, general market news
 - SEC filings: recent filings, insider trades, full-text search
-- Technicals (computed from Massive OHLCV): RSI, MACD — free, no daily limit
+- Technicals (Alpha Vantage): RSI, MACD — USE SPARINGLY (25 calls/day)
 - Catalyst grounding: get_earnings_calendar (verified next earnings date),
   get_analyst_consensus (target prices, recommendation_key, forward EPS)
 - Relative valuation: get_peer_comparison (target vs sector peers' P/E,
@@ -755,7 +654,7 @@ IMPORTANT RULES:
    names from screen_secondary_universe (see rule 11 below).
 3. Start with macro_snapshot if the plan requests it — it's cached and cheap.
 4. Limit NewsAPI calls — 100/day budget. One call per ticker max.
-5. Technicals (get_rsi/get_macd): use when technical confirmation adds value; they are computed from price bars (free).
+5. Alpha Vantage: only use if specifically needed for technical confirmation.
 6. SEC full-text search: use for thematic queries, not per-ticker analysis.
 7. Keep options chain calls to 1-2 tickers max.
 8. ALWAYS call get_earnings_calendar before writing earnings-date catalysts.
@@ -847,7 +746,7 @@ Hard rules:
     candidates and report their style_label + market_cap_bucket in ticker_data.
   - For ANY name surfaced by a discovery screen, record `screen_source`
     in ticker_data so the Strategist can tag it as Tier-4 (special situation).
-  - get_rsi/get_macd are computed from price bars (free) — use when technicals matter.
+  - Skip Alpha Vantage unless specifically needed (25/day budget).
   - Skip get_filing_section unless thesis requires reading actual filing prose.
 
 After 18 tool calls, STOP and emit JSON. Your data_summary is the critical

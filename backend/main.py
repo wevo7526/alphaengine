@@ -91,18 +91,6 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_prewarm_macro())
 
-    # Pre-populate the daily price tape (one grouped Massive call -> Postgres)
-    # so portfolio marks + pricing read from the DB, not the rate-limited API.
-    async def _prewarm_tape():
-        try:
-            from data import price_tape
-            n = await price_tape.refresh_tape()
-            logger.info("Price tape pre-warmed (%d tickers)", n)
-        except Exception as e:
-            logger.warning(f"Price tape pre-warm failed (non-fatal): {e}")
-
-    asyncio.create_task(_prewarm_tape())
-
     app.state.startup_errors = startup_errors
     yield
 
@@ -210,9 +198,11 @@ async def system_info():
         "data_sources": [
             {"name": "Anthropic (Claude)", "configured": bool(settings.ANTHROPIC_API_KEY), "note": "LLM for all agents"},
             {"name": "FRED (Macro)", "configured": bool(settings.FRED_API_KEY), "note": "13 indicators, 1hr cache"},
-            {"name": "Massive (Market)", "configured": bool(settings.MASSIVE_API_KEY), "note": "Price, fundamentals, options, news"},
+            {"name": "Yahoo Finance", "configured": True, "note": "Price, fundamentals, options (no key)"},
+            {"name": "NewsAPI", "configured": bool(settings.NEWS_API_KEY), "note": "100/day, 30min cache"},
+            {"name": "Finnhub", "configured": bool(settings.FINNHUB_API_KEY), "note": "60/min, 15min cache"},
             {"name": "SEC EDGAR (sec-api.io)", "configured": bool(settings.SEC_API_KEY), "note": "Filings, insider trades, 13F"},
-            {"name": "Alpha Vantage", "configured": bool(settings.ALPHA_VANTAGE_KEY), "note": "Analyst targets + ratings (free, 25/day)"},
+            {"name": "Alpha Vantage", "configured": bool(settings.ALPHA_VANTAGE_KEY), "note": "25/day, 4hr cache"},
             {"name": "Firecrawl", "configured": bool(settings.FIRECRAWL_API_KEY), "note": "Web validation (optional)"},
         ],
         "auth": {
@@ -2518,21 +2508,6 @@ async def run_eod_snapshot(req: Request):
     return result
 
 
-@app.post("/api/price-tape/refresh")
-async def refresh_price_tape(req: Request):
-    """Refresh the daily price tape (one grouped Massive call -> Postgres).
-
-    Cron-callable (run once after market close). All pricing then reads the
-    persisted tape instead of the rate-limited Massive API. Idempotent: a
-    rerun for the same trading day is a no-op.
-    """
-    require_user_id(req)
-    from data import price_tape
-    n = await price_tape.refresh_tape(force=True)
-    from db.repositories import PriceTapeRepository
-    return {"rows_written": n, "tape_date": str(await PriceTapeRepository.latest_date())}
-
-
 @app.get("/api/portfolio/equity-curve")
 async def portfolio_equity_curve(req: Request, days: int = 90):
     """User-scoped equity curve time series for the portfolio chart.
@@ -2646,18 +2621,22 @@ async def portfolio_positions(req: Request):
         if t.opened_at and (not g.get("earliest_opened") or t.opened_at < g["earliest_opened"]):
             g["earliest_opened"] = t.opened_at
 
-    # Mark all positions from the persisted daily price tape (pure Postgres
-    # read — no Massive call at request time). One grouped call/day populates
-    # the tape; reads are free and survive rate limits, which is why the
-    # portfolio now marks reliably.
+    # Fetch current prices concurrently
     tickers = list({g["ticker"] for g in grouped.values()})
+
+    def _fetch_price(tk: str) -> tuple[str, float | None]:
+        try:
+            data = market_client.get_fundamentals(tk)
+            return tk, data.get("current_price")
+        except Exception as e:
+            logger.warning(f"Failed to fetch price for {tk}: {e}")
+            return tk, None
+
     prices: dict[str, float | None] = {}
     if tickers:
-        try:
-            from data import price_tape
-            prices = dict(await price_tape.aget_tape_prices(tickers) or {})
-        except Exception as e:
-            logger.warning(f"Failed to price positions from tape: {e}")
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for ticker, price in pool.map(_fetch_price, tickers):
+                prices[ticker] = price
 
     # Compute per-position metrics.
     # portfolio_base honors the user's onboarding/Settings value so the

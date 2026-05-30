@@ -16,8 +16,8 @@ langgraph==0.3.5
 # Data clients
 sec-api
 fredapi
-# Market data (Massive / api.massive.com — Polygon.io-compatible) is called via
-# REST through infra.http (httpx); no vendor SDK dependency is required.
+yfinance
+newsapi-python
 
 # Database
 sqlalchemy[asyncio]
