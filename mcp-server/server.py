@@ -118,6 +118,33 @@ def decompose_factors(
     })
 
 
+# ── Agent slate (async job, the probabilistic plane) ───────────────────────
+
+@mcp.tool()
+async def start_signal_slate(query: str, data: Optional[dict] = None) -> dict:
+    """Start a full agent research slate (async). The desk reasons over the
+    supplied data in provided-mode and never fetches market data. Returns a
+    job_id; poll it with get_signal_slate to retrieve the terminal SignalEnvelope."""
+    import asyncio
+
+    from jobs import create_job, run_agent_job
+
+    job_id = create_job(owner="mcp")
+    asyncio.create_task(run_agent_job(job_id, (query or "").strip(), data, "mcp"))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@mcp.tool()
+def get_signal_slate(job_id: str) -> dict:
+    """Fetch an agent slate's status and, when done, its terminal SignalEnvelope."""
+    from jobs import get_job, public_view
+
+    job = get_job(job_id)
+    if not job:
+        return {"error": {"code": "JOB_NOT_FOUND", "message": f"no job {job_id!r}", "request_id": "mcp"}}
+    return public_view(job)
+
+
 # ── ASGI app + shared auth/metering ────────────────────────────────────────
 
 def _build_app():

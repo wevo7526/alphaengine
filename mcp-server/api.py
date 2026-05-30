@@ -18,18 +18,23 @@ layer on in T9/T10 — this module is the tool surface.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime, timezone
+from typing import Optional
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from contracts import ApiError, SchemaInvalid, TOOL_INPUTS, guard_body_size, parse_input
+from contracts.errors import JobNotFound
+from contracts.inbound import guard_float_count
 from envelope.models import SCHEMA_VERSION
 from gateway import Identity, require_call, usage_for
+from jobs import create_job, get_job, public_view, run_agent_job
 from quant_core import (
     ENGINE_VERSION,
     compute_spread_signal,
@@ -149,3 +154,58 @@ async def run_tool(tool: str, request: Request, identity: Identity = Depends(req
         return JSONResponse(env.model_dump())
     except ApiError as e:
         return JSONResponse(e.to_dict(request_id), status_code=e.http_status)
+
+
+# ── Agent-job plane (T7) — async desk -> terminal SignalEnvelope ────────────
+
+class JobSubmit(BaseModel):
+    query: str
+    data: Optional[dict] = None  # provided-mode payload; never stored on the job
+
+
+@app.post("/v1/jobs")
+async def submit_job(payload: JobSubmit, request: Request, identity: Identity = Depends(require_call)):
+    """Submit an agent slate. Returns a job_id immediately; the desk runs in the
+    background, provided-mode (never fetches market data), and the terminal
+    SignalEnvelope lands on the job."""
+    request_id = _request_id(request)
+    query = (payload.query or "").strip()
+    if not query:
+        raise SchemaInvalid("query is required")
+    if payload.data is not None:
+        guard_float_count(payload.data)  # bound the inline provided payload
+    job_id = create_job(owner=identity.client_id)
+    asyncio.create_task(run_agent_job(job_id, query, payload.data, request_id))
+    return {"job_id": job_id, "status": "queued"}
+
+
+def _owned_job_or_404(job_id: str, identity: Identity) -> dict:
+    job = get_job(job_id)
+    if not job or job.get("owner") != identity.client_id:
+        raise JobNotFound(f"no job {job_id!r} for this client")
+    return job
+
+
+@app.get("/v1/jobs/{job_id}")
+async def job_status(job_id: str, request: Request, identity: Identity = Depends(require_call)):
+    return public_view(_owned_job_or_404(job_id, identity))
+
+
+@app.get("/v1/jobs/{job_id}/stream")
+async def job_stream(job_id: str, request: Request, identity: Identity = Depends(require_call)):
+    _owned_job_or_404(job_id, identity)  # authorize before streaming
+
+    async def gen():
+        last_status = None
+        for _ in range(900):  # ~15 min ceiling at 1s cadence
+            job = get_job(job_id)
+            if not job:
+                break
+            if job["status"] != last_status:
+                yield f"data: {json.dumps(public_view(job), default=str)}\n\n"
+                last_status = job["status"]
+            if job["status"] in ("done", "failed"):
+                break
+            await asyncio.sleep(1.0)
+
+    return StreamingResponse(gen(), media_type="text/event-stream")
