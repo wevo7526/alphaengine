@@ -494,19 +494,15 @@ async def _fetch_live_prices_for(tickers: list[str]) -> dict[str, float]:
     """
     if not tickers:
         return {}
-    from data import massive_client
+    from data import price_tape
     from config import settings as _px_settings
 
     _cap = int(getattr(_px_settings, "STRATEGIST_PRICING_CAP", 50))
     capped = list(dict.fromkeys((t or "").strip().upper() for t in tickers if t))[:_cap]
 
-    loop = asyncio.get_running_loop()
     try:
         _timeout = float(getattr(_px_settings, "PRICING_TIMEOUT_S", 30.0))
-        prices = await asyncio.wait_for(
-            loop.run_in_executor(None, massive_client.last_prices, capped),
-            timeout=_timeout,
-        )
+        prices = await asyncio.wait_for(price_tape.aget_tape_prices(capped), timeout=_timeout)
         return {tk: float(px) for tk, px in (prices or {}).items() if px and px > 0}
     except asyncio.TimeoutError:
         logger.warning("[orchestrator] live price prefetch timed out — Strategist runs without LIVE PRICES block")

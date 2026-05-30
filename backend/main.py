@@ -91,6 +91,18 @@ async def lifespan(app: FastAPI):
 
     asyncio.create_task(_prewarm_macro())
 
+    # Pre-populate the daily price tape (one grouped Massive call -> Postgres)
+    # so portfolio marks + pricing read from the DB, not the rate-limited API.
+    async def _prewarm_tape():
+        try:
+            from data import price_tape
+            n = await price_tape.refresh_tape()
+            logger.info("Price tape pre-warmed (%d tickers)", n)
+        except Exception as e:
+            logger.warning(f"Price tape pre-warm failed (non-fatal): {e}")
+
+    asyncio.create_task(_prewarm_tape())
+
     app.state.startup_errors = startup_errors
     yield
 
@@ -2506,6 +2518,21 @@ async def run_eod_snapshot(req: Request):
     return result
 
 
+@app.post("/api/price-tape/refresh")
+async def refresh_price_tape(req: Request):
+    """Refresh the daily price tape (one grouped Massive call -> Postgres).
+
+    Cron-callable (run once after market close). All pricing then reads the
+    persisted tape instead of the rate-limited Massive API. Idempotent: a
+    rerun for the same trading day is a no-op.
+    """
+    require_user_id(req)
+    from data import price_tape
+    n = await price_tape.refresh_tape(force=True)
+    from db.repositories import PriceTapeRepository
+    return {"rows_written": n, "tape_date": str(await PriceTapeRepository.latest_date())}
+
+
 @app.get("/api/portfolio/equity-curve")
 async def portfolio_equity_curve(req: Request, days: int = 90):
     """User-scoped equity curve time series for the portfolio chart.
@@ -2619,21 +2646,18 @@ async def portfolio_positions(req: Request):
         if t.opened_at and (not g.get("earliest_opened") or t.opened_at < g["earliest_opened"]):
             g["earliest_opened"] = t.opened_at
 
-    # Mark all positions in ONE Massive call via the grouped-daily tape
-    # (not get_fundamentals per ticker — that's ~4 calls each and gets dropped
-    # by the 5/min limiter, which is why the portfolio stopped marking).
+    # Mark all positions from the persisted daily price tape (pure Postgres
+    # read — no Massive call at request time). One grouped call/day populates
+    # the tape; reads are free and survive rate limits, which is why the
+    # portfolio now marks reliably.
     tickers = list({g["ticker"] for g in grouped.values()})
     prices: dict[str, float | None] = {}
     if tickers:
         try:
-            from data import massive_client
-            prices = dict(massive_client.last_prices(tickers) or {})
-            # Fallback only for names absent from the tape.
-            for tk in tickers:
-                if tk not in prices or not prices.get(tk):
-                    prices[tk] = massive_client.last_price(tk)
+            from data import price_tape
+            prices = dict(await price_tape.aget_tape_prices(tickers) or {})
         except Exception as e:
-            logger.warning(f"Failed to bulk-price positions: {e}")
+            logger.warning(f"Failed to price positions from tape: {e}")
 
     # Compute per-position metrics.
     # portfolio_base honors the user's onboarding/Settings value so the

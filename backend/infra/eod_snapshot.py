@@ -80,9 +80,14 @@ async def compute_eod_snapshot(
         logger.warning(f"eod_snapshot trades read failed for {user_id}: {e}")
         warnings.append(f"trades read failed: {e}")
 
-    # ── Fetch close prices ─────────────────────────────────────────
+    # ── Fetch close prices (from the persisted daily tape — DB read) ──
     tickers = list({t.ticker for t in open_trades if t.ticker})
-    prices = _batch_close_prices(tickers, warnings)
+    try:
+        from data import price_tape
+        prices = await price_tape.aget_tape_prices(tickers)
+    except Exception as e:
+        warnings.append(f"tape price read failed: {e}")
+        prices = {}
 
     # ── Per-position rollup ────────────────────────────────────────
     total_market_value = 0.0

@@ -231,6 +231,32 @@ class TrackRecordAnchor(Base):
     prev_anchor_hash = Column(String(64), nullable=True)  # chains the anchors themselves
 
 
+class DailyPriceTapeRecord(Base):
+    """Persisted daily price tape (Cost Discipline).
+
+    Massive's free tier is 5 req/min, so per-ticker pricing gets rate-limited
+    and the portfolio/screening came back empty. Instead we make ONE grouped
+    call per day (the whole US market's daily closes) and store it here; every
+    price read — portfolio marks, the orchestrator prefetch, EOD snapshots —
+    then reads Postgres, hitting Massive ~once/day total. Idempotent on
+    (ticker, trade_date): refreshing the same day overwrites.
+    """
+    __tablename__ = "daily_price_tape"
+
+    id = Column(String, primary_key=True, default=gen_uuid)
+    ticker = Column(String(20), nullable=False, index=True)
+    trade_date = Column(Date, nullable=False, index=True)
+    close = Column(Float)
+    volume = Column(Float)
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_price_tape_ticker_date", "ticker", "trade_date", unique=True),
+    )
+
+
 class ClaimEvidenceRecord(Base):
     """Join table — a claim in a memo cites one or more evidence rows.
 
