@@ -243,7 +243,7 @@ function StatusStrip() {
       <div className="max-w-[1280px] mx-auto px-6 py-20">
         <div className="text-center mb-14 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-4">
-            <span className="text-text-tertiary">///</span> A TYPICAL RUN
+            <span className="text-text-tertiary">///</span> THE MODEL
           </p>
           <h2 className="font-display text-[26px] sm:text-[32px] font-semibold tracking-[-0.01em] leading-[1.2]">
             A computation service, not a data vendor.
