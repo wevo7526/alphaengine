@@ -54,18 +54,23 @@ _RATE_LOCK = threading.Lock()
 _CALL_TIMES: deque[float] = deque()
 
 
-def _rate_limit() -> None:
+def _rate_limit() -> bool:
+    """Reserve a slot in the 5/min sliding window. NON-BLOCKING: returns True
+    if a slot was free (call may proceed), False if over budget (caller DROPS
+    the call and returns empty data).
+
+    We drop rather than sleep so a burst of calls can never block threads /
+    the event loop and freeze the server — degraded data beats a dead backend.
+    """
     limit = max(1, int(getattr(settings, "MASSIVE_RATE_PER_MIN", 5)))
-    while True:
-        with _RATE_LOCK:
-            now = time.monotonic()
-            while _CALL_TIMES and now - _CALL_TIMES[0] >= 60.0:
-                _CALL_TIMES.popleft()
-            if len(_CALL_TIMES) < limit:
-                _CALL_TIMES.append(now)
-                return
-            wait = 60.0 - (now - _CALL_TIMES[0]) + 0.05
-        time.sleep(min(max(wait, 0.05), 60.0))
+    with _RATE_LOCK:
+        now = time.monotonic()
+        while _CALL_TIMES and now - _CALL_TIMES[0] >= 60.0:
+            _CALL_TIMES.popleft()
+        if len(_CALL_TIMES) < limit:
+            _CALL_TIMES.append(now)
+            return True
+        return False
 
 # api.polygon.io is the same API and works with the same key; the Massive
 # host is the canonical one for this deployment.
@@ -116,10 +121,15 @@ def _get(path: str, *, params: dict | None = None, label: str = "massive"):
         logger.debug("MASSIVE_API_KEY not set — skipping %s", path)
         return None
 
+    if not _rate_limit():
+        # Over the 5/min budget — DROP the call (never block) so the server
+        # stays responsive. Caller translates None into its empty shape.
+        logger.warning("Massive rate budget exhausted — skipping %s", label)
+        return None
+
     p = dict(params or {})
     p["apiKey"] = settings.MASSIVE_API_KEY
     url = f"{_BASE_URL}{path}"
-    _rate_limit()  # block until a slot frees in the 5/min window
     try:
         return http_get_json(
             url,
