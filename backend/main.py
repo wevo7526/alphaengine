@@ -119,10 +119,15 @@ app.add_middleware(
     ),
 )
 
+# CORS: lock to explicit origins in production via CORS_ORIGINS (comma-sep).
+# Never pair wildcard origins with credentials (invalid + unsafe); credentials
+# are only enabled when explicit origins are configured. The API is bearer-token
+# based, so credentials mode is not required by the frontend.
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=bool(_cors_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -404,15 +409,27 @@ class AnalyzeRequest(BaseModel):
     parent_memo_id: str | None = None
 
 
-def _enforce_demo_run_cap(user_id: str) -> None:
-    """Cap anonymous Demo Desk model runs per UTC day. Real (Clerk) accounts
-    are never capped here; a demo identity over the cap gets a 429 pointing at
-    the free trial. See infra/demo_limits.py + mcp-server/docs/USER_STATES.md."""
+def _client_ip(req: Request) -> str | None:
+    """Best-effort client IP. Behind Railway/proxies the first X-Forwarded-For
+    hop is the real client; fall back to the socket peer."""
+    xff = req.headers.get("x-forwarded-for", "")
+    if xff:
+        return xff.split(",")[0].strip()
+    return req.client.host if req.client else None
+
+
+def _enforce_demo_run_cap(user_id: str, req: Request) -> None:
+    """Cap anonymous Demo Desk model runs per UTC day, keyed on BOTH the
+    client-generated demo id AND the client IP so rotating ids can't bypass it.
+    Real (Clerk) accounts are never capped here; a demo identity over the cap
+    gets a 429 pointing at the free trial. See infra/demo_limits.py."""
     from auth import is_demo_user
     if not is_demo_user(user_id):
         return
     from infra.demo_limits import consume_demo_run, DEMO_DAILY_RUN_LIMIT
-    if not consume_demo_run(user_id)["allowed"]:
+    ip = _client_ip(req)
+    keys = [user_id] + ([f"ip:{ip}"] if ip else [])
+    if not consume_demo_run(keys)["allowed"]:
         raise HTTPException(
             status_code=429,
             detail=(
@@ -428,7 +445,7 @@ async def analyze(request: AnalyzeRequest, req: Request):
     import traceback
     from agents.orchestrator import run_research_desk
     user_id = require_user_id(req)
-    _enforce_demo_run_cap(user_id)
+    _enforce_demo_run_cap(user_id, req)
 
     query = request.query.strip()
     query_id = _stable_query_id(query, user_id)
@@ -3054,7 +3071,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         IntelligenceMemo,
     )
     user_id = require_user_id(req)
-    _enforce_demo_run_cap(user_id)
+    _enforce_demo_run_cap(user_id, req)
 
     query = request.query.strip()
 

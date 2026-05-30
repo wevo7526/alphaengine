@@ -59,7 +59,9 @@ def _load_paid_keys() -> dict[str, str]:
 
 
 def resolve_identity(request: Request) -> Identity:
-    if _truthy(os.getenv("AUTH_STUB", "1")):
+    # Secure-by-default: AUTH_STUB must be explicitly enabled (local/dev). If the
+    # env var is unset in production, auth is ENFORCED, not bypassed.
+    if _truthy(os.getenv("AUTH_STUB", "0")):
         return Identity("local", "local")
 
     authz = request.headers.get("authorization", "")

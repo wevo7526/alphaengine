@@ -33,18 +33,32 @@ def demo_runs_used(demo_user_id: str) -> int:
         return _counts.get((demo_user_id, _today()), 0)
 
 
-def consume_demo_run(demo_user_id: str, limit: int = DEMO_DAILY_RUN_LIMIT) -> dict:
-    """
-    Try to consume one daily model run for a demo identity.
-
-    Returns {allowed, used, limit, remaining}. When not allowed, the caller
-    should 429 and point the user at a free trial. Only call this for demo
-    identities (auth.is_demo_user); real accounts are never capped here.
-    """
-    key = (demo_user_id, _today())
+def reset() -> None:
+    """Clear all demo-run counters (test helper)."""
     with _lock:
-        used = _counts.get(key, 0)
+        _counts.clear()
+
+
+def consume_demo_run(keys, limit: int = DEMO_DAILY_RUN_LIMIT) -> dict:
+    """
+    Try to consume one daily model run across ALL of `keys` (a str or a list).
+
+    Pass both the demo id and a client-IP key, e.g. ["demo:<id>", "ip:1.2.3.4"].
+    If ANY key is already at the limit, the run is denied and no counter is
+    incremented; otherwise every key is incremented. Capping on IP as well as
+    the client-generated demo id stops a visitor from rotating ids to get
+    unlimited free model runs. Real accounts are never passed here.
+
+    Returns {allowed, used, limit, remaining} where `used` is the max across keys.
+    """
+    if isinstance(keys, str):
+        keys = [keys]
+    day = _today()
+    with _lock:
+        used = max((_counts.get((k, day), 0) for k in keys), default=0)
         if used >= limit:
             return {"allowed": False, "used": used, "limit": limit, "remaining": 0}
-        _counts[key] = used + 1
-        return {"allowed": True, "used": used + 1, "limit": limit, "remaining": limit - (used + 1)}
+        for k in keys:
+            _counts[(k, day)] = _counts.get((k, day), 0) + 1
+        used += 1
+        return {"allowed": True, "used": used, "limit": limit, "remaining": limit - used}

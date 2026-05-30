@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from datetime import datetime, timezone
 from typing import Optional
@@ -92,6 +93,19 @@ def _run(tool: str, m) -> dict:
 
 
 app = FastAPI(title="AlphaEngine — deterministic API", version=SCHEMA_VERSION)
+
+# CORS for the browser dev-sandbox. Lock to explicit origins via CORS_ORIGINS in
+# production; bearer-token API, so credentials only with explicit origins.
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins or ["*"],
+    allow_credentials=bool(_cors_origins),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(ApiError)

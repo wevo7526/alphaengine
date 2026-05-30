@@ -4,8 +4,13 @@ the real Decision Gate (agents.desk5_decision_gate.compute_decision) and, later,
 the orchestrator. quant_core stays self-contained and never needs this.
 """
 
+import os
 import sys
 from pathlib import Path
+
+# Tests run with auth stubbed on (local). The production default is now OFF
+# (secure-by-default); test_gateway flips this per-test to exercise enforcement.
+os.environ.setdefault("AUTH_STUB", "1")
 
 _BACKEND = Path(__file__).resolve().parents[2] / "backend"
 if _BACKEND.is_dir() and str(_BACKEND) not in sys.path:
