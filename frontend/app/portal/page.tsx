@@ -100,23 +100,24 @@ function Stub({ label }: { label: string }) {
 // PILLAR 1 — DEV CONSOLE + SANDBOX
 // ────────────────────────────────────────────────────────────────────────
 function Console() {
+  const GW = process.env.NEXT_PUBLIC_GATEWAY_URL || "https://aemcp.up.railway.app";
   return (
     <div className="space-y-6">
       <Sandbox />
       <div className="grid lg:grid-cols-2 gap-6">
-        <Panel title="MCP · for your agent">
+        <Panel title="MCP · for your agent" note="generate a key above">
           <Pre>{`{
   "mcpServers": {
     "alphaengine": {
-      "url": "https://<your-gateway>/mcp/",
-      "headers": { "Authorization": "Bearer $ALPHAENGINE_KEY" }
+      "url": "${GW}/mcp/",
+      "headers": { "Authorization": "Bearer YOUR_KEY" }
     }
   }
 }`}</Pre>
         </Panel>
-        <Panel title="REST · for your bot">
-          <Pre>{`curl https://<your-gateway>/v1/tools/compute_var_cvar \\
-  -H "Authorization: Bearer $ALPHAENGINE_KEY" \\
+        <Panel title="REST · for your bot" note="generate a key above">
+          <Pre>{`curl ${GW}/v1/tools/compute_var_cvar \\
+  -H "Authorization: Bearer YOUR_KEY" \\
   -d '{ "portfolio_returns": [ ... ] }'`}</Pre>
         </Panel>
       </div>

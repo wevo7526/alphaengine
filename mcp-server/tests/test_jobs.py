@@ -18,10 +18,8 @@ client = TestClient(app)
 _MEMO = json.loads((Path(__file__).parent / "fixtures" / "sample_memo.json").read_text())
 
 
-async def _fake_desk(query, user_id, data):
-    # Inside run_agent_job the seam must be active (provided-mode).
-    from seam import is_provided_mode
-    assert is_provided_mode() is True
+async def _fake_desk(query, data):
+    # The desk runs on the backend (proxied); the gateway maps memo -> envelope.
     return dict(_MEMO)
 
 
@@ -38,7 +36,7 @@ def test_job_lifecycle_direct(monkeypatch):
 
 
 def test_failed_desk_marks_job_failed(monkeypatch):
-    async def _boom(query, user_id, data):
+    async def _boom(query, data):
         raise RuntimeError("desk exploded")
     monkeypatch.setattr(jobs, "_run_desk", _boom)
     job_id = jobs.create_job(owner="local")

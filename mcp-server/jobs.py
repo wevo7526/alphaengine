@@ -70,29 +70,38 @@ def _set(job_id: str, **fields) -> None:
             _JOBS[job_id].update(fields)
 
 
-async def _run_desk(query: str, user_id: str, data: dict) -> dict:
-    """Run the backend agent desk and return the memo as a dict.
+async def _run_desk(query: str, data: Optional[dict]) -> dict:
+    """Run the agent slate and return the memo as a dict.
 
-    Imported lazily so the gateway boots (deterministic + MCP planes) without
-    the backend/LLM stack. Tests monkeypatch this to return a canned memo.
+    Proxies to the backend desk (which has the LLM + data clients + the model
+    tiering), keeping the gateway image lean. Configured via GATEWAY_BACKEND_URL
+    + INTERNAL_API_SECRET. Tests monkeypatch this to return a canned memo.
     """
-    from agents.orchestrator import run_research_desk
+    import os
 
-    memo = await run_research_desk(query, user_id=user_id)
-    return memo.model_dump(mode="json") if hasattr(memo, "model_dump") else dict(memo)
+    import httpx
+
+    base = os.getenv("GATEWAY_BACKEND_URL")
+    secret = os.getenv("INTERNAL_API_SECRET")
+    if not base or not secret:
+        raise RuntimeError(
+            "agent slate unavailable: set GATEWAY_BACKEND_URL + INTERNAL_API_SECRET on the gateway"
+        )
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        r = await client.post(
+            f"{base.rstrip('/')}/api/internal/slate",
+            json={"query": query, "data": data},
+            headers={"X-Internal-Secret": secret},
+        )
+        r.raise_for_status()
+        return r.json()
 
 
 async def run_agent_job(job_id: str, query: str, data: Optional[dict], request_id: str) -> None:
-    """Background task: run the desk in provided-mode, store the terminal envelope."""
-    from seam import install_seam, provided_session
-
-    _set(job_id, status="running", phase="interpreting")
+    """Background task: run the slate, store the terminal SignalEnvelope."""
+    _set(job_id, status="running", phase="researching")
     try:
-        install_seam()
-        # guard_network=False: the LLM call needs egress. The seam's data-client
-        # wrappers still block any market-data fetch not present in `data`.
-        with provided_session(data or {}, guard_network=False):
-            memo = await _run_desk(query, user_id=f"job:{job_id}", data=data or {})
+        memo = await _run_desk(query, data)
         envelope = build_envelope_from_memo(
             memo, request_id=request_id, engine_version=ENGINE_VERSION, determinism="agent",
         )

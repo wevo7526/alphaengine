@@ -109,39 +109,69 @@ export function ApiKeys() {
   );
 }
 
-function RevealModal({ value, onClose }: { value: string; onClose: () => void }) {
+const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "https://aemcp.up.railway.app";
+
+function CopyBlock({ label, text }: { label: string; text: string }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     try {
-      await navigator.clipboard.writeText(value);
+      await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 1800);
     } catch {
-      /* clipboard blocked — user can select manually */
+      /* clipboard blocked */
     }
   };
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4" role="dialog" aria-modal="true">
-      <div className="w-full max-w-[520px] rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
+    <div className="rounded-sm border border-border-primary/60 bg-bg-primary/60 overflow-hidden">
+      <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between">
+        <span className="text-[9px] font-mono uppercase tracking-wider text-text-quaternary">{label}</span>
+        <button onClick={copy} className="text-[10px] font-mono tracking-[0.14em] text-text-tertiary hover:text-text-primary transition-colors">
+          {copied ? "COPIED" : "COPY"}
+        </button>
+      </div>
+      <pre className="px-3 py-2.5 text-[10.5px] leading-[1.55] font-mono text-text-tertiary overflow-x-auto whitespace-pre">{text}</pre>
+    </div>
+  );
+}
+
+function RevealModal({ value, onClose }: { value: string; onClose: () => void }) {
+  const mcpConfig = `{
+  "mcpServers": {
+    "alphaengine": {
+      "url": "${GATEWAY_URL}/mcp/",
+      "headers": { "Authorization": "Bearer ${value}" }
+    }
+  }
+}`;
+  const curl = `curl ${GATEWAY_URL}/v1/tools/compute_var_cvar \\
+  -H "Authorization: Bearer ${value}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"portfolio_returns": [/* your daily returns */]}'`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 px-4 py-8 overflow-y-auto" role="dialog" aria-modal="true">
+      <div className="w-full max-w-[560px] rounded-sm border border-border-primary bg-bg-surface overflow-hidden my-auto">
         <div className="px-5 py-3 border-b border-border-primary flex items-center justify-between">
           <span className="text-[10px] font-mono tracking-[0.18em] text-text-primary">YOUR NEW API KEY</span>
           <button onClick={onClose} className="text-text-quaternary hover:text-text-primary text-[14px]">✕</button>
         </div>
-        <div className="p-5">
-          <div className="rounded-sm border border-accent/40 bg-accent/[0.05] px-3 py-2.5 mb-4">
+        <div className="p-5 space-y-4">
+          <div className="rounded-sm border border-accent/40 bg-accent/[0.05] px-3 py-2.5">
             <p className="text-[11px] text-accent leading-relaxed">
               Copy this now. For your security it is shown <span className="font-semibold">only once</span> and cannot be retrieved again. If you lose it, regenerate.
             </p>
           </div>
-          <div className="flex items-stretch gap-2">
-            <code className="flex-1 min-w-0 font-mono text-[12px] text-text-primary bg-bg-primary/60 border border-border-primary/60 rounded-sm px-3 py-2.5 break-all">
-              {value}
-            </code>
-            <button onClick={copy} className="shrink-0 px-3 rounded-sm bg-white text-bg-primary text-[12px] font-semibold hover:bg-zinc-200 transition-colors">
-              {copied ? "Copied" : "Copy"}
-            </button>
+          <CopyBlock label="API KEY" text={value} />
+          <div>
+            <p className="text-[11px] text-text-secondary mb-2">Connect your agent (Claude Desktop / MCP client):</p>
+            <CopyBlock label="claude_desktop_config.json" text={mcpConfig} />
           </div>
-          <div className="mt-5 flex justify-end">
+          <div>
+            <p className="text-[11px] text-text-secondary mb-2">Or call it from your bot:</p>
+            <CopyBlock label="REST" text={curl} />
+          </div>
+          <div className="flex justify-end">
             <button onClick={onClose} className="px-4 py-2 rounded-sm border border-border-primary text-text-secondary text-[12px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors">
               Done
             </button>

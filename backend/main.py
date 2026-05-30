@@ -418,6 +418,25 @@ async def internal_verify_key(payload: _KeyVerify, req: Request):
     return {"valid": uid is not None, "user_id": uid}
 
 
+class _SlateRequest(BaseModel):
+    query: str
+    data: dict | None = None
+
+
+@app.post("/api/internal/slate")
+async def internal_slate(payload: _SlateRequest, req: Request):
+    """Internal: the gateway's agent-job plane proxies a slate here so the desk
+    runs where the LLM key + data clients already live (no Anthropic key on the
+    gateway). Secret-gated via X-Internal-Secret. Returns the memo as a dict;
+    the gateway maps it to a SignalEnvelope."""
+    secret = os.getenv("INTERNAL_API_SECRET")
+    if not secret or req.headers.get("x-internal-secret") != secret:
+        raise HTTPException(status_code=403, detail="forbidden")
+    from agents.orchestrator import run_research_desk
+    memo = await run_research_desk(payload.query.strip(), user_id="gateway")
+    return memo.model_dump(mode="json")
+
+
 # === USER RISK PROFILE — per-user overrides for risk gates ===
 
 @app.get("/api/me/risk")
