@@ -32,6 +32,13 @@ async function getAuthHeaders(): Promise<Record<string, string>> {
     } catch {
       // No auth available — requests work without it (backward compatible)
     }
+    // No Clerk session -> anonymous Demo Desk identity. Backend scopes state to
+    // demo:<id> and caps model runs at 2/day.
+    if (!headers["Authorization"]) {
+      const { getDemoId } = await import("@/lib/demo");
+      const did = getDemoId();
+      if (did) headers["X-Demo-Id"] = did;
+    }
   }
   return headers;
 }

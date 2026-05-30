@@ -404,12 +404,31 @@ class AnalyzeRequest(BaseModel):
     parent_memo_id: str | None = None
 
 
+def _enforce_demo_run_cap(user_id: str) -> None:
+    """Cap anonymous Demo Desk model runs per UTC day. Real (Clerk) accounts
+    are never capped here; a demo identity over the cap gets a 429 pointing at
+    the free trial. See infra/demo_limits.py + mcp-server/docs/USER_STATES.md."""
+    from auth import is_demo_user
+    if not is_demo_user(user_id):
+        return
+    from infra.demo_limits import consume_demo_run, DEMO_DAILY_RUN_LIMIT
+    if not consume_demo_run(user_id)["allowed"]:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Demo limit reached: {DEMO_DAILY_RUN_LIMIT} analysis runs per day. "
+                "Start a free trial in the Portal to run unlimited analyses on your own data."
+            ),
+        )
+
+
 @app.post("/api/analyze")
 async def analyze(request: AnalyzeRequest, req: Request):
     """Run the full research desk pipeline on a freeform query."""
     import traceback
     from agents.orchestrator import run_research_desk
     user_id = require_user_id(req)
+    _enforce_demo_run_cap(user_id)
 
     query = request.query.strip()
     query_id = _stable_query_id(query, user_id)
@@ -3035,6 +3054,7 @@ async def analyze_stream(request: AnalyzeRequest, req: Request):
         IntelligenceMemo,
     )
     user_id = require_user_id(req)
+    _enforce_demo_run_cap(user_id)
 
     query = request.query.strip()
 

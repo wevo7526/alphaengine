@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { api } from "@/lib/api";
+import { getDemoId } from "@/lib/demo";
 
 /**
  * Session + onboarding guard.
@@ -67,6 +68,17 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
     pathname.startsWith("/sign-up") ||
     pathname.startsWith("/sso-callback");
   const isOnboardingRoute = pathname.startsWith("/onboarding");
+  const isPortalRoute = pathname.startsWith("/portal");
+  // The demo desk (anything not public/portal/onboarding) is OPEN: anyone can
+  // use it with no login via an anonymous demo session. Only the portal
+  // (paying/trial) and the onboarding wizard require a Clerk account.
+  const isDeskRoute = !isPublicRoute && !isPortalRoute && !isOnboardingRoute;
+
+  // Ensure an anonymous demo identity exists on the open desk so API calls
+  // carry X-Demo-Id (isolated state + the server-side 2-runs/day cap).
+  useEffect(() => {
+    if (isDeskRoute) getDemoId();
+  }, [isDeskRoute]);
 
   // Fetch onboarding state once after sign-in.
   useEffect(() => {
@@ -111,15 +123,15 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
   }, [isLoaded, isSignedIn, onboardingChecked]);
 
   useEffect(() => {
-    // Public routes never redirect
-    if (isPublicRoute) return;
+    // Public marketing/legal/docs and the open demo desk never redirect.
+    if (isPublicRoute || isDeskRoute) return;
     if (!isLoaded) return;
 
-    // Unsigned-in users on protected routes bounce to landing
+    // Portal + onboarding require a Clerk account -> send to portal sign-up.
     if (!isSignedIn) {
       if (!redirectedRef.current) {
         redirectedRef.current = true;
-        router.replace("/");
+        router.replace("/sign-up?surface=portal");
       }
       return;
     }
@@ -127,14 +139,14 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
     // Wait for onboarding check to settle before any onboarding routing
     if (!onboardingChecked) return;
 
-    // Onboarded users hitting /onboarding go to dashboard
+    // Onboarded users hitting /onboarding go to the portal.
     if (isOnboardingRoute && isOnboarded) {
-      router.replace("/dashboard");
+      router.replace("/portal");
       return;
     }
 
-    // Unonboarded users on any other protected route bounce to /onboarding
-    if (!isOnboardingRoute && !isOnboarded) {
+    // Portal requires completed onboarding.
+    if (isPortalRoute && !isOnboarded) {
       router.replace("/onboarding");
       return;
     }
@@ -142,6 +154,8 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
     isLoaded,
     isSignedIn,
     isPublicRoute,
+    isDeskRoute,
+    isPortalRoute,
     isOnboardingRoute,
     onboardingChecked,
     isOnboarded,
@@ -149,31 +163,27 @@ export function SessionGuard({ children }: { children: React.ReactNode }) {
     router,
   ]);
 
-  // Public routes render their own content
-  if (isPublicRoute) return <>{children}</>;
+  // Public routes + the open demo desk render immediately (desk works for
+  // anonymous visitors via the demo session).
+  if (isPublicRoute || isDeskRoute) return <>{children}</>;
 
-  // Waiting for Clerk SDK to load — small branded spinner, not full-screen
+  // Below here is portal / onboarding only — Clerk required.
   if (!isLoaded) {
     return <BrandedLoader caption="Loading" />;
   }
-
-  // Not signed in — bounce in progress
   if (!isSignedIn) {
     return <BrandedLoader caption="Redirecting" />;
   }
-
   // Onboarding route: render the wizard immediately. The redirect-if-onboarded
   // check fires in the useEffect above and will navigate away if needed.
-  // This is the key fix — never block the onboarding UI on the profile API call.
   if (isOnboardingRoute) {
     return <>{children}</>;
   }
-
-  // Protected routes: gate on onboarding completeness
+  // Portal: gate on onboarding completeness.
   if (!onboardingChecked) {
     return <BrandedLoader caption="Loading workspace" />;
   }
-  if (!isOnboarded) {
+  if (isPortalRoute && !isOnboarded) {
     // Redirect already fired in useEffect; show a small loader while it lands
     return <BrandedLoader caption="Setting things up" />;
   }

@@ -14,6 +14,7 @@ Hardened auth layer:
 import jwt
 from jwt import PyJWKClient
 import logging
+import re
 import time
 from fastapi import Request, HTTPException
 
@@ -62,7 +63,42 @@ def _get_jwks_client() -> PyJWKClient | None:
         return None
 
 
+DEMO_PREFIX = "demo:"
+
+
+def is_demo_user(user_id: str | None) -> bool:
+    """True for anonymous demo-desk identities (no Clerk account)."""
+    return bool(user_id) and user_id.startswith(DEMO_PREFIX)
+
+
+def _demo_user_id(request: Request) -> str | None:
+    """
+    Anonymous demo identity from the X-Demo-Id header (a client-generated,
+    cookie-persisted id). This is how the Demo Desk works without a Google
+    login: each visitor gets an isolated, per-id workspace on the eval/sample
+    plane. Model runs are capped server-side (see infra.demo_limits). No Clerk
+    account, no PII.
+    """
+    if request is None:
+        return None
+    raw = request.headers.get("X-Demo-Id", "")
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "", raw)[:64]
+    return f"{DEMO_PREFIX}{safe}" if safe else None
+
+
 def get_user_id(request: Request) -> str | None:
+    """
+    Resolve the caller's identity. A valid Clerk JWT (portal / paying user)
+    wins; otherwise fall back to an anonymous demo identity from X-Demo-Id
+    (the open Demo Desk). Returns None when neither is present.
+    """
+    uid = _clerk_user_id(request)
+    if uid:
+        return uid
+    return _demo_user_id(request)
+
+
+def _clerk_user_id(request: Request) -> str | None:
     """
     Extract user_id from Clerk JWT in Authorization header.
     Returns None if no valid token.

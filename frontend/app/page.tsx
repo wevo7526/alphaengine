@@ -79,14 +79,7 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
       <div className="relative z-10 max-w-[1280px] mx-auto px-6 w-full py-24">
         <div className="grid lg:grid-cols-[1.02fr_1fr] gap-14 items-center">
           <div className="max-w-xl">
-            <div className="inline-flex items-center gap-2 mb-9 text-[10px] font-mono tracking-[0.22em] text-text-quaternary">
-              <span className="text-text-tertiary">///</span>
-              <span>SIGNAL INFRASTRUCTURE</span>
-              <span className="w-1 h-1 rounded-full bg-text-quaternary" />
-              <span className="text-text-tertiary">MCP-NATIVE · BETA</span>
-            </div>
-
-            <h1 className="font-display text-[36px] sm:text-[46px] lg:text-[52px] font-semibold tracking-[-0.01em] leading-[1.07] mb-8">
+            <h1 className="font-display text-[36px] sm:text-[46px] lg:text-[52px] font-semibold tracking-[-0.01em] leading-[1.07] mb-8 mt-2">
               The signal layer between
               <br />
               your data and your algo.

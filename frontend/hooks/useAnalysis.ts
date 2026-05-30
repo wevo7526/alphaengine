@@ -233,6 +233,15 @@ export function useAnalysis() {
             if (token) headers["Authorization"] = `Bearer ${token}`;
           }
         } catch { /* no auth */ }
+        // Anonymous Demo Desk: no Clerk session -> send the demo identity so the
+        // backend scopes state + applies the 2-runs/day cap.
+        if (!headers["Authorization"]) {
+          try {
+            const { getDemoId } = await import("@/lib/demo");
+            const did = getDemoId();
+            if (did) headers["X-Demo-Id"] = did;
+          } catch { /* ignore */ }
+        }
 
         const body = parent_memo_id ? { query, parent_memo_id } : { query };
         const response = await fetch(streamUrl, {
