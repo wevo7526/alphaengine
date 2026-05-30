@@ -437,10 +437,10 @@ export default function HomePage() {
             </p>
           ) : series ? (
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-              <MacroChart title="Yield Curve (10Y-2Y)" data={series.yield_curve} color="#3b82f6" unit="%" />
-              <MacroChart title="VIX" data={series.vix} color="#ef4444" invertColor />
-              <MacroChart title="HY Credit Spreads" data={series.credit_spreads} color="#f59e0b" unit="%" invertColor />
-              <MacroChart title="Fed Funds Rate" data={series.fed_funds} color="#8b5cf6" unit="%" />
+              <MacroChart title="Yield Curve (10Y-2Y)" data={series.yield_curve} color="#a1a1aa" unit="%" />
+              <MacroChart title="VIX" data={series.vix} color="#a1a1aa" invertColor />
+              <MacroChart title="HY Credit Spreads" data={series.credit_spreads} color="#a1a1aa" unit="%" invertColor />
+              <MacroChart title="Fed Funds Rate" data={series.fed_funds} color="#a1a1aa" unit="%" />
             </div>
           ) : null}
         </TerminalPanel>
