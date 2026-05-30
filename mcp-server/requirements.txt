@@ -1,0 +1,21 @@
+# AlphaEngine gateway (mcp-server) — pinned for determinism on the algo plane.
+#
+# The numeric stack is pinned EXACTLY to the versions the golden-output fixtures
+# were frozen against (see docs/INVENTORY.md §5). A minor bump can change a
+# regression tail and therefore a signal — CI runs the golden tests to catch
+# drift. Do not loosen these without re-freezing the fixtures.
+
+# --- numeric core (EXACT pins — determinism contract) ---
+numpy==2.2.6
+scipy==1.15.3
+statsmodels==0.14.6
+scikit-learn==1.7.2
+pandas==2.3.3
+hmmlearn==0.3.3
+
+# --- gateway / surfaces (added as T3+ land) ---
+pydantic>=2,<3
+# fastapi / uvicorn / mcp pinned when api.py + server.py arrive (T6–T8)
+
+# --- tests ---
+pytest>=8,<9
