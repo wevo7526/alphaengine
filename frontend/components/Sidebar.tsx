@@ -159,6 +159,7 @@ export function Sidebar() {
   // Hide sidebar on full-screen routes. MainContent.tsx mirrors this list.
   if (
     pathname === "/" ||
+    pathname.startsWith("/docs") ||
     pathname.startsWith("/sign-in") ||
     pathname.startsWith("/sign-up") ||
     pathname.startsWith("/sso-callback") ||

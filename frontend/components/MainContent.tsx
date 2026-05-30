@@ -9,6 +9,7 @@ export function MainContent({ children }: { children: React.ReactNode }) {
   // get the sidebar margin.
   const isFullScreen =
     pathname === "/" ||
+    pathname.startsWith("/docs") ||
     pathname.startsWith("/sign-in") ||
     pathname.startsWith("/sign-up") ||
     pathname.startsWith("/sso-callback") ||

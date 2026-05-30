@@ -9,9 +9,21 @@ import { api } from "@/lib/api";
 type Role = "pm" | "analyst" | "allocator" | "other";
 type Mandate = "long_only" | "long_short" | "market_neutral" | "macro" | "multi_strat";
 type Benchmark = "SPY" | "QQQ" | "IWM" | "ACWI";
+type Usage = "algo" | "desk" | "both";
 
-const STEPS = ["role", "portfolio", "mandate", "done"] as const;
+const STEPS = ["usage", "role", "portfolio", "mandate", "done"] as const;
 type Step = (typeof STEPS)[number];
+
+// Integration branch (MARKETING_STRATEGY.md §4). Stored client-side only for
+// now — it tailors the onboarding copy and the "what's next" path. Actual MCP
+// key provisioning lands with the gateway build (server steps T9/T12); until
+// then the wire-in path points at /docs.
+const USAGE_CACHE_KEY = "alphaengine:usage_mode";
+const USAGES: { value: Usage; label: string; desc: string }[] = [
+  { value: "algo", label: "Wire it into my algo", desc: "Call the engine over MCP / REST and route signals into execution." },
+  { value: "desk", label: "Use the desk", desc: "Run the agent desk in the browser and read the cited memo." },
+  { value: "both", label: "Both", desc: "Research in the desk, then wire the validated signal into my bot." },
+];
 
 const ROLES: { value: Role; label: string; desc: string }[] = [
   { value: "pm", label: "Portfolio Manager", desc: "Run a book, take positions." },
@@ -46,7 +58,8 @@ export default function OnboardingPage() {
   const router = useRouter();
   const { user, isLoaded } = useUser();
 
-  const [step, setStep] = useState<Step>("role");
+  const [step, setStep] = useState<Step>("usage");
+  const [usage, setUsage] = useState<Usage | null>(null);
   const [role, setRole] = useState<Role | null>(null);
   const [portfolioSize, setPortfolioSize] = useState<number>(1_000_000);
   const [mandate, setMandate] = useState<Mandate>("long_short");
@@ -96,6 +109,17 @@ export default function OnboardingPage() {
     if (i > 0) goTo(STEPS[i - 1]);
   };
 
+  const handleUsageNext = () => {
+    if (!usage) return;
+    // Client-side only for now — surfaced to the dashboard / connect flow once
+    // key provisioning ships. Does not hit the profile API.
+    try {
+      if (typeof window !== "undefined") window.localStorage.setItem(USAGE_CACHE_KEY, usage);
+    } catch {
+      /* ignore */
+    }
+    next();
+  };
   const handleRoleNext = () => {
     if (!role) return;
     savePartial({ role });
@@ -218,6 +242,26 @@ export default function OnboardingPage() {
 
           {/* Step content with fresh entrance animation via stepKey */}
           <div key={stepKey} className="flex-1">
+            {step === "usage" && (
+              <StepFrame
+                eyebrow="How you'll use it"
+                title={`Welcome${greetingName ? `, ${greetingName}` : ""}.`}
+                subtitle="How will you use Alpha Engine? This sets up your first path — wire the engine into your own algo, work in the desk, or both."
+              >
+                <div className="space-y-2">
+                  {USAGES.map((u) => (
+                    <SelectCard
+                      key={u.value}
+                      active={usage === u.value}
+                      onClick={() => setUsage(u.value)}
+                      title={u.label}
+                      desc={u.desc}
+                    />
+                  ))}
+                </div>
+              </StepFrame>
+            )}
+
             {step === "role" && (
               <StepFrame
                 eyebrow="About you"
@@ -340,6 +384,7 @@ export default function OnboardingPage() {
             {step === "done" && (
               <DoneReveal
                 greetingName={greetingName}
+                usage={usage}
                 role={role}
                 portfolioSize={portfolioSize}
                 mandate={mandate}
@@ -350,7 +395,7 @@ export default function OnboardingPage() {
 
           {/* Footer actions */}
           <div className="mt-10 flex items-center justify-between">
-            {step !== "role" && step !== "done" ? (
+            {step !== "usage" && step !== "done" ? (
               <button
                 onClick={back}
                 disabled={submitting}
@@ -362,6 +407,15 @@ export default function OnboardingPage() {
               <span />
             )}
 
+            {step === "usage" && (
+              <button
+                onClick={handleUsageNext}
+                disabled={!usage}
+                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                Continue →
+              </button>
+            )}
             {step === "role" && (
               <button
                 onClick={handleRoleNext}
@@ -497,12 +551,14 @@ function SelectCard({
  */
 function DoneReveal({
   greetingName,
+  usage,
   role,
   portfolioSize,
   mandate,
   benchmark,
 }: {
   greetingName?: string;
+  usage: Usage | null;
   role: Role | null;
   portfolioSize: number;
   mandate: Mandate;
@@ -511,6 +567,7 @@ function DoneReveal({
   const roleLabel = ROLES.find((r) => r.value === role)?.label || "—";
   const mandateLabel = MANDATES.find((m) => m.value === mandate)?.label || "—";
   const benchmarkLabel = BENCHMARKS.find((b) => b.value === benchmark)?.label || "—";
+  const wantsWireIn = usage === "algo" || usage === "both";
   return (
     <div>
       <div className="fade-up-1">
@@ -558,6 +615,19 @@ function DoneReveal({
           </div>
         ))}
       </div>
+
+      {wantsWireIn && (
+        <Link
+          href="/docs"
+          className="mt-4 block rounded-sm border border-accent/40 bg-accent/[0.06] px-4 py-3.5 fade-up-3 hover:border-accent transition-colors"
+        >
+          <p className="text-[10px] font-mono tracking-[0.18em] text-accent mb-1">WIRE IT INTO YOUR ALGO</p>
+          <p className="text-[12px] text-text-secondary leading-snug">
+            Your first call — connect over MCP or REST and get a SignalEnvelope back.
+            Read the quickstart →
+          </p>
+        </Link>
+      )}
     </div>
   );
 }
