@@ -433,7 +433,12 @@ async def internal_slate(payload: _SlateRequest, req: Request):
     if not secret or req.headers.get("x-internal-secret") != secret:
         raise HTTPException(status_code=403, detail="forbidden")
     from agents.orchestrator import run_research_desk
-    memo = await run_research_desk(payload.query.strip(), user_id="gateway")
+    from infra.provided_data import install_provided_mode, provided_session
+    # Run the FULL 5-agent desk, but in provided-mode: it reasons over the
+    # caller's supplied data and is blocked from fetching any commercial data.
+    install_provided_mode()
+    with provided_session(payload.data or {}):
+        memo = await run_research_desk(payload.query.strip(), user_id="gateway")
     return memo.model_dump(mode="json")
 
 
