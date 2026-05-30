@@ -22,12 +22,13 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from contracts import ApiError, SchemaInvalid, TOOL_INPUTS, guard_body_size, parse_input
 from envelope.models import SCHEMA_VERSION
+from gateway import Identity, require_call, usage_for
 from quant_core import (
     ENGINE_VERSION,
     compute_spread_signal,
@@ -87,6 +88,12 @@ def _run(tool: str, m) -> dict:
 app = FastAPI(title="AlphaEngine — deterministic API", version=SCHEMA_VERSION)
 
 
+@app.exception_handler(ApiError)
+async def _api_error_handler(request: Request, exc: ApiError):
+    # Catches typed errors raised in dependencies (auth/metering) and bodies.
+    return JSONResponse(exc.to_dict(_request_id(request)), status_code=exc.http_status)
+
+
 @app.get("/v1/health")
 async def health():
     return {"status": "ok", "schema_version": SCHEMA_VERSION, "engine_version": ENGINE_VERSION}
@@ -101,8 +108,14 @@ async def version():
     }
 
 
+@app.get("/v1/usage")
+async def usage(request: Request, identity: Identity = Depends(require_call)):
+    # Stateless usage snapshot for this caller — counts only, never payloads.
+    return usage_for(identity.client_id)
+
+
 @app.post("/v1/tools/{tool}")
-async def run_tool(tool: str, request: Request):
+async def run_tool(tool: str, request: Request, identity: Identity = Depends(require_call)):
     request_id = _request_id(request)
     try:
         if tool not in TOOL_INPUTS:
