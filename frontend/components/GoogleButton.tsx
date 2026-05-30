@@ -55,9 +55,11 @@ function SignInGoogleButton({ label }: { label?: string }) {
     setError(null);
     setLoading(true);
     try {
+      const surface = surfaceFromUrl();
       const result = await signIn.sso({
         strategy: "oauth_google",
-        redirectUrl: absoluteUrl("/dashboard"),
+        // Portal sign-in lands on the portal; demo / default lands on the desk.
+        redirectUrl: absoluteUrl(surface === "portal" ? "/portal" : "/dashboard"),
         redirectCallbackUrl: absoluteUrl("/sso-callback"),
       });
       const errMsg = extractError(result?.error);
@@ -98,9 +100,12 @@ function SignUpGoogleButton({ label }: { label?: string }) {
     setError(null);
     setLoading(true);
     try {
+      const surface = surfaceFromUrl();
       const result = await signUp.sso({
         strategy: "oauth_google",
-        redirectUrl: absoluteUrl("/onboarding"),
+        // Carry the surface intent into onboarding so it sets entitlement +
+        // the right post-onboarding destination (portal vs demo desk).
+        redirectUrl: absoluteUrl(surface ? `/onboarding?surface=${surface}` : "/onboarding"),
         redirectCallbackUrl: absoluteUrl("/sso-callback"),
       });
       const errMsg = extractError(result?.error);
@@ -129,6 +134,13 @@ function SignUpGoogleButton({ label }: { label?: string }) {
 function absoluteUrl(path: string): string {
   if (typeof window === "undefined") return path;
   return window.location.origin + path;
+}
+
+/** Read the demo|portal surface intent from the current URL (?surface=...). */
+function surfaceFromUrl(): "demo" | "portal" | null {
+  if (typeof window === "undefined") return null;
+  const v = new URLSearchParams(window.location.search).get("surface");
+  return v === "portal" || v === "demo" ? v : null;
 }
 
 function extractError(err: unknown): string | null {

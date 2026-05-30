@@ -6,31 +6,25 @@ import { useUser } from "@clerk/nextjs";
 import { sampleMemo } from "@/lib/sampleEnvelope";
 
 /**
- * Marketing landing page — repositioned from "engine + memo" to
- * "infrastructure + algo-ready signal".
+ * Marketing landing. Anchor: "The signal layer between your data and your algo."
+ * Two front doors over one engine; demo (eval) vs portal (paid) funnel.
+ * See mcp-server/docs/MARKETING_STRATEGY.md, ACCESS_TIERS.md, USER_STATES.md.
  *
- * Anchor: "The signal layer between your data and your algo."
- * Lead with two things only — it plugs into your algo, and it tells you when
- * it's noise. The stateless / no-data story is the trust close, not the
- * headline. See mcp-server/docs/MARKETING_STRATEGY.md §4.
- *
- * Layout philosophy (unchanged — institutional restraint):
- *   - Single-column dominant flow. Sections stack, they do not interlock.
- *   - One focused idea per section. Generous vertical breathing room.
- *   - Single repeated primary CTA, plus a secondary "desk" door.
+ * Copy rule: zero em dashes anywhere on this page.
+ * CTA ladder: hero "Try the demo" -> /demo, "Read the docs" -> /docs;
+ * "Explore the demo desk" -> demo login; "Start building" -> portal trial.
  */
 export default function LandingPage() {
   const { isSignedIn } = useUser();
-
   return (
     <div className="min-h-screen bg-bg-primary text-text-primary flex flex-col relative overflow-hidden">
       <TopNav isSignedIn={!!isSignedIn} />
       <Hero isSignedIn={!!isSignedIn} />
       <TaglineStrip />
-      <StatusStrip />
+      <TheModel />
       <HowItWorks />
       <ProductShowcase />
-      <IntelligenceLayer />
+      <Pipeline />
       <SourceLedger />
       <Pricing />
       <ClosingCTA isSignedIn={!!isSignedIn} />
@@ -39,9 +33,12 @@ export default function LandingPage() {
   );
 }
 
+// ── shared CTA targets ───────────────────────────────────────────────────
+const PORTAL_SIGNUP = "/sign-up?surface=portal";
+const DEMO_LOGIN = "/sign-in?surface=demo";
+
 // ────────────────────────────────────────────────────────────────────────
-// TOP NAV — new IA: PRODUCT · HOW IT WORKS · DOCS · TRUST · PRICING.
-// A docs link is a credibility signal for infra buyers.
+// TOP NAV
 // ────────────────────────────────────────────────────────────────────────
 function TopNav({ isSignedIn }: { isSignedIn: boolean }) {
   return (
@@ -59,26 +56,17 @@ function TopNav({ isSignedIn }: { isSignedIn: boolean }) {
         </nav>
         <div className="flex items-center gap-3">
           <Link
-            href="/docs"
+            href="/demo"
             className="hidden sm:inline-block px-3 py-1.5 rounded-sm border border-border-primary text-[12px] font-semibold tracking-tight text-text-secondary hover:text-text-primary hover:border-zinc-700 transition-colors"
           >
-            Connect the MCP
+            Try the demo
           </Link>
-          {isSignedIn ? (
-            <Link
-              href="/dashboard"
-              className="px-3.5 py-1.5 rounded-sm bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
-            >
-              Go to dashboard
-            </Link>
-          ) : (
-            <Link
-              href="/sign-up"
-              className="px-3.5 py-1.5 rounded-sm bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
-            >
-              Get started
-            </Link>
-          )}
+          <Link
+            href={isSignedIn ? "/portal" : PORTAL_SIGNUP}
+            className="px-3.5 py-1.5 rounded-sm bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
+          >
+            {isSignedIn ? "Open portal" : "Start building"}
+          </Link>
         </div>
       </div>
     </header>
@@ -86,18 +74,14 @@ function TopNav({ isSignedIn }: { isSignedIn: boolean }) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// HERO — the anchor headline + infra sub-copy, and the highest-leverage
-// visual on the page: one artifact that flips between the human memo and the
-// machine-readable SignalEnvelope. Same result, two formats.
+// HERO
 // ────────────────────────────────────────────────────────────────────────
 function Hero({ isSignedIn }: { isSignedIn: boolean }) {
   return (
     <section className="relative isolate min-h-[80vh] flex flex-col justify-center overflow-hidden border-b border-border-primary/60">
       <div className="absolute inset-0 grid-bg opacity-[0.10]" aria-hidden="true" />
-
       <div className="relative z-10 max-w-[1280px] mx-auto px-6 w-full py-24">
         <div className="grid lg:grid-cols-[1.02fr_1fr] gap-14 items-center">
-          {/* Left — positioning + the two doors */}
           <div className="max-w-xl">
             <div className="inline-flex items-center gap-2 mb-9 text-[10px] font-mono tracking-[0.22em] text-text-quaternary">
               <span className="text-text-tertiary">///</span>
@@ -115,39 +99,32 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
             <p className="text-[16px] text-text-secondary leading-relaxed mb-10 max-w-md">
               A stateless engine you run on your own licensed data. It computes the
               math, checks for overfitting, and returns cited, risk-gated,
-              algo-ready signals — over MCP for your agent or a direct API for your
+              algo-ready signals. Over MCP for your agent or a direct API for your
               bot. Nothing sourced. Nothing stored.
             </p>
 
-            <div className="flex items-center gap-4 flex-wrap mb-10">
+            <div className="flex items-center gap-4 flex-wrap mb-5">
+              <Link
+                href="/demo"
+                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
+              >
+                Try the demo
+              </Link>
               <Link
                 href="/docs"
-                className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
+                className="px-5 py-2.5 rounded-sm border border-border-primary text-text-secondary text-[13px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors"
               >
                 Read the docs
               </Link>
-              <Link
-                href={isSignedIn ? "/dashboard" : "/sign-up"}
-                className="px-5 py-2.5 rounded-sm border border-border-primary text-text-secondary text-[13px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors"
-              >
-                {isSignedIn ? "Open the desk" : "Open the desk"}
+            </div>
+            <p className="text-[12px] text-text-quaternary">
+              No signup for the demo.{" "}
+              <Link href={isSignedIn ? "/portal" : PORTAL_SIGNUP} className="text-text-tertiary hover:text-text-primary underline underline-offset-4 decoration-border-primary transition-colors">
+                Start building with your API key
               </Link>
-            </div>
-
-            {/* The ask — a plain-English query */}
-            <div className="rounded-sm border border-border-primary bg-bg-surface/40 overflow-hidden">
-              <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center gap-2 text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-                <span>YOUR CALL</span>
-                <span className="ml-auto">MCP · REST · DESK</span>
-              </div>
-              <div className="px-4 py-3 font-mono text-[12px] text-text-secondary leading-relaxed">
-                <span className="text-text-tertiary">{">"}</span> under-covered mid-cap
-                industrials that can beat the S&amp;P<span className="terminal-cursor text-text-tertiary" />
-              </div>
-            </div>
+            </p>
           </div>
 
-          {/* Right — the proof artifact: memo ⇄ envelope */}
           <SplitArtifact />
         </div>
       </div>
@@ -155,67 +132,40 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
   );
 }
 
-// The single most important visual: the SAME result shown two ways. A
-// segmented control flips one card between the human memo and the
-// machine-readable SignalEnvelope JSON. Caption nails the thesis.
+// The proof artifact: one result, two formats (memo vs envelope JSON).
 function SplitArtifact() {
   const [view, setView] = useState<"memo" | "json">("memo");
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">
-          ONE RESULT · TWO FORMATS
-        </span>
+        <span className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">ONE RESULT · TWO FORMATS</span>
         <div className="inline-flex rounded-sm border border-border-primary overflow-hidden text-[10px] font-mono tracking-[0.14em]">
-          <button
-            onClick={() => setView("memo")}
-            className={`px-3 py-1 transition-colors ${
-              view === "memo" ? "bg-bg-elevated text-text-primary" : "text-text-quaternary hover:text-text-secondary"
-            }`}
-          >
-            MEMO
-          </button>
-          <button
-            onClick={() => setView("json")}
-            className={`px-3 py-1 border-l border-border-primary transition-colors ${
-              view === "json" ? "bg-bg-elevated text-text-primary" : "text-text-quaternary hover:text-text-secondary"
-            }`}
-          >
-            JSON
-          </button>
+          <button onClick={() => setView("memo")} className={`px-3 py-1 transition-colors ${view === "memo" ? "bg-bg-elevated text-text-primary" : "text-text-quaternary hover:text-text-secondary"}`}>MEMO</button>
+          <button onClick={() => setView("json")} className={`px-3 py-1 border-l border-border-primary transition-colors ${view === "json" ? "bg-bg-elevated text-text-primary" : "text-text-quaternary hover:text-text-secondary"}`}>JSON</button>
         </div>
       </div>
-
       {view === "memo" ? <MemoTearsheet /> : <EnvelopeTearsheet />}
-
       <p className="mt-3 text-[11px] text-text-quaternary leading-relaxed">
         Human-readable for your desk. Machine-readable for your algo.{" "}
         <span className="text-text-tertiary">Same result, same receipts.</span>
       </p>
+      <p className="mt-1 text-[10px] text-text-quaternary/80">Illustrative sample. Not investment advice.</p>
     </div>
   );
 }
 
-// Dense, flat memo tearsheet — the human view.
 function MemoTearsheet() {
   return (
     <div className="rounded-sm border border-border-primary bg-bg-surface overflow-hidden text-text-secondary">
       <div className="px-4 py-2.5 border-b border-border-primary flex items-center justify-between">
         <span className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">INTELLIGENCE MEMO</span>
-        <span className="text-[10px] font-mono tracking-[0.18em] px-2 py-0.5 border border-border-primary rounded-sm text-text-primary">
-          {sampleMemo.decision}
-        </span>
+        <span className="text-[10px] font-mono tracking-[0.18em] px-2 py-0.5 border border-border-primary rounded-sm text-text-primary">{sampleMemo.decision}</span>
       </div>
       <div className="px-4 pt-3.5 pb-3 border-b border-border-primary/60">
         <p className="font-display text-[15px] text-text-primary leading-snug">{sampleMemo.title}</p>
       </div>
       <div className="grid grid-cols-4 divide-x divide-border-primary/60 border-b border-border-primary/60">
-        {[
-          ["CONVICTION", String(sampleMemo.conviction)],
-          ["REGIME", sampleMemo.regime],
-          ["RISK", sampleMemo.risk],
-          ["NAMES", String(sampleMemo.rows.length)],
-        ].map(([k, v]) => (
+        {[["CONVICTION", String(sampleMemo.conviction)], ["REGIME", sampleMemo.regime], ["RISK", sampleMemo.risk], ["NAMES", String(sampleMemo.rows.length)]].map(([k, v]) => (
           <div key={k} className="px-3 py-2.5">
             <p className="text-[8px] font-mono tracking-[0.18em] text-text-quaternary mb-1">{k}</p>
             <p className="text-[11px] font-mono text-text-primary truncate">{v}</p>
@@ -228,29 +178,19 @@ function MemoTearsheet() {
         </div>
         {sampleMemo.rows.map((r) => (
           <div key={r.t} className="grid grid-cols-[1.2fr_0.8fr_0.6fr_1fr_1fr_1fr] gap-2 text-[11px] font-mono py-1 tabular-nums">
-            <span className="text-text-primary">{r.t}</span>
-            <span className="text-text-tertiary">{r.d}</span>
-            <span className="text-text-secondary">{r.c}</span>
-            <span className="text-text-tertiary">{r.e}</span>
-            <span className="text-text-tertiary">{r.s}</span>
-            <span className="text-text-tertiary">{r.p}</span>
+            <span className="text-text-primary">{r.t}</span><span className="text-text-tertiary">{r.d}</span><span className="text-text-secondary">{r.c}</span><span className="text-text-tertiary">{r.e}</span><span className="text-text-tertiary">{r.s}</span><span className="text-text-tertiary">{r.p}</span>
           </div>
         ))}
       </div>
       <div className="px-4 py-2.5 flex items-center gap-3 bg-bg-elevated/40">
         <span className="text-[10px] font-mono tracking-[0.16em] text-text-primary">✓ VERIFIED</span>
         <span className="text-[10px] font-mono tracking-[0.16em] text-text-quaternary">{sampleMemo.sources} sources</span>
-        <span className="ml-auto text-[10px] font-mono tracking-[0.16em] text-text-quaternary">
-          deflated&nbsp;SR&nbsp;{sampleMemo.deflated_sharpe}
-        </span>
+        <span className="ml-auto text-[10px] font-mono tracking-[0.16em] text-text-quaternary">deflated&nbsp;SR&nbsp;{sampleMemo.deflated_sharpe}</span>
       </div>
     </div>
   );
 }
 
-// The machine view of the SAME result — a focused SignalEnvelope excerpt.
-// Hand-rendered (not parsed) so the coloring is exact and the structure reads
-// as the real contract. Full envelope lives on /docs.
 function EnvelopeTearsheet() {
   return (
     <div className="rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
@@ -270,41 +210,29 @@ function EnvelopeTearsheet() {
         <Ln i={3}><K>"deflated_sharpe"</K>: <N>0.91</N>, <K>"pbo"</K>: <N>0.18</N>,</Ln>
         <Ln i={3}><K>"verdict"</K>: <V>"edge"</V></Ln>
         <Ln i={2}>{"}"},</Ln>
-        <Ln i={2}><K>"risk"</K>: {"{"} <K>"var"</K>: <N>0.021</N>, <K>"gate"</K>: <V>"pass"</V> {"}"},</Ln>
-        <Ln i={2}><K>"provenance"</K>: [{"{"} <K>"field"</K>: <S>"validation.deflated_sharpe"</S>, … {"}"}]</Ln>
+        <Ln i={2}><K>"risk"</K>: {"{"} <K>"var"</K>: <N>0.021</N>, <K>"gate"</K>: <V>"pass"</V> {"}"}</Ln>
         <Ln i={1}>{"}"}]</Ln>
         <Ln>{"}"}</Ln>
       </pre>
       <div className="px-4 py-2.5 flex items-center gap-3 bg-bg-elevated/40 border-t border-border-primary/60">
         <span className="text-[10px] font-mono tracking-[0.16em] text-signal-green">verdict: edge</span>
         <span className="text-[10px] font-mono tracking-[0.16em] text-text-quaternary">gate: pass</span>
-        <Link href="/docs" className="ml-auto text-[10px] font-mono tracking-[0.16em] text-text-tertiary hover:text-text-primary transition-colors">
-          full envelope →
-        </Link>
+        <Link href="/docs" className="ml-auto text-[10px] font-mono tracking-[0.16em] text-text-tertiary hover:text-text-primary transition-colors">full envelope →</Link>
       </div>
     </div>
   );
 }
 
-// JSON line + token helpers — exact coloring, no fragile highlighter.
 function Ln({ i = 0, children }: { i?: number; children: React.ReactNode }) {
   return <div style={{ paddingLeft: `${i * 1.1}rem` }}>{children}</div>;
 }
-function K({ children }: { children: React.ReactNode }) {
-  return <span className="text-text-secondary">{children}</span>;
-}
-function S({ children }: { children: React.ReactNode }) {
-  return <span className="text-text-tertiary">{children}</span>;
-}
-function N({ children }: { children: React.ReactNode }) {
-  return <span className="text-text-primary tabular-nums">{children}</span>;
-}
-function V({ children }: { children: React.ReactNode }) {
-  return <span className="text-signal-green">{children}</span>;
-}
+function K({ children }: { children: React.ReactNode }) { return <span className="text-text-secondary">{children}</span>; }
+function S({ children }: { children: React.ReactNode }) { return <span className="text-text-tertiary">{children}</span>; }
+function N({ children }: { children: React.ReactNode }) { return <span className="text-text-primary tabular-nums">{children}</span>; }
+function V({ children }: { children: React.ReactNode }) { return <span className="text-signal-green">{children}</span>; }
 
 // ────────────────────────────────────────────────────────────────────────
-// TAGLINE STRIP — KEPT VERBATIM. The strongest line on the page.
+// TAGLINE STRIP — kept verbatim (strongest line on the page).
 // ────────────────────────────────────────────────────────────────────────
 function TaglineStrip() {
   return (
@@ -326,10 +254,9 @@ function TaglineStrip() {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// STATUS STRIP — now leads with an infra-reliability stat (deterministic ·
-// version-pinned), the rest reinforce the no-data posture.
+// THE MODEL — new graphic (data -> engine -> signal, nothing kept) + tagline.
 // ────────────────────────────────────────────────────────────────────────
-function StatusStrip() {
+function TheModel() {
   return (
     <section className="border-b border-border-primary/60">
       <div className="max-w-[1280px] mx-auto px-6 py-20">
@@ -337,108 +264,68 @@ function StatusStrip() {
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-4">
             <span className="text-text-tertiary">///</span> THE MODEL
           </p>
-          <h2 className="font-display text-[26px] sm:text-[32px] font-semibold tracking-[-0.01em] leading-[1.2]">
-            Infrastructure, not a data vendor.
+          <h2 className="font-display text-[26px] sm:text-[34px] font-semibold tracking-[-0.01em] leading-[1.15] mb-4">
+            Plug it in. Know when it&apos;s noise.
           </h2>
+          <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
+            A computation layer, not a data vendor. Your data passes through, the
+            math comes back, and nothing is kept.
+          </p>
         </div>
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-px bg-border-primary/40 border border-border-primary/40 rounded-sm overflow-hidden">
-          <StatPanel
-            label="ALGO PLANE"
-            value="Deterministic"
-            sub="Version-pinned. Same input, same output."
-            mini={<MiniSparkline kind="flat" />}
-          />
-          <StatPanel
-            label="DATA"
-            value="Supplied"
-            sub="Passed in per call, never sourced"
-            mini={<MiniDots />}
-          />
-          <StatPanel
-            label="BACKTESTS"
-            value="Deflated"
-            sub="Sharpe adjusted for trials tried"
-            mini={<MiniBars />}
-          />
-          <StatPanel
-            label="FIGURES"
-            value="Traceable"
-            sub="Each binds to its formula"
-            mini={<MiniSparkline kind="up" />}
-          />
+
+        {/* The flow graphic */}
+        <div className="max-w-[960px] mx-auto rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
+          <div className="grid md:grid-cols-[1fr_auto_1.4fr_auto_1fr] items-stretch">
+            <FlowNode label="YOUR DATA" lines={["Prices, fundamentals,", "filings. Your license."]} tone="muted" />
+            <FlowArrow />
+            <FlowNode
+              label="THE ENGINE"
+              lines={["compute the math", "check for overfitting", "gate for risk"]}
+              tone="core"
+              bullets
+            />
+            <FlowArrow />
+            <FlowNode label="A SIGNAL" lines={["Cited, risk-gated,", "algo-ready."]} tone="out" />
+          </div>
+          <div className="px-5 py-2.5 border-t border-border-primary/60 bg-bg-elevated/30 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] font-mono tracking-[0.14em] text-text-quaternary">
+            <span><span className="text-text-secondary">deterministic</span> · version-pinned</span>
+            <span><span className="text-text-secondary">deflated</span> · adjusted for trials</span>
+            <span><span className="text-text-secondary">traceable</span> · every figure to its formula</span>
+            <span className="ml-auto text-text-tertiary">nothing retained</span>
+          </div>
         </div>
       </div>
     </section>
   );
 }
 
-function StatPanel({
-  label,
-  value,
-  unit,
-  sub,
-  mini,
-}: {
-  label: string;
-  value: string;
-  unit?: string;
-  sub: string;
-  mini?: React.ReactNode;
-}) {
+function FlowNode({ label, lines, tone, bullets }: { label: string; lines: string[]; tone: "muted" | "core" | "out"; bullets?: boolean }) {
+  const bg = tone === "core" ? "bg-bg-elevated/40" : "bg-bg-surface";
+  const labelColor = tone === "out" ? "text-text-primary" : "text-text-quaternary";
   return (
-    <div className="bg-bg-surface px-6 py-7 flex items-start justify-between gap-4">
-      <div className="min-w-0">
-        <p className="text-[9px] font-mono tracking-[0.18em] text-text-quaternary mb-3">{label}</p>
-        <div className="flex items-baseline gap-2 mb-2">
-          <span className="text-[20px] font-semibold tracking-tight text-text-primary leading-none">{value}</span>
-          {unit && <span className="text-[11px] font-mono text-text-tertiary">{unit}</span>}
-        </div>
-        <p className="text-[11px] text-text-tertiary leading-snug min-h-[2.1rem]">{sub}</p>
+    <div className={`${bg} px-6 py-7 flex flex-col justify-center`}>
+      <p className={`text-[10px] font-mono tracking-[0.2em] mb-3 ${labelColor}`}>{label}</p>
+      <div className="space-y-1.5">
+        {lines.map((l, i) => (
+          <p key={i} className="text-[12.5px] text-text-tertiary leading-snug flex gap-2">
+            {bullets && <span className="text-text-quaternary mt-px">·</span>}
+            <span>{l}</span>
+          </p>
+        ))}
       </div>
-      <div className="shrink-0 w-16 h-8 flex items-center">{mini}</div>
     </div>
   );
 }
-
-function MiniSparkline({ kind }: { kind: "flat" | "up" | "down" }) {
-  const points =
-    kind === "up"
-      ? [38, 34, 30, 32, 26, 24, 20, 16, 12, 8]
-      : kind === "down"
-      ? [10, 14, 18, 16, 22, 26, 28, 32, 36, 40]
-      : [22, 24, 20, 26, 22, 28, 22, 26, 20, 22];
-  const d = points.map((y, i) => `${i === 0 ? "M" : "L"} ${i * 9} ${y}`).join(" ");
+function FlowArrow() {
   return (
-    <svg viewBox="0 0 81 48" className="w-full h-full overflow-visible">
-      <path d={d} fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="sparkline-path" />
-      <circle cx={9 * (points.length - 1)} cy={points[points.length - 1]} r="2.5" fill="#a1a1aa" />
-    </svg>
-  );
-}
-
-function MiniBars() {
-  const heights = [60, 90, 45, 100, 75, 95];
-  return (
-    <div className="w-full h-full flex items-end justify-between gap-1">
-      {heights.map((h, i) => (
-        <div key={i} className="flex-1 bg-accent/70 rounded-sm pulse-bar" style={{ height: `${h}%`, animationDelay: `${i * 0.15}s` }} />
-      ))}
-    </div>
-  );
-}
-
-function MiniDots() {
-  return (
-    <div className="w-full h-full grid grid-cols-5 gap-1 items-center">
-      {[0, 1, 2, 3, 4].map((i) => (
-        <div key={i} className="aspect-square rounded-full bg-text-quaternary counter-tick" style={{ animationDelay: `${i * 0.3}s` }} />
-      ))}
+    <div className="hidden md:flex items-center justify-center px-2 text-text-quaternary font-mono text-[14px] border-x border-border-primary/40">
+      →
     </div>
   );
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// HOW IT WORKS — the two-plane pipeline on one screen. New section.
+// HOW IT WORKS — clearer hierarchy, one vertical spine.
 // ────────────────────────────────────────────────────────────────────────
 function HowItWorks() {
   return (
@@ -448,51 +335,35 @@ function HowItWorks() {
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
             <span className="text-text-tertiary">///</span> HOW IT WORKS
           </p>
-          <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
+          <h2 className="font-display text-[30px] sm:text-[40px] font-semibold tracking-[-0.01em] leading-[1.08] mb-5">
             One engine. Two planes. One signal.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            Your licensed data goes into one core engine. An execution bot reads the
-            deterministic plane; a human reads the agent plane. Both emit the same
-            versioned envelope. The language model never computes a number your
-            algo consumes.
+            Your data goes into one core engine. An execution bot reads the
+            deterministic plane. A human reads the agent plane. Both return the
+            same versioned envelope, and the language model never computes a
+            number your algo trades on.
           </p>
         </div>
 
-        <div className="max-w-[1040px] mx-auto">
-          {/* Input */}
-          <PipeNode badge="YOUR DATA" text="Prices, fundamentals, filings — supplied in the call, on your license." tone="muted" />
+        <div className="max-w-[940px] mx-auto">
+          <PipeNode badge="YOUR DATA" text="Prices, fundamentals, filings, supplied in the call, on your license." tone="muted" />
           <PipeArrow />
-          {/* Core */}
           <div className="rounded-sm border border-border-primary bg-bg-surface px-6 py-5 text-center">
-            <p className="text-[10px] font-mono tracking-[0.22em] text-text-secondary mb-1">ONE CORE ENGINE</p>
-            <p className="text-[12px] text-text-tertiary">deterministic quant_core + agent desk · nothing stored</p>
+            <p className="text-[11px] font-mono tracking-[0.22em] text-text-secondary mb-1">ONE CORE ENGINE</p>
+            <p className="text-[12px] text-text-tertiary">deterministic quant core + agent desk, nothing stored</p>
           </div>
           <PipeArrow split />
-          {/* Two planes */}
           <div className="grid md:grid-cols-2 gap-5">
-            <PlaneCard
-              tag="DETERMINISTIC PLANE"
-              dot="bg-text-quaternary"
-              title="The algo's path"
-              body="Pure math, version-pinned, sub-second. POST your data, get the envelope synchronously. No LLM in the path."
-              chips={["SYNC REST / MCP", "exact", "golden-tested"]}
-            />
-            <PlaneCard
-              tag="PROBABILISTIC PLANE"
-              dot="bg-text-tertiary"
-              title="The human's path"
+            <PlaneCard tag="DETERMINISTIC PLANE" dot="bg-text-quaternary" title="The algo's path"
+              body="Pure math, version-pinned, sub-second. POST your data, get the envelope synchronously. No language model in the path."
+              chips={["SYNC REST / MCP", "exact", "golden-tested"]} />
+            <PlaneCard tag="PROBABILISTIC PLANE" dot="bg-text-tertiary" title="The human's path"
               body="A desk of agents reasons over the same math, narrates a thesis, and signs off. Submit a job, stream it, read the memo."
-              chips={["ASYNC JOB · SSE", "reasons", "cited"]}
-            />
+              chips={["ASYNC JOB · SSE", "reasons", "cited"]} />
           </div>
           <PipeArrow merge />
-          {/* Output */}
-          <PipeNode
-            badge="SIGNAL ENVELOPE"
-            text="Same versioned shape from both planes — instruments, levels, overfitting verdict, risk gate, provenance."
-            tone="primary"
-          />
+          <PipeNode badge="SIGNAL ENVELOPE" text="One versioned shape from both planes: instruments, levels, overfitting verdict, risk gate, provenance." tone="primary" />
         </div>
       </div>
     </section>
@@ -501,23 +372,12 @@ function HowItWorks() {
 
 function PipeNode({ badge, text, tone }: { badge: string; text: string; tone: "muted" | "primary" }) {
   return (
-    <div
-      className={`rounded-sm border px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 ${
-        tone === "primary" ? "border-border-primary bg-bg-elevated/50" : "border-border-primary/70 bg-bg-surface/40"
-      }`}
-    >
-      <span
-        className={`text-[10px] font-mono tracking-[0.18em] shrink-0 ${
-          tone === "primary" ? "text-text-primary" : "text-text-quaternary"
-        }`}
-      >
-        {badge}
-      </span>
+    <div className={`rounded-sm border px-6 py-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4 ${tone === "primary" ? "border-border-primary bg-bg-elevated/50" : "border-border-primary/70 bg-bg-surface/40"}`}>
+      <span className={`text-[10px] font-mono tracking-[0.18em] shrink-0 ${tone === "primary" ? "text-text-primary" : "text-text-quaternary"}`}>{badge}</span>
       <span className="text-[12px] text-text-tertiary leading-relaxed">{text}</span>
     </div>
   );
 }
-
 function PipeArrow({ split, merge }: { split?: boolean; merge?: boolean }) {
   return (
     <div className="flex items-center justify-center py-3 text-text-quaternary">
@@ -525,20 +385,7 @@ function PipeArrow({ split, merge }: { split?: boolean; merge?: boolean }) {
     </div>
   );
 }
-
-function PlaneCard({
-  tag,
-  dot,
-  title,
-  body,
-  chips,
-}: {
-  tag: string;
-  dot: string;
-  title: string;
-  body: string;
-  chips: string[];
-}) {
+function PlaneCard({ tag, dot, title, body, chips }: { tag: string; dot: string; title: string; body: string; chips: string[] }) {
   return (
     <div className="rounded-sm border border-border-primary bg-bg-surface px-6 py-6">
       <div className="flex items-center gap-2.5 mb-3">
@@ -549,9 +396,7 @@ function PlaneCard({
       <p className="text-[13px] text-text-tertiary leading-relaxed mb-4">{body}</p>
       <div className="flex flex-wrap gap-1.5">
         {chips.map((c) => (
-          <span key={c} className="text-[9px] font-mono tracking-[0.12em] text-text-tertiary border border-border-primary/70 rounded-sm px-2 py-0.5">
-            {c}
-          </span>
+          <span key={c} className="text-[9px] font-mono tracking-[0.12em] text-text-tertiary border border-border-primary/70 rounded-sm px-2 py-0.5">{c}</span>
         ))}
       </div>
     </div>
@@ -559,8 +404,7 @@ function PlaneCard({
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// PRODUCT SHOWCASE — the four engine surfaces + the new 05 / OUTPUT card
-// (the envelope your algo consumes).
+// PRODUCT SHOWCASE
 // ────────────────────────────────────────────────────────────────────────
 function ProductShowcase() {
   return (
@@ -579,55 +423,29 @@ function ProductShowcase() {
             the result is a signal your algo can consume.
           </p>
         </div>
-
         <div className="max-w-[1040px] mx-auto space-y-6">
-          <ShowcaseCard
-            tag="01 / PAIRS"
-            title="Cointegrated pairs from your prices."
-            sub="Pass in a set of price series; get back the cointegrated pairs with test statistic and p-value, the half-life of mean reversion, the hedge ratio, and the live spread z-score. Engle-Granger done right, on your data."
-            visual={<DiscoveryViz />}
-          />
-          <ShowcaseCard
-            tag="02 / RIGOR"
-            title="Know when it&apos;s edge, and when it&apos;s noise."
+          <ShowcaseCard tag="01 / PAIRS" title="Cointegrated pairs from your prices."
+            sub="Pass in a set of price series. Get back the cointegrated pairs with test statistic and p-value, the half-life of mean reversion, the hedge ratio, and the live spread z-score. Engle-Granger done right, on your data."
+            visual={<DiscoveryViz />} />
+          <ShowcaseCard tag="02 / RIGOR" title="Know when it&apos;s edge, and when it&apos;s noise."
             sub="Every backtest reports a deflated Sharpe, corrected for how many ideas were tried and for non-normal returns, plus probability of backtest overfitting and purged, embargoed cross-validation. We tell you when a result is probably noise."
-            visual={<TrackRecordViz />}
-          />
-          <ShowcaseCard
-            tag="03 / RISK"
-            title="Risk and stress on your book."
+            visual={<TrackRecordViz />} />
+          <ShowcaseCard tag="03 / RISK" title="Risk and stress on your book."
             sub="VaR and CVaR (parametric, historical, Cornish-Fisher, bootstrapped), Ledoit-Wolf covariance, factor decomposition, and macro-shock stress, computed on the positions and returns you supply. No black box, every figure traceable."
-            visual={<RiskViz />}
-          />
-          <ShowcaseCard
-            tag="04 / AGENTS"
-            title="A desk of agents over the same engine."
-            sub="Research, risk, and portfolio agents with a CIO that signs off run the same math and turn it into a sourced, risk-checked memo. Shipped as the included desk UI, running on your data through the engine."
-            visual={<ThreadViz />}
-          />
-          <ShowcaseCard
-            tag="05 / OUTPUT"
-            title="Signals your algo can consume."
-            sub="Both planes emit one versioned SignalEnvelope: instruments and sides, entry/stop/target, sizing, the overfitting verdict, the risk gate, and provenance on every figure. Pin the schema; read it over MCP or REST; route it straight into execution."
-            visual={<EnvelopeViz />}
-          />
+            visual={<RiskViz />} />
+          <ShowcaseCard tag="04 / AGENTS" title="A desk of agents over the same engine."
+            sub="Research, risk, and portfolio agents with a CIO that signs off run the same math and turn it into a sourced, risk-checked memo. The desk runs on Claude: Opus 4.8 for the reasoning, lighter models for the grunt work."
+            visual={<ThreadViz />} />
+          <ShowcaseCard tag="05 / OUTPUT" title="Signals your algo can consume."
+            sub="Both planes emit one versioned SignalEnvelope: instruments and sides, entry, stop and target, sizing, the overfitting verdict, the risk gate, and provenance on every figure. Pin the schema, read it over MCP or REST, route it into execution."
+            visual={<EnvelopeViz />} />
         </div>
       </div>
     </section>
   );
 }
 
-function ShowcaseCard({
-  tag,
-  title,
-  sub,
-  visual,
-}: {
-  tag: string;
-  title: string;
-  sub: string;
-  visual: React.ReactNode;
-}) {
+function ShowcaseCard({ tag, title, sub, visual }: { tag: string; title: string; sub: string; visual: React.ReactNode }) {
   return (
     <article className="group relative rounded-sm border border-border-primary bg-bg-surface overflow-hidden hover:border-zinc-700 transition-colors">
       <div className="grid lg:grid-cols-[1.05fr_1fr] gap-10 p-8 lg:p-12 relative items-center">
@@ -642,7 +460,6 @@ function ShowcaseCard({
   );
 }
 
-// ─── Showcase visuals
 function DiscoveryViz() {
   const rows = [
     { ticker: "RXRX", reason: "Insider cluster", score: 92, color: "signal-green" },
@@ -653,8 +470,7 @@ function DiscoveryViz() {
   return (
     <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-        <span>SCREEN OUTPUT</span>
-        <span className="text-text-tertiary">● LIVE</span>
+        <span>SCREEN OUTPUT</span><span className="text-text-tertiary">● LIVE</span>
       </div>
       <div className="divide-y divide-border-primary/40">
         {rows.map((r) => (
@@ -669,24 +485,17 @@ function DiscoveryViz() {
     </div>
   );
 }
-
 function TrackRecordViz() {
   const points = [50, 47, 51, 48, 52, 49, 54, 51, 56, 58, 55, 60, 64, 62, 68, 71];
   const d = points.map((y, i) => `${i === 0 ? "M" : "L"} ${i * 18} ${72 - y * 0.6}`).join(" ");
   return (
     <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-        <span>SIGNAL IC · TRAILING 90D</span>
-        <span className="text-text-tertiary">+0.08</span>
+        <span>SIGNAL IC · TRAILING 90D</span><span className="text-text-tertiary">+0.08</span>
       </div>
       <div className="p-3">
         <svg viewBox="0 0 280 80" className="w-full h-20 overflow-visible">
-          <defs>
-            <linearGradient id="ic-fill" x1="0%" y1="0%" x2="0%" y2="100%">
-              <stop offset="0%" stopColor="#a1a1aa" stopOpacity="0.25" />
-              <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" />
-            </linearGradient>
-          </defs>
+          <defs><linearGradient id="ic-fill" x1="0%" y1="0%" x2="0%" y2="100%"><stop offset="0%" stopColor="#a1a1aa" stopOpacity="0.25" /><stop offset="100%" stopColor="#a1a1aa" stopOpacity="0" /></linearGradient></defs>
           <path d={`${d} L ${(points.length - 1) * 18} 80 L 0 80 Z`} fill="url(#ic-fill)" />
           <path d={d} fill="none" stroke="#a1a1aa" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="sparkline-path" />
           <line x1="0" y1="48" x2="280" y2="48" stroke="rgba(250,250,250,0.06)" strokeDasharray="2 3" />
@@ -700,7 +509,6 @@ function TrackRecordViz() {
     </div>
   );
 }
-
 function RiskViz() {
   const gates = [
     { label: "Position", ok: true, val: "5.0% ≤ 5.0%" },
@@ -711,8 +519,7 @@ function RiskViz() {
   return (
     <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider">
-        <span className="text-text-quaternary">PRE-TRADE GATE</span>
-        <span className="text-text-tertiary">BLOCKED</span>
+        <span className="text-text-quaternary">PRE-TRADE GATE</span><span className="text-text-tertiary">BLOCKED</span>
       </div>
       <div className="divide-y divide-border-primary/40">
         {gates.map((g) => (
@@ -725,25 +532,23 @@ function RiskViz() {
     </div>
   );
 }
-
 function ThreadViz() {
   const items = [
-    { tag: "FRESH", text: "Best L/S in regional banks?", color: "text-text-quaternary" },
-    { tag: "DRILLDOWN", text: "Capital position on MTB?", color: "text-text-tertiary" },
-    { tag: "RISK CHECK", text: "Stress at +100bp on the 10Y", color: "text-text-tertiary" },
-    { tag: "VALIDATION", text: "Challenge the FITB bull case", color: "text-text-tertiary" },
+    { tag: "FRESH", text: "Best L/S in regional banks?" },
+    { tag: "DRILLDOWN", text: "Capital position on MTB?" },
+    { tag: "RISK CHECK", text: "Stress at +100bp on the 10Y" },
+    { tag: "VALIDATION", text: "Challenge the FITB bull case" },
   ];
   return (
     <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-        <span>THREAD · 4 MESSAGES</span>
-        <span className="text-text-tertiary">● ACTIVE</span>
+        <span>THREAD · 4 MESSAGES</span><span className="text-text-tertiary">● ACTIVE</span>
       </div>
       <div className="divide-y divide-border-primary/40">
         {items.map((m, i) => (
           <div key={i} className="flex items-center gap-3 px-3 py-2 text-[11px]">
             <span className="font-mono text-text-quaternary w-4">{i + 1}</span>
-            <span className={`font-mono text-[9px] tracking-wider w-20 ${m.color}`}>{m.tag}</span>
+            <span className="font-mono text-[9px] tracking-wider w-20 text-text-tertiary">{m.tag}</span>
             <span className="text-text-secondary truncate flex-1">{m.text}</span>
           </div>
         ))}
@@ -751,8 +556,6 @@ function ThreadViz() {
     </div>
   );
 }
-
-// The envelope, as the algo sees it — instruments, levels, verdict, gate.
 function EnvelopeViz() {
   const fields = [
     { k: "instruments", v: "ASLE · long", tone: "text-text-secondary" },
@@ -764,8 +567,7 @@ function EnvelopeViz() {
   return (
     <div className="rounded-sm border border-border-primary bg-bg-primary/60 overflow-hidden">
       <div className="px-3 py-1.5 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-        <span>SIGNAL ENVELOPE · v1</span>
-        <span className="text-text-tertiary">MCP · REST</span>
+        <span>SIGNAL ENVELOPE · v1</span><span className="text-text-tertiary">MCP · REST</span>
       </div>
       <div className="divide-y divide-border-primary/40">
         {fields.map((f) => (
@@ -776,100 +578,59 @@ function EnvelopeViz() {
         ))}
       </div>
       <div className="px-3 py-2 border-t border-border-primary/60 flex items-center gap-2 bg-bg-elevated/40 text-[9px] font-mono tracking-[0.14em] text-text-quaternary">
-        <span>schema_version 1.0.0</span>
-        <span className="ml-auto">engine_version pinned</span>
+        <span>schema_version 1.0.0</span><span className="ml-auto">engine_version pinned</span>
       </div>
     </div>
   );
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// INTELLIGENCE LAYER — reframed to the two-planes story.
+// PIPELINE — why your algo can trust it (recomposed, numbered spine).
 // ────────────────────────────────────────────────────────────────────────
-function IntelligenceLayer() {
+function Pipeline() {
+  const steps = [
+    { n: "01", k: "COMPUTE", d: "The deterministic engine runs the math and binds every figure to a source." },
+    { n: "02", k: "NARRATE", d: "The language model only arranges pre-computed facts. It never originates a number your algo consumes." },
+    { n: "03", k: "VALIDATE", d: "A validator rejects any claim it cannot trace back to a receipt, and any edge it has not checked for overfitting." },
+  ];
   return (
     <section id="intelligence" className="relative border-b border-border-primary/60 overflow-hidden">
       <div className="max-w-[1280px] mx-auto px-6 py-24 relative">
-        <div className="text-center mb-20 max-w-2xl mx-auto">
+        <div className="text-center mb-16 max-w-2xl mx-auto">
           <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
             <span className="text-text-tertiary">///</span> WHY YOUR ALGO CAN TRUST IT
           </p>
-          <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
-            The LLM never touches the number your algo trades on.
+          <h2 className="font-display text-[28px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
+            The model never touches the number your algo trades on.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
             The deterministic plane computes every figure and binds it to a source.
-            The agent plane only arranges those pre-computed facts into a thesis;
-            it never originates a number an execution layer consumes. A validator
-            rejects any claim it can&apos;t trace. Agents propose, math disposes, you decide.
+            The agent plane only arranges those facts into a thesis. Agents propose,
+            math disposes, you decide.
           </p>
         </div>
 
-        <div className="grid lg:grid-cols-[1fr_1.4fr] gap-12 items-center max-w-[1100px] mx-auto">
-          <div>
-            <div className="space-y-3">
-              <div className="rounded-sm border border-border-primary bg-bg-surface px-5 py-4">
-                <div className="flex items-center gap-2.5 mb-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-text-tertiary" />
-                  <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary">PROBABILISTIC PLANE</p>
-                </div>
-                <p className="text-[13px] text-text-secondary leading-relaxed">
-                  Reads the filings, frames the question, drafts a thesis with you. Reasons — never computes a consumed number.
-                </p>
-              </div>
-              <div className="rounded-sm border border-border-primary bg-bg-surface px-5 py-4">
-                <div className="flex items-center gap-2.5 mb-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary" />
-                  <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary">DETERMINISTIC PLANE</p>
-                </div>
-                <p className="text-[13px] text-text-secondary leading-relaxed">
-                  Runs the math. Same answer every time, version-pinned, traceable back to the input your algo supplied.
-                </p>
-              </div>
+        <div className="max-w-[820px] mx-auto">
+          {steps.map((s, i) => (
+            <div key={s.n} className="relative pl-14 pb-8 last:pb-0">
+              {i < steps.length - 1 && <span className="absolute left-[18px] top-9 bottom-0 w-px bg-border-primary/60" aria-hidden="true" />}
+              <span className="absolute left-0 top-0 w-9 h-9 rounded-sm border border-border-primary bg-bg-surface flex items-center justify-center font-mono text-[12px] text-text-secondary">{s.n}</span>
+              <p className="text-[11px] font-mono tracking-[0.22em] text-text-secondary mb-1.5 pt-1.5">{s.k}</p>
+              <p className="text-[14px] text-text-tertiary leading-relaxed">{s.d}</p>
             </div>
+          ))}
+          <div className="mt-2 ml-14 inline-flex items-center gap-3 rounded-sm border border-border-primary bg-bg-elevated/40 px-4 py-2.5">
+            <span className="font-mono text-[11px] tracking-[0.18em] text-text-primary">✓ VERIFIED</span>
+            <span className="font-mono text-[10px] tracking-[0.18em] text-text-quaternary">claim · source · math</span>
           </div>
-
-          <IntelligenceVisual />
         </div>
       </div>
     </section>
   );
 }
 
-function IntelligenceVisual() {
-  const steps = [
-    { n: "01", k: "COMPUTE", d: "The engine runs the math and binds every figure to a source." },
-    { n: "02", k: "NARRATE", d: "The language model only arranges pre-sourced facts. It never originates a number." },
-    { n: "03", k: "VALIDATE", d: "A linter rejects any claim it cannot trace back to a receipt." },
-  ];
-  return (
-    <div className="rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
-      <div className="px-3 py-2 border-b border-border-primary/60 flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-text-quaternary">
-        <span>PIPELINE</span>
-        <span>COMPUTE → NARRATE → VALIDATE</span>
-      </div>
-      <div className="divide-y divide-border-primary/40">
-        {steps.map((s) => (
-          <div key={s.n} className="flex items-start gap-4 px-5 py-5">
-            <span className="font-mono text-[11px] text-text-quaternary mt-0.5 tabular-nums">{s.n}</span>
-            <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-mono tracking-[0.22em] text-text-secondary mb-1.5">{s.k}</p>
-              <p className="text-[12px] text-text-tertiary leading-relaxed">{s.d}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-      <div className="px-5 py-3.5 border-t border-border-primary flex items-center gap-3 bg-bg-elevated/40">
-        <span className="font-mono text-[11px] tracking-[0.18em] text-text-primary">✓ VERIFIED</span>
-        <span className="font-mono text-[10px] tracking-[0.18em] text-text-quaternary">claim · source · math</span>
-      </div>
-    </div>
-  );
-}
-
 // ────────────────────────────────────────────────────────────────────────
-// SOURCE LEDGER — copy extended: refuses an idea it can't validate (rigor),
-// not just a figure it can't trace (provenance).
+// SOURCE LEDGER — rigor + provenance.
 // ────────────────────────────────────────────────────────────────────────
 function SourceLedger() {
   const sources = [
@@ -890,14 +651,13 @@ function SourceLedger() {
             It refuses to ship what it can&apos;t stand behind.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            Every number binds to a receipt — the named formula that produced it and
+            Every number binds to a receipt: the named formula that produced it and
             the data you supplied. The validator won&apos;t ship a figure it can&apos;t
             trace, and it won&apos;t stamp an idea <span className="text-text-secondary">edge</span> it
             hasn&apos;t checked for overfitting. Provenance and rigor, both by default.
             Your audit trail, computed and handed back. We keep none of it.
           </p>
         </div>
-
         <div className="max-w-[760px] mx-auto rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
           <div className="px-4 py-3 border-b border-border-primary flex items-center justify-between">
             <span className="text-[10px] font-mono tracking-wider text-text-tertiary">SOURCE LEDGER</span>
@@ -906,17 +666,14 @@ function SourceLedger() {
           <div className="divide-y divide-border-primary/60">
             {sources.map((s) => (
               <div key={s.id} className="grid grid-cols-[110px_1fr_auto] items-center gap-4 px-4 py-3 hover:bg-bg-elevated/40 transition-colors">
-                <span className="text-[10px] font-mono tracking-wider text-text-tertiary bg-accent/10 border border-accent/20 px-2 py-0.5 rounded text-center">
-                  {s.kind}
-                </span>
+                <span className="text-[10px] font-mono tracking-wider text-text-tertiary bg-accent/10 border border-accent/20 px-2 py-0.5 rounded text-center">{s.kind}</span>
                 <span className="text-[12px] font-mono text-text-secondary truncate">{s.id}</span>
                 <span className="text-[10px] text-text-quaternary truncate hidden md:block">{s.note}</span>
               </div>
             ))}
           </div>
           <div className="px-4 py-2.5 border-t border-border-primary flex items-center justify-between text-[10px] font-mono text-text-quaternary">
-            <span>+ 17 MORE</span>
-            <span className="text-text-tertiary">● ALL VERIFIED</span>
+            <span>+ 17 MORE</span><span className="text-text-tertiary">● ALL VERIFIED</span>
           </div>
         </div>
       </div>
@@ -925,7 +682,7 @@ function SourceLedger() {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// PRICING — placeholder. Absence reads as "not real." A number + join the beta.
+// PRICING — free trial + price discovery.
 // ────────────────────────────────────────────────────────────────────────
 function Pricing() {
   return (
@@ -936,55 +693,46 @@ function Pricing() {
             <span className="text-text-tertiary">///</span> PRICING
           </p>
           <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
-            In beta. Early seats are grandfathered for life.
+            Start free. Early seats are grandfathered for life.
           </h2>
           <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            Seats for the desk, metered calls for the API, generous beta quotas. We&apos;re
-            still discovering the right price with early users — join the beta and
-            lock in.
+            Start a free trial on your own data, no card. Seats for the desk,
+            metered calls for the API. We&apos;re still discovering the right price
+            with early users, so the trial is generous and the early rate is locked.
           </p>
         </div>
-
         <div className="grid md:grid-cols-2 gap-5 max-w-[820px] mx-auto">
-          <PriceCard
-            tier="SOLO / SYSTEMATIC"
-            line="Wire it into your bot. MCP + direct API, the desk as a bonus."
-            chips={["MCP + REST", "Python SDK", "metered calls"]}
-          />
-          <PriceCard
-            tier="SMALL SHOP"
-            line="Desk-grade rigor without desk-grade cost. Infra behind your stack."
-            chips={["a few seats", "shared key", "trust posture"]}
-          />
+          <PriceCard tier="SOLO / SYSTEMATIC" hint="solo seat · pricing in discovery"
+            line="Wire it into your bot. MCP and direct API, the desk as a bonus."
+            chips={["MCP + REST", "Python SDK", "metered calls"]} />
+          <PriceCard tier="SMALL SHOP" hint="team plan · pricing in discovery"
+            line="Desk-grade rigor without desk-grade cost. Infrastructure behind your stack."
+            chips={["a few seats", "shared key", "trust posture"]} />
         </div>
-
-        <div className="text-center mt-12">
-          <Link
-            href="/sign-up"
-            className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
-          >
-            Join the beta
+        <div className="text-center mt-12 flex items-center justify-center gap-4 flex-wrap">
+          <Link href={PORTAL_SIGNUP} className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors">
+            Start free trial
+          </Link>
+          <Link href="/demo" className="inline-block px-6 py-3 rounded-sm border border-border-primary text-text-secondary text-[13px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors">
+            Try the demo first
           </Link>
         </div>
       </div>
     </section>
   );
 }
-
-function PriceCard({ tier, line, chips }: { tier: string; line: string; chips: string[] }) {
+function PriceCard({ tier, hint, line, chips }: { tier: string; hint: string; line: string; chips: string[] }) {
   return (
     <div className="rounded-sm border border-border-primary bg-bg-surface px-6 py-7">
       <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-3">{tier}</p>
       <div className="flex items-baseline gap-2 mb-3">
-        <span className="text-[22px] font-semibold tracking-tight text-text-primary leading-none">Beta</span>
-        <span className="text-[11px] font-mono text-text-tertiary">pricing in discovery</span>
+        <span className="text-[22px] font-semibold tracking-tight text-text-primary leading-none">Free trial</span>
       </div>
+      <p className="text-[11px] font-mono text-text-tertiary mb-3">{hint}</p>
       <p className="text-[13px] text-text-tertiary leading-relaxed mb-4">{line}</p>
       <div className="flex flex-wrap gap-1.5">
         {chips.map((c) => (
-          <span key={c} className="text-[9px] font-mono tracking-[0.12em] text-text-tertiary border border-border-primary/70 rounded-sm px-2 py-0.5">
-            {c}
-          </span>
+          <span key={c} className="text-[9px] font-mono tracking-[0.12em] text-text-tertiary border border-border-primary/70 rounded-sm px-2 py-0.5">{c}</span>
         ))}
       </div>
     </div>
@@ -992,7 +740,7 @@ function PriceCard({ tier, line, chips }: { tier: string; line: string; chips: s
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// CLOSING CTA — two doors, plus the Built-on-MCP credibility note.
+// CLOSING CTA + model-agnostic note.
 // ────────────────────────────────────────────────────────────────────────
 function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
   return (
@@ -1008,26 +756,21 @@ function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
           A validated signal out.
         </h2>
         <p className="text-[15px] text-text-tertiary max-w-md mx-auto mb-10 leading-relaxed">
-          Connect your agent over MCP or your bot over REST, or open the desk and try
-          the live demo on sample data. Your data stays yours; we run the math and
-          hand it back.
+          Try the demo on sample data with no signup, or start a free trial and
+          wire the engine into your own bot over REST or your agent over MCP. Your
+          data stays yours. We run the math and hand it back.
         </p>
         <div className="flex items-center justify-center gap-4 flex-wrap mb-10">
-          <Link
-            href="/docs"
-            className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
-          >
-            Read the docs / Connect the MCP
+          <Link href="/demo" className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors">
+            Try the demo
           </Link>
-          <Link
-            href={isSignedIn ? "/dashboard" : "/sign-up"}
-            className="inline-block px-6 py-3 rounded-sm border border-border-primary text-text-secondary text-[13px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors"
-          >
-            Open the desk / Try the demo
+          <Link href={isSignedIn ? "/portal" : PORTAL_SIGNUP} className="inline-block px-6 py-3 rounded-sm border border-border-primary text-text-secondary text-[13px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors">
+            Start building
           </Link>
         </div>
-        <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary">
-          ◆ BUILT ON MCP — NATIVE TO THE CLAUDE / AGENT ECOSYSTEM
+        <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary leading-relaxed max-w-lg mx-auto">
+          MODEL-AGNOSTIC INTERFACE. CALL IT FROM ANY AGENT OR BOT OVER MCP OR REST.
+          OUR DESK RUNS ON CLAUDE.
         </p>
       </div>
     </section>
@@ -1035,24 +778,23 @@ function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// FOOTER — nav mirrors the new IA.
+// FOOTER — adds Terms / Privacy.
 // ────────────────────────────────────────────────────────────────────────
 function Footer() {
   return (
     <footer className="border-t border-border-primary/60 mt-auto">
       <div className="max-w-[1280px] mx-auto px-6 py-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 text-[11px] font-mono tracking-wider text-text-quaternary">
         <div className="flex items-center gap-5">
-          <span className="font-semibold text-text-secondary">
-            alpha<span className="text-brand">engine</span>
-          </span>
+          <span className="font-semibold text-text-secondary">alpha<span className="text-brand">engine</span></span>
           <span>© {new Date().getFullYear()}</span>
         </div>
-        <div className="flex items-center gap-6 flex-wrap">
+        <div className="flex items-center gap-5 flex-wrap">
           <a href="#product" className="hover:text-text-secondary transition-colors">PRODUCT</a>
           <a href="#how-it-works" className="hover:text-text-secondary transition-colors">HOW IT WORKS</a>
           <Link href="/docs" className="hover:text-text-secondary transition-colors">DOCS</Link>
-          <a href="#trust" className="hover:text-text-secondary transition-colors">TRUST</a>
           <a href="#pricing" className="hover:text-text-secondary transition-colors">PRICING</a>
+          <Link href="/terms" className="hover:text-text-secondary transition-colors">TERMS</Link>
+          <Link href="/privacy" className="hover:text-text-secondary transition-colors">PRIVACY</Link>
           <Link href="/sign-in" className="hover:text-text-secondary transition-colors">SIGN IN</Link>
         </div>
       </div>

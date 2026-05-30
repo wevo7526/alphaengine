@@ -214,6 +214,7 @@ export const api = {
         portfolio_size_usd: number | null;
         benchmark: string;
         mandate: string;
+        entitlement: string | null;
         created_at: string;
         updated_at: string;
         onboarded_at: string | null;
@@ -227,6 +228,7 @@ export const api = {
     portfolio_size_usd?: number;
     benchmark?: string;
     mandate?: string;
+    entitlement?: string;
   }) =>
     request("/api/me/profile", {
       method: "PUT",
@@ -239,6 +241,7 @@ export const api = {
     portfolio_size_usd?: number;
     benchmark?: string;
     mandate?: string;
+    entitlement?: string;
   }) =>
     request("/api/me/onboarding/complete", {
       method: "POST",

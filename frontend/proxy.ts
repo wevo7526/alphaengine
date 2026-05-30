@@ -7,7 +7,7 @@ import type { NextRequest } from "next/server";
 // Sidebar. Everything not listed here (/dashboard and the app routes) stays
 // gated behind a Clerk session.
 const PUBLIC_EXACT = ["/"];
-const PUBLIC_PREFIXES = ["/docs", "/sign-in", "/sign-up", "/sso-callback"];
+const PUBLIC_PREFIXES = ["/docs", "/demo", "/terms", "/privacy", "/sign-in", "/sign-up", "/sso-callback"];
 const CLERK_COOKIES = ["__session", "__clerk_db_jwt", "__client_uat"];
 
 export function proxy(request: NextRequest) {

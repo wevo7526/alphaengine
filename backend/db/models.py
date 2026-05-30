@@ -396,6 +396,11 @@ class UserProfile(Base):
     portfolio_size_usd = Column(Float, nullable=True)
     benchmark = Column(String(20), default="SPY")
     mandate = Column(String(30), default="long_short")  # long_only|long_short|market_neutral|macro|multi_strat
+    # Access state (see mcp-server/docs/USER_STATES.md). Mirrors Clerk
+    # publicMetadata.entitlement. New users default to demo; portal sign-up
+    # mints trial; upgrade flips to paid. NULL is treated as demo on read.
+    # Orthogonal to isolation, which is always per user_id.
+    entitlement = Column(String(20), default="demo")    # demo | trial | paid
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     onboarded_at = Column(DateTime(timezone=True), nullable=True)

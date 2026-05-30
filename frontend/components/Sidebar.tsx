@@ -160,6 +160,10 @@ export function Sidebar() {
   if (
     pathname === "/" ||
     pathname.startsWith("/docs") ||
+    pathname.startsWith("/demo") ||
+    pathname.startsWith("/terms") ||
+    pathname.startsWith("/privacy") ||
+    pathname.startsWith("/portal") ||
     pathname.startsWith("/sign-in") ||
     pathname.startsWith("/sign-up") ||
     pathname.startsWith("/sso-callback") ||

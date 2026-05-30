@@ -29,9 +29,9 @@ const sourceSerif = Source_Serif_4({
 });
 
 export const metadata: Metadata = {
-  title: "AlphaEngine — The signal layer between your data and your algo",
+  title: "AlphaEngine · The signal layer between your data and your algo",
   description:
-    "A stateless engine you run on your own licensed data. It computes the math, checks for overfitting, and returns cited, risk-gated, algo-ready signals — over MCP for your agent or a direct API for your bot. Nothing sourced, nothing stored.",
+    "A stateless engine you run on your own licensed data. It computes the math, checks for overfitting, and returns cited, risk-gated, algo-ready signals, over MCP for your agent or a direct API for your bot. Nothing sourced, nothing stored.",
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },

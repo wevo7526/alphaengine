@@ -15,7 +15,7 @@ const STEPS = ["usage", "role", "portfolio", "mandate", "done"] as const;
 type Step = (typeof STEPS)[number];
 
 // Integration branch (MARKETING_STRATEGY.md §4). Stored client-side only for
-// now — it tailors the onboarding copy and the "what's next" path. Actual MCP
+// now - it tailors the onboarding copy and the "what's next" path. Actual MCP
 // key provisioning lands with the gateway build (server steps T9/T12); until
 // then the wire-in path points at /docs.
 const USAGE_CACHE_KEY = "alphaengine:usage_mode";
@@ -66,7 +66,7 @@ export default function OnboardingPage() {
   const [benchmark, setBenchmark] = useState<Benchmark>("SPY");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Each step's fade-in key — re-mounts the content so the entrance
+  // Each step's fade-in key - re-mounts the content so the entrance
   // animation re-plays on every step change.
   const [stepKey, setStepKey] = useState(0);
 
@@ -88,7 +88,7 @@ export default function OnboardingPage() {
   const total = STEPS.length - 1; // exclude "done" from the progress count
 
   // Per-step save: persists the user's selections after every step so a
-  // mid-flow refresh / close doesn't lose progress. Non-blocking — UI
+  // mid-flow refresh / close doesn't lose progress. Non-blocking - UI
   // moves on immediately, save is fire-and-forget.
   const savePartial = (fields: Parameters<typeof api.updateMyProfile>[0]) => {
     api.updateMyProfile(fields).catch(() => {
@@ -111,7 +111,7 @@ export default function OnboardingPage() {
 
   const handleUsageNext = () => {
     if (!usage) return;
-    // Client-side only for now — surfaced to the dashboard / connect flow once
+    // Client-side only for now - surfaced to the dashboard / connect flow once
     // key provisioning ships. Does not hit the profile API.
     try {
       if (typeof window !== "undefined") window.localStorage.setItem(USAGE_CACHE_KEY, usage);
@@ -139,23 +139,31 @@ export default function OnboardingPage() {
     if (submitting) return;
     setSubmitting(true);
     setError(null);
+    // Surface intent from the auth funnel: portal sign-up mints a trial
+    // entitlement and lands on the portal; demo lands on the desk. (Clerk
+    // publicMetadata is the eventual source of truth via webhook.)
+    const surface =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("surface")
+        : null;
+    const isPortal = surface === "portal";
     try {
       await api.completeOnboarding({
         role: role || "other",
         portfolio_size_usd: portfolioSize,
         mandate,
         benchmark,
+        entitlement: isPortal ? "trial" : "demo",
         full_name: user?.fullName || undefined,
         email: user?.primaryEmailAddress?.emailAddress || undefined,
       });
       // Hard navigation (not router.replace) so SessionGuard re-mounts
-      // and re-fetches /api/me/profile. A client-side route change keeps
-      // the stale `isOnboarded: false` cache and bounces the user back
-      // here in a redirect loop.
+      // and re-fetches /api/me/profile, avoiding a stale onboarded cache.
+      const dest = isPortal ? "/portal" : "/dashboard";
       if (typeof window !== "undefined") {
-        window.location.href = "/dashboard";
+        window.location.href = dest;
       } else {
-        router.replace("/dashboard");
+        router.replace(dest);
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Could not save your profile.";
@@ -169,9 +177,9 @@ export default function OnboardingPage() {
 
   return (
     <div className="min-h-screen w-full grid lg:grid-cols-[1.05fr_1fr] bg-bg-primary text-text-primary">
-      {/* LEFT — brand panel */}
+      {/* LEFT - brand panel */}
       <aside className="relative hidden lg:flex flex-col justify-between p-12 overflow-hidden border-r border-border-primary bg-bg-surface/30">
-        {/* Faint structural grid only — flat institutional, no glow/constellation. */}
+        {/* Faint structural grid only - flat institutional, no glow/constellation. */}
         <div className="absolute inset-0 grid-bg opacity-[0.10]" aria-hidden="true" />
         <Link
           href="/"
@@ -180,7 +188,7 @@ export default function OnboardingPage() {
           alpha<span className="text-brand">engine</span>
         </Link>
 
-        {/* Identity card — surfaces who is signing in (avatar + name) */}
+        {/* Identity card - surfaces who is signing in (avatar + name) */}
         <div className="relative z-10 max-w-md fade-up-1">
           {(avatarUrl || greetingName) && (
             <div className="mb-6 inline-flex items-center gap-3 rounded-full border border-border-primary bg-bg-surface/70 backdrop-blur px-3 py-1.5">
@@ -219,10 +227,10 @@ export default function OnboardingPage() {
         </div>
       </aside>
 
-      {/* RIGHT — wizard */}
+      {/* RIGHT - wizard */}
       <section className="relative flex flex-col p-6 sm:p-12 overflow-y-auto">
         <div className="w-full max-w-[480px] mx-auto flex-1 flex flex-col">
-          {/* Progress bar — hidden on the celebratory done step */}
+          {/* Progress bar - hidden on the celebratory done step */}
           {step !== "done" && (
             <div className="mb-10 fade-up-1">
               <div className="flex items-center justify-between text-[11px] text-text-quaternary mb-2 uppercase tracking-wider">
@@ -246,7 +254,7 @@ export default function OnboardingPage() {
               <StepFrame
                 eyebrow="How you'll use it"
                 title={`Welcome${greetingName ? `, ${greetingName}` : ""}.`}
-                subtitle="How will you use Alpha Engine? This sets up your first path — wire the engine into your own algo, work in the desk, or both."
+                subtitle="How will you use Alpha Engine? This sets up your first path - wire the engine into your own algo, work in the desk, or both."
               >
                 <div className="space-y-2">
                   {USAGES.map((u) => (
@@ -564,9 +572,9 @@ function DoneReveal({
   mandate: Mandate;
   benchmark: Benchmark;
 }) {
-  const roleLabel = ROLES.find((r) => r.value === role)?.label || "—";
-  const mandateLabel = MANDATES.find((m) => m.value === mandate)?.label || "—";
-  const benchmarkLabel = BENCHMARKS.find((b) => b.value === benchmark)?.label || "—";
+  const roleLabel = ROLES.find((r) => r.value === role)?.label || "-";
+  const mandateLabel = MANDATES.find((m) => m.value === mandate)?.label || "-";
+  const benchmarkLabel = BENCHMARKS.find((b) => b.value === benchmark)?.label || "-";
   const wantsWireIn = usage === "algo" || usage === "both";
   return (
     <div>
@@ -623,7 +631,7 @@ function DoneReveal({
         >
           <p className="text-[10px] font-mono tracking-[0.18em] text-accent mb-1">WIRE IT INTO YOUR ALGO</p>
           <p className="text-[12px] text-text-secondary leading-snug">
-            Your first call — connect over MCP or REST and get a SignalEnvelope back.
+            Your first call - connect over MCP or REST and get a SignalEnvelope back.
             Read the quickstart →
           </p>
         </Link>
