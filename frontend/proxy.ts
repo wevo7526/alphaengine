@@ -1,13 +1,22 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
-const PUBLIC_PATHS = ["/sign-in", "/sign-up"];
+// Routes a logged-out visitor must reach. `/` is matched exactly (a
+// startsWith("/") would make everything public); the rest by prefix. Keep
+// this in sync with the public-route lists in SessionGuard / MainContent /
+// Sidebar. Everything not listed here (/dashboard and the app routes) stays
+// gated behind a Clerk session.
+const PUBLIC_EXACT = ["/"];
+const PUBLIC_PREFIXES = ["/docs", "/sign-in", "/sign-up", "/sso-callback"];
 const CLERK_COOKIES = ["__session", "__clerk_db_jwt", "__client_uat"];
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+  if (
+    PUBLIC_EXACT.includes(pathname) ||
+    PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))
+  ) {
     return NextResponse.next();
   }
 

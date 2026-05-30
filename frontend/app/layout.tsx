@@ -29,9 +29,9 @@ const sourceSerif = Source_Serif_4({
 });
 
 export const metadata: Metadata = {
-  title: "Alpha Engine | AI research desk for hedge funds",
+  title: "AlphaEngine — The signal layer between your data and your algo",
   description:
-    "Bring research, risk, and discovery together in one workflow. Generate a 10-name trade slate with cointegrated pairs, factor decomposition, and full source lineage in under 10 minutes.",
+    "A stateless engine you run on your own licensed data. It computes the math, checks for overfitting, and returns cited, risk-gated, algo-ready signals — over MCP for your agent or a direct API for your bot. Nothing sourced, nothing stored.",
   icons: {
     icon: [
       { url: "/icon.svg", type: "image/svg+xml" },
