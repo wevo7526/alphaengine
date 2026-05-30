@@ -359,12 +359,20 @@ def validate_and_fix_trade_ideas(
 @tool
 def get_current_price(ticker: str) -> dict:
     """Get current price, 52-week range, and beta for precise entry/stop/target levels."""
-    data = _market.get_fundamentals(ticker)
+    # Lean by design (Massive 5/min budget): current price comes from the
+    # cached grouped-daily tape (~0 extra calls), 52w hi/lo from a single
+    # cached 1y bars pull, beta reuses those bars + cached SPY. Avoids the
+    # financials/reference fan-out that full fundamentals would trigger.
+    from data import massive_client
+    price = massive_client.last_price(ticker)
+    bars = massive_client.price_bars(ticker, period="1y", adjusted=True)
+    hi = max((b["high"] for b in bars), default=None) if bars else None
+    lo = min((b["low"] for b in bars), default=None) if bars else None
     return {
-        "current_price": data.get("current_price"),
-        "52w_high": data.get("52w_high"),
-        "52w_low": data.get("52w_low"),
-        "beta": data.get("beta"),
+        "current_price": price,
+        "52w_high": hi,
+        "52w_low": lo,
+        "beta": massive_client.compute_beta(ticker),
     }
 
 

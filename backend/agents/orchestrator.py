@@ -485,52 +485,34 @@ async def run_strategy(state: ResearchDeskState) -> ResearchDeskState:
 
 async def _fetch_live_prices_for(tickers: list[str]) -> dict[str, float]:
     """
-    Pre-fetch current prices for all plan tickers, in parallel, with a hard
-    timeout per ticker. Returns {ticker: float}; tickers we couldn't price
-    are simply omitted (the Strategist's anchoring rule then forces it to
-    drop trade ideas for those).
+    Pre-fetch current prices for all plan + secondary tickers in ONE call.
 
-    Uses MarketDataClient.get_fundamentals which is cached on a 1h TTL, so
-    subsequent calls within the same session are free. Capped at 12 tickers
-    to bound API cost on broad thematic queries.
+    Sources every price from Massive's grouped-daily tape (a single request
+    that returns the whole market's daily closes), instead of one fetch per
+    ticker. This is the critical rate-budget fix: pricing 50 names costs 1
+    Massive call, not 50+. Tickers absent from the tape are simply omitted.
     """
     if not tickers:
         return {}
-    from data.market_client import MarketDataClient
-    from concurrent.futures import ThreadPoolExecutor
+    from data import massive_client
     from config import settings as _px_settings
 
-    mc = MarketDataClient()
     _cap = int(getattr(_px_settings, "STRATEGIST_PRICING_CAP", 50))
     capped = list(dict.fromkeys((t or "").strip().upper() for t in tickers if t))[:_cap]
 
-    def _one(tk: str) -> tuple[str, float | None]:
-        try:
-            data = mc.get_fundamentals(tk) or {}
-            price = data.get("current_price")
-            if price and price > 0:
-                return tk, float(price)
-        except Exception as e:
-            logger.debug(f"[orchestrator] price fetch failed for {tk}: {e}")
-        return tk, None
-
     loop = asyncio.get_running_loop()
-
-    _workers = int(getattr(_px_settings, "PRICING_MAX_WORKERS", 12))
-
-    def _gather() -> dict[str, float]:
-        out: dict[str, float] = {}
-        with ThreadPoolExecutor(max_workers=_workers) as pool:
-            for tk, px in pool.map(_one, capped):
-                if px is not None:
-                    out[tk] = px
-        return out
-
     try:
         _timeout = float(getattr(_px_settings, "PRICING_TIMEOUT_S", 30.0))
-        return await asyncio.wait_for(loop.run_in_executor(None, _gather), timeout=_timeout)
+        prices = await asyncio.wait_for(
+            loop.run_in_executor(None, massive_client.last_prices, capped),
+            timeout=_timeout,
+        )
+        return {tk: float(px) for tk, px in (prices or {}).items() if px and px > 0}
     except asyncio.TimeoutError:
         logger.warning("[orchestrator] live price prefetch timed out — Strategist runs without LIVE PRICES block")
+        return {}
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[orchestrator] live price prefetch failed: {e}")
         return {}
 
 

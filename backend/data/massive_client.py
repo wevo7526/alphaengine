@@ -34,6 +34,9 @@ Adjustment semantics:
 from __future__ import annotations
 
 import logging
+import threading
+import time
+from collections import deque
 from datetime import datetime, timedelta
 
 from config import settings
@@ -41,6 +44,28 @@ from infra.cache import TTLCache
 from infra.http import HttpError, http_get_json
 
 logger = logging.getLogger(__name__)
+
+# ── Process-wide rate limiter ────────────────────────────────────────────
+# Massive's free tier is ~5 requests/minute. Every live call (across all
+# threads/agents) passes through this sliding-window gate so a burst of
+# parallel fetches can never exceed the cap and trigger 429s. Cached calls
+# (handled in the public functions before _get) never reach here.
+_RATE_LOCK = threading.Lock()
+_CALL_TIMES: deque[float] = deque()
+
+
+def _rate_limit() -> None:
+    limit = max(1, int(getattr(settings, "MASSIVE_RATE_PER_MIN", 5)))
+    while True:
+        with _RATE_LOCK:
+            now = time.monotonic()
+            while _CALL_TIMES and now - _CALL_TIMES[0] >= 60.0:
+                _CALL_TIMES.popleft()
+            if len(_CALL_TIMES) < limit:
+                _CALL_TIMES.append(now)
+                return
+            wait = 60.0 - (now - _CALL_TIMES[0]) + 0.05
+        time.sleep(min(max(wait, 0.05), 60.0))
 
 # api.polygon.io is the same API and works with the same key; the Massive
 # host is the canonical one for this deployment.
@@ -94,6 +119,7 @@ def _get(path: str, *, params: dict | None = None, label: str = "massive"):
     p = dict(params or {})
     p["apiKey"] = settings.MASSIVE_API_KEY
     url = f"{_BASE_URL}{path}"
+    _rate_limit()  # block until a slot frees in the 5/min window
     try:
         return http_get_json(
             url,
@@ -293,12 +319,60 @@ def prev_close(ticker: str) -> float | None:
     return close
 
 
+# Most-recent grouped-daily tape, cached process-wide. ONE grouped call
+# serves current-price for the ENTIRE universe — this is how we stay under
+# the 5/min cap. (The snapshot endpoint is entitlement-gated on the free
+# plan — 403 — so it is never used.)
+_recent_grouped: dict = {"map": None, "date": None, "ts": 0.0}
+
+
+def _recent_grouped_prices(max_lookback: int = 5) -> dict:
+    """{TICKER: close} for the most recent trading day. One grouped_daily call
+    (walks back up to `max_lookback` days to skip weekends/holidays), cached
+    ~1h and reused for every bulk/individual price lookup."""
+    now = time.monotonic()
+    if _recent_grouped["map"] is not None and now - _recent_grouped["ts"] < 3600:
+        return _recent_grouped["map"]
+    today = datetime.now()
+    for back in range(0, max_lookback + 1):
+        d = (today - timedelta(days=back)).strftime("%Y-%m-%d")
+        results = grouped_daily(d)
+        if results:
+            m: dict = {}
+            for bar in results:
+                t = bar.get("T")
+                c = _to_float(bar.get("c"))
+                if t and c is not None:
+                    m[str(t).upper()] = c
+            _recent_grouped.update(map=m, date=d, ts=now)
+            logger.info("Massive grouped tape %s: %d tickers (bulk price source)", d, len(m))
+            return m
+    return {}
+
+
+def last_prices(tickers) -> dict:
+    """Bulk current price for many tickers via ONE grouped-daily call.
+
+    Returns {TICKER: close}. Tickers missing from the tape are omitted. This
+    replaces per-ticker price fetches — the single biggest source of calls.
+    """
+    tape = _recent_grouped_prices()
+    out: dict = {}
+    for tk in (tickers or []):
+        u = (tk or "").strip().upper()
+        if not u:
+            continue
+        px = tape.get(u)
+        if px is not None:
+            out[u] = px
+    return out
+
+
 def last_price(ticker: str) -> float | None:
     """Best-available current price for a ticker.
 
-    Free/standard plans don't always expose a real-time last trade, so we use
-    a fallback chain: previous close (always available) is the reliable
-    anchor. This is what populates `current_price` in computed fundamentals.
+    Sourced from the cached grouped-daily tape (no per-ticker call when the
+    tape is warm); falls back to prev_close only when the ticker is absent.
     Returns None on failure.
     """
     if not ticker:
@@ -309,21 +383,7 @@ def last_price(ticker: str) -> float | None:
     if cached is not None:
         return cached
 
-    price: float | None = None
-    # Primary: snapshot last trade (may be entitlement-gated on some plans).
-    snap = _get(
-        f"/v2/snapshot/locale/us/markets/stocks/tickers/{tk}",
-        label=f"massive.snapshot({tk})",
-    )
-    if isinstance(snap, dict):
-        t = snap.get("ticker") or {}
-        last_trade = (t.get("lastTrade") or {}) if isinstance(t, dict) else {}
-        price = _to_float(last_trade.get("p"))
-        if price is None:
-            day = (t.get("day") or {}) if isinstance(t, dict) else {}
-            price = _to_float(day.get("c")) or None
-
-    # Fallback: previous close (always available on every plan).
+    price = _recent_grouped_prices().get(tk)
     if price is None or price == 0:
         price = prev_close(tk)
 

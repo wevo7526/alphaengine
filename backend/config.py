@@ -73,6 +73,10 @@ class Settings(BaseSettings):
     # Massive (api.massive.com — Polygon.io-compatible). Single key for all
     # market data: aggregates, reference, financials, options, news, grouped.
     MASSIVE_API_KEY: str = ""
+    # Free tier is ~5 requests/minute. A process-wide sliding-window limiter
+    # in data/massive_client.py blocks every live call to stay under this.
+    # Raise it when on a paid plan.
+    MASSIVE_RATE_PER_MIN: int = 5
 
     # Clerk Auth.
     # CLERK_ISSUER and CLERK_SECRET_KEY are optional — if either CLERK_ISSUER
