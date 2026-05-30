@@ -13,9 +13,12 @@ scikit-learn==1.7.2
 pandas==2.3.3
 hmmlearn==0.3.3
 
-# --- gateway / surfaces (added as T3+ land) ---
-pydantic>=2,<3
-# fastapi / uvicorn / mcp pinned when api.py + server.py arrive (T6–T8)
+# --- gateway / surfaces ---
+pydantic==2.13.4
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+httpx==0.28.1
+# mcp (FastMCP) pinned when server.py lands (T8)
 
 # --- tests ---
 pytest>=8,<9
