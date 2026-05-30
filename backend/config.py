@@ -69,10 +69,10 @@ class Settings(BaseSettings):
     # Data Sources
     SEC_API_KEY: str = ""
     FRED_API_KEY: str = ""
-    NEWS_API_KEY: str = ""
-    FINNHUB_API_KEY: str = ""
-    ALPHA_VANTAGE_KEY: str = ""
     FIRECRAWL_API_KEY: str = ""
+    # Massive (api.massive.com — Polygon.io-compatible). Single key for all
+    # market data: aggregates, reference, financials, options, news, grouped.
+    MASSIVE_API_KEY: str = ""
 
     # Clerk Auth.
     # CLERK_ISSUER and CLERK_SECRET_KEY are optional — if either CLERK_ISSUER
@@ -145,8 +145,7 @@ if not settings.CLERK_ISSUER:
 
 REQUIRED_IN_PRODUCTION = ("ANTHROPIC_API_KEY", "CLERK_ISSUER")
 RECOMMENDED = (
-    "SEC_API_KEY", "FRED_API_KEY", "NEWS_API_KEY",
-    "FINNHUB_API_KEY", "ALPHA_VANTAGE_KEY", "FIRECRAWL_API_KEY",
+    "SEC_API_KEY", "FRED_API_KEY", "MASSIVE_API_KEY", "FIRECRAWL_API_KEY",
 )
 
 

@@ -198,11 +198,8 @@ async def system_info():
         "data_sources": [
             {"name": "Anthropic (Claude)", "configured": bool(settings.ANTHROPIC_API_KEY), "note": "LLM for all agents"},
             {"name": "FRED (Macro)", "configured": bool(settings.FRED_API_KEY), "note": "13 indicators, 1hr cache"},
-            {"name": "Yahoo Finance", "configured": True, "note": "Price, fundamentals, options (no key)"},
-            {"name": "NewsAPI", "configured": bool(settings.NEWS_API_KEY), "note": "100/day, 30min cache"},
-            {"name": "Finnhub", "configured": bool(settings.FINNHUB_API_KEY), "note": "60/min, 15min cache"},
+            {"name": "Massive (Market)", "configured": bool(settings.MASSIVE_API_KEY), "note": "Price, fundamentals, options, news"},
             {"name": "SEC EDGAR (sec-api.io)", "configured": bool(settings.SEC_API_KEY), "note": "Filings, insider trades, 13F"},
-            {"name": "Alpha Vantage", "configured": bool(settings.ALPHA_VANTAGE_KEY), "note": "25/day, 4hr cache"},
             {"name": "Firecrawl", "configured": bool(settings.FIRECRAWL_API_KEY), "note": "Web validation (optional)"},
         ],
         "auth": {

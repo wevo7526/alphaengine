@@ -1,6 +1,6 @@
 """Live market screener — pure filter/mapping tests (no network)."""
 
-from data.market_screener import _passes_quality, _quote_to_candidate, _run_alpha_vantage_movers
+from data.market_screener import _passes_quality, _quote_to_candidate
 
 
 def test_quality_keeps_liquid_us_equity():
@@ -25,7 +25,7 @@ def test_quote_to_candidate_shape():
     c = _quote_to_candidate({"symbol": "tygo", "shortName": "Tigo", "marketCap": 4.2e8,
                              "regularMarketPrice": 7.1, "sector": "Technology",
                              "averageDailyVolume3Month": 300_000})
-    assert c["ticker"] == "TYGO" and c["source"] == "yfinance_screener"
+    assert c["ticker"] == "TYGO" and c["source"] == "massive_screener"
     assert c["market_cap"] == 4.2e8 and c["sector"] == "Technology"
 
 
@@ -50,8 +50,12 @@ def test_discovery_blend_pure_discovery_drops_all_megacaps():
     assert set(out) <= {"RPAY", "TYGO", "ASYS"}
 
 
-def test_av_movers_never_raises_without_key(monkeypatch):
-    # With no AV key the client returns {} → movers is an empty list, never raises.
-    from config import settings
-    monkeypatch.setattr(settings, "ALPHA_VANTAGE_KEY", "", raising=False)
-    assert _run_alpha_vantage_movers() == []
+def test_screen_market_falls_back_to_curated_on_empty_universe(monkeypatch):
+    # With no grouped tape (e.g. no key / non-trading window) the live screen
+    # yields nothing and we fall back to the curated pool — never zero, never raises.
+    import data.market_screener as ms
+    monkeypatch.setattr(ms.massive_client, "grouped_daily", lambda *_a, **_k: [])
+    out = ms.screen_market(sectors=["technology"], styles=[], exclude=[], cap=5)
+    assert isinstance(out, list) and out
+    assert all(c.get("source") == "curated_fallback" for c in out)
+    assert all("ticker" in c for c in out)
