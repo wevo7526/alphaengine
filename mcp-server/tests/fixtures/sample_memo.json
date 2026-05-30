@@ -1,0 +1,66 @@
+{
+  "query": "under-covered mid-cap industrials that can beat the S&P",
+  "timestamp": "2026-05-30T18:22:04Z",
+  "title": "Under-covered industrials into the reopening",
+  "executive_summary": "Aftermarket demand is inflecting; two longs and a pair.",
+  "macro_regime": "expansion",
+  "overall_risk_level": "elevated",
+  "decision": "GO",
+  "decision_reason": "Top conviction 84 above GO threshold, regime aligned",
+  "decision_confidence": 82,
+  "falsification_criteria": [
+    "Aftermarket revenue decelerates QoQ for two consecutive quarters",
+    "Insider cluster reverses to net selling"
+  ],
+  "mandate_warnings": [],
+  "data_quality": "complete",
+  "verification_status": "verified",
+  "macro_context": {
+    "current_regime": "expansion",
+    "regime_posterior": { "risk_on": 0.61, "late_cycle": 0.24, "transition": 0.10, "risk_off": 0.05 }
+  },
+  "trade_ideas": [
+    {
+      "ticker": "ASLE",
+      "direction": "bullish",
+      "conviction": 84,
+      "thesis": "Aftermarket parts demand is inflecting; 6.1x EV/EBITDA vs 9.4x peers with insider cluster buying.",
+      "entry_zone": "12.40",
+      "stop_loss": 10.90,
+      "take_profit": 17.20,
+      "position_size_pct": 5.0,
+      "regime_conditional_size_pct": 5.0,
+      "structure_type": "outright",
+      "beta_to_spy": 1.18,
+      "sector": "Industrials",
+      "citations": [
+        { "source_type": "filing", "source_id": "0001067983-25-000412", "label": "Form 4 insider cluster" }
+      ]
+    },
+    {
+      "ticker": "WNC",
+      "direction": "bullish",
+      "conviction": 78,
+      "thesis": "Trailer demand troughing; cheap on normalized margins.",
+      "entry_zone": "26.10",
+      "stop_loss": 23.40,
+      "take_profit": 33.50,
+      "position_size_pct": 4.0,
+      "structure_type": "outright",
+      "beta_to_spy": 1.05,
+      "citations": []
+    },
+    {
+      "ticker": "TGLS",
+      "direction": "bearish",
+      "conviction": 55,
+      "thesis": "Rich vs the group; short leg of a relative-value pair.",
+      "entry_zone": "58.30",
+      "stop_loss": 64.00,
+      "take_profit": 48.00,
+      "position_size_pct": 3.0,
+      "structure_type": "outright",
+      "citations": []
+    }
+  ]
+}
