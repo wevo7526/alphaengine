@@ -1,0 +1,18 @@
+[project]
+name = "alphaengine"
+version = "0.1.0"
+description = "Thin Python client for the AlphaEngine deterministic signal API. Your data in, a validated SignalEnvelope out. Nothing stored."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Proprietary" }
+dependencies = ["httpx>=0.27"]
+
+[project.urls]
+Docs = "https://alphaengine.dev/docs"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["alphaengine"]
