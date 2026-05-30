@@ -174,7 +174,7 @@ class UserProfileRepository:
         allowed = {
             "full_name", "email", "role",
             "portfolio_size_usd", "benchmark", "mandate", "onboarded_at",
-            "entitlement",  # demo | trial | paid (see USER_STATES.md)
+            "entitlement", "trial_ends_at",  # demo|trial|paid + trial expiry (USER_STATES.md)
         }
         clean = {k: v for k, v in fields.items() if k in allowed}
 

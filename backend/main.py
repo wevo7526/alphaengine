@@ -286,6 +286,10 @@ class ProfileUpdate(BaseModel):
     portfolio_size_usd: float | None = None
     benchmark: str | None = None
     mandate: str | None = None
+    # Access state (USER_STATES.md). Portal onboarding sends "trial"; the
+    # complete handler stamps a 10-day trial_ends_at server-side. Demo is the
+    # default. Clerk publicMetadata is the eventual source of truth via webhook.
+    entitlement: str | None = None
 
 
 class OnboardingCompletePayload(ProfileUpdate):
@@ -333,6 +337,10 @@ async def complete_onboarding(payload: OnboardingCompletePayload, request: Reque
     from db.repositories import UserProfileRepository
     user_id = require_user_id(request)
     fields = {k: v for k, v in payload.model_dump().items() if v is not None}
+    # Start a 10-day trial server-side when the portal flow mints "trial".
+    if fields.get("entitlement") == "trial":
+        from datetime import datetime, timedelta, timezone as _tz
+        fields["trial_ends_at"] = datetime.now(_tz.utc) + timedelta(days=10)
     profile = await UserProfileRepository.mark_onboarded(user_id, fields)
     return {"profile": profile, "onboarded": True}
 

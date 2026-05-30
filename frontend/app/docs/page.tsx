@@ -63,17 +63,11 @@ function DocsNav() {
           <span className="ml-2 text-[11px] font-mono tracking-[0.18em] text-text-quaternary">/ DOCS</span>
         </Link>
         <div className="flex items-center gap-3">
-          <span className="hidden sm:inline-flex items-center gap-1.5 text-[10px] font-mono tracking-[0.16em] text-text-quaternary border border-border-primary rounded-sm px-2 py-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-accent/70" /> PREVIEW
-          </span>
-          <Link href="/" className="text-[12px] font-medium tracking-wide text-text-tertiary hover:text-text-primary transition-colors">
-            ← BACK
-          </Link>
           <Link
-            href="/sign-up"
+            href="/sign-up?surface=portal"
             className="px-3.5 py-1.5 rounded-sm bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
           >
-            Start free trial
+            Get Started
           </Link>
         </div>
       </div>

@@ -26,7 +26,6 @@ export default function LandingPage() {
       <ProductShowcase />
       <Pipeline />
       <SourceLedger />
-      <Pricing />
       <ClosingCTA isSignedIn={!!isSignedIn} />
       <Footer />
     </div>
@@ -48,24 +47,21 @@ function TopNav({ isSignedIn }: { isSignedIn: boolean }) {
           alpha<span className="text-brand">engine</span>
         </Link>
         <nav className="hidden md:flex items-center gap-7 text-[12px] font-medium tracking-wide text-text-tertiary">
-          <a href="#product" className="hover:text-text-primary transition-colors">PRODUCT</a>
-          <a href="#how-it-works" className="hover:text-text-primary transition-colors">HOW IT WORKS</a>
           <Link href="/docs" className="hover:text-text-primary transition-colors">DOCS</Link>
-          <a href="#trust" className="hover:text-text-primary transition-colors">TRUST</a>
-          <a href="#pricing" className="hover:text-text-primary transition-colors">PRICING</a>
+          <Link href="/plans" className="hover:text-text-primary transition-colors">PLANS</Link>
         </nav>
         <div className="flex items-center gap-3">
           <Link
-            href="/demo"
+            href="/dashboard"
             className="hidden sm:inline-block px-3 py-1.5 rounded-sm border border-border-primary text-[12px] font-semibold tracking-tight text-text-secondary hover:text-text-primary hover:border-zinc-700 transition-colors"
           >
-            Try the demo
+            Demo Desk
           </Link>
           <Link
             href={isSignedIn ? "/portal" : PORTAL_SIGNUP}
             className="px-3.5 py-1.5 rounded-sm bg-white text-bg-primary text-[12px] font-semibold tracking-tight hover:bg-zinc-200 transition-colors"
           >
-            {isSignedIn ? "Open portal" : "Start building"}
+            Portal
           </Link>
         </div>
       </div>
@@ -105,22 +101,22 @@ function Hero({ isSignedIn }: { isSignedIn: boolean }) {
 
             <div className="flex items-center gap-4 flex-wrap mb-5">
               <Link
-                href="/demo"
+                href="/dashboard"
                 className="px-5 py-2.5 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors"
               >
-                Try the demo
+                Demo Desk
               </Link>
               <Link
-                href="/docs"
+                href={isSignedIn ? "/portal" : PORTAL_SIGNUP}
                 className="px-5 py-2.5 rounded-sm border border-border-primary text-text-secondary text-[13px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors"
               >
-                Read the docs
+                Portal
               </Link>
             </div>
             <p className="text-[12px] text-text-quaternary">
-              No signup for the demo.{" "}
-              <Link href={isSignedIn ? "/portal" : PORTAL_SIGNUP} className="text-text-tertiary hover:text-text-primary underline underline-offset-4 decoration-border-primary transition-colors">
-                Start building with your API key
+              The Demo Desk runs on sample data for testing and education.{" "}
+              <Link href="/plans" className="text-text-tertiary hover:text-text-primary underline underline-offset-4 decoration-border-primary transition-colors">
+                See plans
               </Link>
             </p>
           </div>
@@ -273,54 +269,55 @@ function TheModel() {
           </p>
         </div>
 
-        {/* The flow graphic */}
-        <div className="max-w-[960px] mx-auto rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
-          <div className="grid md:grid-cols-[1fr_auto_1.4fr_auto_1fr] items-stretch">
-            <FlowNode label="YOUR DATA" lines={["Prices, fundamentals,", "filings. Your license."]} tone="muted" />
-            <FlowArrow />
-            <FlowNode
-              label="THE ENGINE"
-              lines={["compute the math", "check for overfitting", "gate for risk"]}
-              tone="core"
-              bullets
-            />
-            <FlowArrow />
-            <FlowNode label="A SIGNAL" lines={["Cited, risk-gated,", "algo-ready."]} tone="out" />
+        {/* Flow graphic: data -> engine (concrete micro-outputs) -> a signal */}
+        <div className="max-w-[980px] mx-auto rounded-sm border border-border-primary bg-bg-surface overflow-hidden">
+          <div className="grid md:grid-cols-[0.85fr_1.3fr_0.85fr]">
+            {/* YOUR DATA */}
+            <div className="px-6 py-7 border-b md:border-b-0 md:border-r border-border-primary/50">
+              <p className="text-[10px] font-mono tracking-[0.2em] text-text-quaternary mb-4">YOUR DATA</p>
+              <div className="space-y-1.5">
+                {["ASLE · prices", "fundamentals", "filings"].map((x) => (
+                  <div key={x} className="font-mono text-[11px] text-text-tertiary bg-bg-primary/50 border border-border-primary/50 rounded-sm px-2.5 py-1.5">{x}</div>
+                ))}
+              </div>
+              <p className="mt-4 text-[10px] text-text-quaternary">on your license</p>
+            </div>
+            {/* THE ENGINE */}
+            <div className="px-6 py-7 bg-bg-elevated/30 border-b md:border-b-0 md:border-r border-border-primary/50">
+              <p className="text-[10px] font-mono tracking-[0.2em] text-text-secondary mb-4">THE ENGINE</p>
+              <div className="space-y-3">
+                {[["compute", "spread z  -1.27"], ["validate", "deflated SR 0.91 · pbo 0.18"], ["risk-gate", "VaR 2.1% · pass"]].map(([k, v]) => (
+                  <div key={k} className="flex items-center gap-3">
+                    <span className="w-1 h-1 rounded-full bg-accent/70 shrink-0" />
+                    <span className="text-[11px] text-text-tertiary w-16 shrink-0">{k}</span>
+                    <span className="font-mono text-[11px] text-text-secondary tabular-nums">{v}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* A SIGNAL */}
+            <div className="px-6 py-7">
+              <p className="text-[10px] font-mono tracking-[0.2em] text-text-primary mb-4">A SIGNAL</p>
+              <div className="rounded-sm border border-border-primary bg-bg-primary/50 px-3 py-2.5 space-y-1.5">
+                {[["verdict", "edge", "text-signal-green"], ["gate", "pass", "text-signal-green"], ["format", "envelope", "text-text-secondary"]].map(([k, v, c]) => (
+                  <div key={k} className="flex items-center justify-between text-[11px] font-mono">
+                    <span className="text-text-quaternary">{k}</span>
+                    <span className={c}>{v}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="mt-4 text-[10px] text-text-quaternary">cited · risk-gated · algo-ready</p>
+            </div>
           </div>
           <div className="px-5 py-2.5 border-t border-border-primary/60 bg-bg-elevated/30 flex flex-wrap items-center gap-x-5 gap-y-1 text-[10px] font-mono tracking-[0.14em] text-text-quaternary">
             <span><span className="text-text-secondary">deterministic</span> · version-pinned</span>
             <span><span className="text-text-secondary">deflated</span> · adjusted for trials</span>
-            <span><span className="text-text-secondary">traceable</span> · every figure to its formula</span>
+            <span><span className="text-text-secondary">traceable</span> · figure to formula</span>
             <span className="ml-auto text-text-tertiary">nothing retained</span>
           </div>
         </div>
       </div>
     </section>
-  );
-}
-
-function FlowNode({ label, lines, tone, bullets }: { label: string; lines: string[]; tone: "muted" | "core" | "out"; bullets?: boolean }) {
-  const bg = tone === "core" ? "bg-bg-elevated/40" : "bg-bg-surface";
-  const labelColor = tone === "out" ? "text-text-primary" : "text-text-quaternary";
-  return (
-    <div className={`${bg} px-6 py-7 flex flex-col justify-center`}>
-      <p className={`text-[10px] font-mono tracking-[0.2em] mb-3 ${labelColor}`}>{label}</p>
-      <div className="space-y-1.5">
-        {lines.map((l, i) => (
-          <p key={i} className="text-[12.5px] text-text-tertiary leading-snug flex gap-2">
-            {bullets && <span className="text-text-quaternary mt-px">·</span>}
-            <span>{l}</span>
-          </p>
-        ))}
-      </div>
-    </div>
-  );
-}
-function FlowArrow() {
-  return (
-    <div className="hidden md:flex items-center justify-center px-2 text-text-quaternary font-mono text-[14px] border-x border-border-primary/40">
-      →
-    </div>
   );
 }
 
@@ -682,64 +679,6 @@ function SourceLedger() {
 }
 
 // ────────────────────────────────────────────────────────────────────────
-// PRICING — free trial + price discovery.
-// ────────────────────────────────────────────────────────────────────────
-function Pricing() {
-  return (
-    <section id="pricing" className="border-b border-border-primary/60">
-      <div className="max-w-[1280px] mx-auto px-6 py-24">
-        <div className="text-center mb-14 max-w-2xl mx-auto">
-          <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-5">
-            <span className="text-text-tertiary">///</span> PRICING
-          </p>
-          <h2 className="font-display text-[30px] sm:text-[38px] font-semibold tracking-[-0.01em] leading-[1.1] mb-5">
-            Start free. Early seats are grandfathered for life.
-          </h2>
-          <p className="text-[15px] text-text-tertiary max-w-lg mx-auto leading-relaxed">
-            Start a free trial on your own data, no card. Seats for the desk,
-            metered calls for the API. We&apos;re still discovering the right price
-            with early users, so the trial is generous and the early rate is locked.
-          </p>
-        </div>
-        <div className="grid md:grid-cols-2 gap-5 max-w-[820px] mx-auto">
-          <PriceCard tier="SOLO / SYSTEMATIC" hint="solo seat · pricing in discovery"
-            line="Wire it into your bot. MCP and direct API, the desk as a bonus."
-            chips={["MCP + REST", "Python SDK", "metered calls"]} />
-          <PriceCard tier="SMALL SHOP" hint="team plan · pricing in discovery"
-            line="Desk-grade rigor without desk-grade cost. Infrastructure behind your stack."
-            chips={["a few seats", "shared key", "trust posture"]} />
-        </div>
-        <div className="text-center mt-12 flex items-center justify-center gap-4 flex-wrap">
-          <Link href={PORTAL_SIGNUP} className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors">
-            Start free trial
-          </Link>
-          <Link href="/demo" className="inline-block px-6 py-3 rounded-sm border border-border-primary text-text-secondary text-[13px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors">
-            Try the demo first
-          </Link>
-        </div>
-      </div>
-    </section>
-  );
-}
-function PriceCard({ tier, hint, line, chips }: { tier: string; hint: string; line: string; chips: string[] }) {
-  return (
-    <div className="rounded-sm border border-border-primary bg-bg-surface px-6 py-7">
-      <p className="text-[10px] font-mono tracking-[0.22em] text-text-quaternary mb-3">{tier}</p>
-      <div className="flex items-baseline gap-2 mb-3">
-        <span className="text-[22px] font-semibold tracking-tight text-text-primary leading-none">Free trial</span>
-      </div>
-      <p className="text-[11px] font-mono text-text-tertiary mb-3">{hint}</p>
-      <p className="text-[13px] text-text-tertiary leading-relaxed mb-4">{line}</p>
-      <div className="flex flex-wrap gap-1.5">
-        {chips.map((c) => (
-          <span key={c} className="text-[9px] font-mono tracking-[0.12em] text-text-tertiary border border-border-primary/70 rounded-sm px-2 py-0.5">{c}</span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ────────────────────────────────────────────────────────────────────────
 // CLOSING CTA + model-agnostic note.
 // ────────────────────────────────────────────────────────────────────────
 function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
@@ -756,16 +695,16 @@ function ClosingCTA({ isSignedIn }: { isSignedIn: boolean }) {
           A validated signal out.
         </h2>
         <p className="text-[15px] text-text-tertiary max-w-md mx-auto mb-10 leading-relaxed">
-          Try the demo on sample data with no signup, or start a free trial and
-          wire the engine into your own bot over REST or your agent over MCP. Your
-          data stays yours. We run the math and hand it back.
+          Open the Demo Desk on sample data, or connect the Portal and wire the
+          engine into your own bot over REST or your agent over MCP. Your data
+          stays yours. We run the math and hand it back.
         </p>
         <div className="flex items-center justify-center gap-4 flex-wrap mb-10">
-          <Link href="/demo" className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors">
-            Try the demo
+          <Link href="/dashboard" className="inline-block px-6 py-3 rounded-sm bg-white text-bg-primary text-[13px] font-semibold hover:bg-zinc-200 transition-colors">
+            Demo Desk
           </Link>
           <Link href={isSignedIn ? "/portal" : PORTAL_SIGNUP} className="inline-block px-6 py-3 rounded-sm border border-border-primary text-text-secondary text-[13px] font-semibold hover:text-text-primary hover:border-zinc-700 transition-colors">
-            Start building
+            Portal
           </Link>
         </div>
         <p className="text-[10px] font-mono tracking-[0.18em] text-text-quaternary leading-relaxed max-w-lg mx-auto">
@@ -789,10 +728,8 @@ function Footer() {
           <span>© {new Date().getFullYear()}</span>
         </div>
         <div className="flex items-center gap-5 flex-wrap">
-          <a href="#product" className="hover:text-text-secondary transition-colors">PRODUCT</a>
-          <a href="#how-it-works" className="hover:text-text-secondary transition-colors">HOW IT WORKS</a>
           <Link href="/docs" className="hover:text-text-secondary transition-colors">DOCS</Link>
-          <a href="#pricing" className="hover:text-text-secondary transition-colors">PRICING</a>
+          <Link href="/plans" className="hover:text-text-secondary transition-colors">PLANS</Link>
           <Link href="/terms" className="hover:text-text-secondary transition-colors">TERMS</Link>
           <Link href="/privacy" className="hover:text-text-secondary transition-colors">PRIVACY</Link>
           <Link href="/sign-in" className="hover:text-text-secondary transition-colors">SIGN IN</Link>

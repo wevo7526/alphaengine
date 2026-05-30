@@ -10,7 +10,7 @@ export function MainContent({ children }: { children: React.ReactNode }) {
   const isFullScreen =
     pathname === "/" ||
     pathname.startsWith("/docs") ||
-    pathname.startsWith("/demo") ||
+    pathname.startsWith("/plans") ||
     pathname.startsWith("/terms") ||
     pathname.startsWith("/privacy") ||
     pathname.startsWith("/portal") ||

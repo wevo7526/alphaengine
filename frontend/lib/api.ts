@@ -215,6 +215,7 @@ export const api = {
         benchmark: string;
         mandate: string;
         entitlement: string | null;
+        trial_ends_at: string | null;
         created_at: string;
         updated_at: string;
         onboarded_at: string | null;
