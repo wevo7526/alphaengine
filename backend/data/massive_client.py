@@ -344,7 +344,11 @@ def _recent_grouped_prices(max_lookback: int = 5) -> dict:
     if _recent_grouped["map"] is not None and now - _recent_grouped["ts"] < 3600:
         return _recent_grouped["map"]
     today = datetime.now()
-    for back in range(0, max_lookback + 1):
+    # Prefer the most-recent SETTLED trading day: today's grouped EOD bar does
+    # not exist intraday (returns empty), so try yesterday/2d/3d first (covers
+    # a weekend in <=3 calls), then today, then further back. This is why the
+    # tape was coming back empty and positions showed entry==current.
+    for back in (1, 2, 3, 0, 4, 5, 6, 7)[: max_lookback + 3]:
         d = (today - timedelta(days=back)).strftime("%Y-%m-%d")
         results = grouped_daily(d)
         if results:
