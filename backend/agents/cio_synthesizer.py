@@ -9,7 +9,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 import json
 import logging
 
-from agents.base_agent import get_llm
+from agents.base_agent import get_llm, resolve_agent_tier
 from agents.schemas import AgentOutput
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,8 @@ class CIOSynthesizer:
     agent_name = "cio_synthesizer"
 
     def __init__(self):
-        self.llm = get_llm()
+        # The final memo is the highest-stakes synthesis -> heavy (Opus 4.8).
+        self.llm = get_llm(resolve_agent_tier("cio_synthesizer", "heavy"))
 
     async def synthesize(self, context: dict, callbacks: list | None = None) -> AgentOutput:
         """Produce the final IntelligenceMemo from all pipeline outputs."""

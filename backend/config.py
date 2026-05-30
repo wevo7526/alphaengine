@@ -13,14 +13,14 @@ class Settings(BaseSettings):
     # LLM
     ANTHROPIC_API_KEY: str = ""
 
-    # Model tiering (Cost Discipline — Build Plan). Bulk extraction /
-    # classification routes to the cheap tier; final memo synthesis to the
-    # reasoning tier. Env-overridable so model IDs can be corrected without
-    # a code change. Defaults keep the historically-pinned synthesis model
-    # so existing behavior is unchanged.
-    LLM_MODEL_SYNTHESIS: str = "claude-sonnet-4-20250514"
-    LLM_MODEL_EXTRACTION: str = "claude-haiku-4-5-20251001"
-    LLM_MODEL_HEAVY: str = "claude-opus-4-8"
+    # Model tiering (Cost Discipline — Build Plan). Reasoning desks run on
+    # Opus 4.8; bulk extraction / classification routes to the cheap Haiku
+    # tier. Per-tier AND per-agent overridable via env (LLM_TIER_<AGENT_NAME>,
+    # e.g. LLM_TIER_QUERY_INTERPRETER=extraction) so the cost/quality split is
+    # tunable without code changes.
+    LLM_MODEL_SYNTHESIS: str = "claude-opus-4-8"             # reasoning desks
+    LLM_MODEL_EXTRACTION: str = "claude-haiku-4-5-20251001"  # light / bulk tasks
+    LLM_MODEL_HEAVY: str = "claude-opus-4-8"                 # highest-stakes synthesis
     # Toggle Anthropic prompt caching on large static system blocks. ~90% off
     # cache reads; harmless if the SDK ignores the cache_control marker.
     LLM_PROMPT_CACHE: bool = True

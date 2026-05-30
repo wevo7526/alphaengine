@@ -16,7 +16,7 @@ import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 
-from agents.base_agent import get_llm
+from agents.base_agent import get_llm, resolve_agent_tier
 from agents.schemas import AnalysisPlan, AgentOutput
 from data.market_client import MarketDataClient
 from infra.user_context import _format_user_context_block
@@ -405,7 +405,9 @@ class QueryInterpreter:
     agent_name = "query_interpreter"
 
     def __init__(self):
-        self.llm = get_llm()
+        # Shapes the whole run -> reasoning tier (Opus 4.8) by default; set
+        # LLM_TIER_QUERY_INTERPRETER=extraction to run it on Haiku for cost.
+        self.llm = get_llm(resolve_agent_tier("query_interpreter", "synthesis"))
 
     async def interpret(
         self,

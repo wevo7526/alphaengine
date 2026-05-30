@@ -9,6 +9,7 @@ clients share the proven parameters from the original base_agent.get_llm
 from __future__ import annotations
 
 import logging
+import os
 
 from langchain_anthropic import ChatAnthropic
 
@@ -38,6 +39,22 @@ def resolve_model(tier: str) -> str:
     """Map a tier name to its configured model id (defaults to synthesis)."""
     setting = _TIER_SETTING.get(tier, "LLM_MODEL_SYNTHESIS")
     return getattr(settings, setting)
+
+
+def resolve_agent_tier(agent_name: str, default: str) -> str:
+    """Per-agent tier, env-overridable.
+
+    Reads LLM_TIER_<AGENT_NAME> (upper-cased) from the environment so an
+    operator can move any single agent between tiers without a code change
+    (e.g. LLM_TIER_QUERY_INTERPRETER=extraction to run the interpreter on
+    Haiku). Falls back to the agent's declared default. Unknown values are
+    ignored (get_llm degrades a bad tier to synthesis anyway).
+    """
+    env_key = f"LLM_TIER_{agent_name.upper()}"
+    override = os.getenv(env_key)
+    if override and override.strip().lower() in _TIER_SETTING:
+        return override.strip().lower()
+    return default
 
 
 def get_llm(tier: str = "synthesis") -> ChatAnthropic:

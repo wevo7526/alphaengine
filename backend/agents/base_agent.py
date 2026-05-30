@@ -30,7 +30,7 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import BaseTool
 
 from agents.schemas import AgentOutput
-from llm.client import get_llm as _tiered_get_llm, cache_system_block
+from llm.client import get_llm as _tiered_get_llm, cache_system_block, resolve_agent_tier
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,9 @@ class BaseAgent:
     llm_tier: str = "synthesis"
 
     def __init__(self):
-        self.llm = get_llm(self.llm_tier)
+        # Per-agent env override (LLM_TIER_<AGENT_NAME>) wins over the declared
+        # default tier, so the cost/quality split is tunable without code.
+        self.llm = get_llm(resolve_agent_tier(self.agent_name, self.llm_tier))
         # Cache tools once — they're stateless. We DO NOT cache the executor
         # because it carries callback wiring and per-call scratchpad state.
         self._tools: list[BaseTool] | None = None
