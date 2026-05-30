@@ -317,3 +317,92 @@ The included frontend, in a customer's hands, must be no-(our)-data:
 Legal: have a lawyer bless the no-data structure + the demo/eval framing before
 selling. The principle is sound (we're outside the data license's scope, not
 working around it), but it's a litigated area — cheap consult, worth it.
+
+---
+
+# ARCHITECTURE CORRECTION (latest direction — supersedes "standalone extraction")
+
+The earlier framing said: extract the pure quant functions into a **self-
+contained** server that doesn't depend on the backend. **Corrected:** the MCP
+server is a **gateway in front of the INTACT backend.** Keep the whole backend
+as-is; expose it *through* MCP. It is **agent-to-agent**, not just function calls.
+
+```
+  Fund's agent (their LLM)  +  their licensed data
+            │  (over MCP / HTTPS)
+            ▼
+  ┌─────────────────────────────────────────────┐
+  │  AlphaEngine MCP gateway (FastMCP, auth)     │  ← new, thin
+  ├─────────────────────────────────────────────┤
+  │  DATA-INJECTION SEAM  (the real work)        │  ← "data provided" mode
+  ├─────────────────────────────────────────────┤
+  │  EXISTING BACKEND, UNCHANGED                 │
+  │   • agent desk (research / risk / CIO …)     │
+  │   • quant engine (pairs, factors, risk, DSR) │
+  └─────────────────────────────────────────────┘
+            │  results
+            ▼
+  back to the fund's agent  (nothing stored)
+```
+
+Three layers:
+1. **MCP gateway** — FastMCP HTTP, per-client key auth, routing. Fronts the backend.
+2. **Data-injection seam** — *the core build.* The backend agents/quant currently
+   FETCH (FRED/yfinance/SEC). Add a **"data provided" mode**: the data arrives in
+   the MCP call payload and the orchestrator/agents read from it instead of
+   calling the data layer. No-data principle holds — **we** never source data;
+   the fund's agent supplies it, we compute, we discard. Keep the backend intact;
+   we add an *input path*, we don't tear anything out.
+3. **Agent desk + quant exposed as MCP tools** — the fund's agent invokes our
+   research/risk/CIO desk AND the quant tools, on *their* data. We rent out the
+   whole desk, not a calculator.
+
+Implication for `quant_core/`: it becomes the **injection-ready interface to the
+existing `backend/quant`**, not a copied fork. Same decoupling theme (math takes
+data as an argument), but the agents run too — so the seam is at the agent level.
+
+---
+
+# Workstream 5 — MCP status / customer dashboard (NEW frontend)
+
+The current AlphaEngine frontend is the **yfinance demo** (established). Customers
+on the MCP route need a **separate observability surface** — how the engine is
+performing *for them*. Same institutional design system.
+
+What it shows (per connected client / org, via Clerk identity):
+- **Connection** — endpoint URL, API key (issue / rotate / revoke), live health
+  (up / degraded), MCP handshake status.
+- **Usage** — calls over time, by tool (cointegration, factors, risk, agent
+  desk…), seats in use, quota / plan limits, throttle state.
+- **Performance** — request latency (p50/p95), success vs error rate, recent
+  calls log (tool, duration, status — **never the payload data**; stateless).
+- **Output quality** — surfaces from the runs themselves: verification status,
+  citation coverage, deflated-Sharpe verdicts the engine returned (the rigor
+  story, made visible).
+- **Account** — Clerk org, plan/billing, members/seats, the connection snippet
+  to paste into their agent client.
+
+Build: a new authenticated section (Clerk-gated) — either new routes in the
+existing frontend repo (`app/mcp/...`) or a dedicated surface. Data source = a
+**stateless metrics layer** (request counts / latency / errors aggregated;
+**no client data payloads stored** — keep the no-data promise true even in
+telemetry). The MCP gateway emits these metrics; the dashboard reads them.
+
+> Honesty constraint: telemetry counts and times requests — it must NOT store the
+> data that flowed through. "Stateless, nothing to leak" has to stay true even in
+> the dashboard. Log shapes/sizes/latency, never values.
+
+---
+
+# Sequencing (updated)
+
+1. **Revert app → yfinance** — done (demo surface).
+2. **Data-injection seam** — add "data provided" mode to the orchestrator/agents
+   + quant; prove the desk runs on supplied data (no fetching). *The core build.*
+3. **MCP gateway** — FastMCP HTTP over the backend; expose the agent desk +
+   quant tools; per-client key auth (stub first).
+4. **Clerk × MCP keys** — seat provisioning + connection UX (Workstream 3).
+5. **MCP status dashboard** — the new observability frontend (Workstream 5).
+6. **Marketing** — already pivoted to MCP-first; refine as the product lands.
+7. **BYO-data frontend mode** — the included desk UI on the customer's data
+   (Workstream 4), fast-follow.
